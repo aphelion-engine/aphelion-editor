@@ -15,8 +15,11 @@ class ViewerNode(Node):
 
     def _setup_sockets(self) -> None:
         self.add_input("frame", NodeSocketType.Frame)
+        self.add_output("frame", NodeSocketType.Frame)
 
     def evaluate(self, frame_num: int) -> np.ndarray:
+        """Pass through the connected frame stream (or blank if unconnected)."""
+        _ = frame_num
         input_frame = self.get_input_value("frame")
         if input_frame is None:
             return self.blank_frame()

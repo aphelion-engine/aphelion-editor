@@ -11,6 +11,7 @@ class ObserverEvent(Enum):
     ConnectionCreated = auto()
     ConnectionRemoved = auto()
     FrameChanged = auto()
+    ActiveViewerChanged = auto()
     ProjectModified = auto()
 
 

@@ -2,8 +2,6 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-import numpy as np
-
 from config.constants import (
     DEFAULT_DURATION,
     DEFAULT_FPS,
@@ -50,6 +48,8 @@ class Project:
         self.nodes[node_id] = node
         self.dependency_graph.update(self.nodes, self.connections)
         self.notify_observers(ObserverEvent.NodeAdded, node_id)
+        if node.node_type == "Viewer" and self.active_viewer is None:
+            self.set_active_viewer(node_id)
         return node_id
 
     def remove_node(self, node_id: str) -> None:
@@ -86,14 +86,31 @@ class Project:
         if output_slot not in output_node.outputs or input_slot not in input_node.inputs:
             return False
 
+        out_sock = output_node.outputs[output_slot]
+        in_sock = input_node.inputs[input_slot]
+        if out_sock.socket_type != in_sock.socket_type:
+            return False
+
         if self._would_create_cycle(output_node_id, input_node_id):
             return False
+
+        # One connection per input socket: replace any existing link.
+        for existing in list(self.connections):
+            if (
+                existing.input_node_id == input_node_id
+                and existing.input_slot == input_slot
+            ):
+                self.disconnect_nodes(existing)
 
         connection = Connection(output_node_id, output_slot, input_node_id, input_slot)
         self.connections.add(connection)
         self.dependency_graph.update(self.nodes, self.connections)
         self.dependency_graph.invalidate_node(input_node_id)
         self.notify_observers(ObserverEvent.ConnectionCreated, connection)
+
+        # Connecting into a Viewer makes it the active preview target.
+        if input_node.node_type == "Viewer":
+            self.set_active_viewer(input_node_id)
         return True
 
     def disconnect_nodes(self, connection: Connection) -> bool:
@@ -127,8 +144,6 @@ class Project:
         node.prepare_evaluation(self.width, self.height)
 
         for conn in self.dependency_graph.get_input_connections(node_id):
-            if conn.input_slot != output_slot:
-                continue
             dep_output = self.evaluate_node(
                 conn.output_node_id,
                 frame_num,
@@ -158,8 +173,29 @@ class Project:
     def set_active_viewer(self, node_id: str | None) -> bool:
         if node_id is not None and node_id not in self.nodes:
             return False
+        if self.active_viewer == node_id:
+            return True
         self.active_viewer = node_id
+        self.notify_observers(ObserverEvent.ActiveViewerChanged, node_id)
         return True
+
+    def sync_timeline_from_media(
+        self,
+        *,
+        fps: float,
+        duration_sec: float,
+        width: int,
+        height: int,
+    ) -> None:
+        """Align project timeline and frame size with loaded media."""
+        self.fps = max(1, int(round(fps)))
+        self.duration = max(0.1, float(duration_sec))
+        self.width = max(1, width)
+        self.height = max(1, height)
+        self.current_frame = min(self.current_frame, self.max_frame)
+        self.clear_cache()
+        self.notify_observers(ObserverEvent.ProjectModified, None)
+        self.notify_observers(ObserverEvent.FrameChanged, self.current_frame)
 
     def subscribe(self, observer: Callable[[ObserverEvent, Any], None]) -> None:
         self.observers.append(observer)

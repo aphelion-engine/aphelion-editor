@@ -56,6 +56,38 @@ class VideoInputNode(Node):
 
         return self.blank_frame()
 
+    def _ensure_clip(self, file_path: str) -> Any | None:
+        """Open or reuse the MoviePy clip for ``file_path``."""
+        from moviepy import VideoFileClip
+
+        if file_path != self._last_file_path:
+            if self._video_clip is not None:
+                self._video_clip.close()
+            self._video_clip = VideoFileClip(file_path)
+            self._last_file_path = file_path
+        return self._video_clip
+
+    def probe_media(self) -> tuple[float, float, int, int] | None:
+        """Return ``(fps, duration_sec, width, height)`` for the current file."""
+        file_prop = self.get_property("file_path")
+        file_path = (file_prop.value if file_prop else "") or ""
+        if not file_path:
+            return None
+        try:
+            clip = self._ensure_clip(file_path)
+            if clip is None:
+                return None
+            fps = float(clip.fps or 30.0)
+            duration = float(clip.duration or 0.0)
+            width = int(getattr(clip, "w", None) or self._eval_width)
+            height = int(getattr(clip, "h", None) or self._eval_height)
+            if duration <= 0.0:
+                return None
+            return fps, duration, width, height
+        except Exception as e:  # noqa: BLE001
+            self.log_exception(e)
+            return None
+
     def evaluate(self, frame_num: int) -> np.ndarray:
         file_prop = self.get_property("file_path")
         file_path = (file_prop.value if file_prop else "") or ""
@@ -63,20 +95,16 @@ class VideoInputNode(Node):
             return self.blank_frame()
 
         try:
-            from moviepy import VideoFileClip
-
-            if file_path != self._last_file_path:
-                if self._video_clip is not None:
-                    self._video_clip.close()
-                self._video_clip = VideoFileClip(file_path)
-                self._last_file_path = file_path
-
-            if self._video_clip is None:
+            clip = self._ensure_clip(file_path)
+            if clip is None:
                 return self.handle_error_frame()
 
-            fps = self._video_clip.fps or 30.0
-            time_sec = frame_num / fps
-            frame = self._video_clip.get_frame(time_sec)
+            fps = float(clip.fps or 30.0)
+            duration = float(clip.duration or 0.0)
+            time_sec = frame_num / max(fps, 0.001)
+            if duration > 0.0:
+                time_sec = min(max(0.0, time_sec), max(0.0, duration - 1.0 / fps))
+            frame = clip.get_frame(time_sec)
 
             self._previous_frame = self._current_frame
             self._current_frame = frame
