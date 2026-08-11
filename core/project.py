@@ -4,17 +4,17 @@ from typing import Any
 
 import numpy as np
 
-from core.cache import FrameCache
-from core.constants import (
+from config.constants import (
     DEFAULT_DURATION,
     DEFAULT_FPS,
     DEFAULT_HEIGHT,
     DEFAULT_WIDTH,
     FRAME_CACHE_MAX_MB,
 )
+from core.cache import FrameCache
 from core.events import Connection, ObserverEvent
 from core.graph import DependencyGraph
-from core.node import Node
+from core.nodes import Node
 
 
 class Project:

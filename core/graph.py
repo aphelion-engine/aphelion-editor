@@ -6,7 +6,7 @@ from collections import defaultdict
 
 from core.cache import FrameCache
 from core.events import Connection
-from core.node import Node
+from core.nodes import Node
 
 
 class DependencyGraph:
