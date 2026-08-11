@@ -72,8 +72,8 @@ class NodeItem(QGraphicsRectItem):
         self.input_sockets: dict[str, QRect] = {}
         self.output_sockets: dict[str, QRect] = {}
         self._calculate_socket_positions()
-        self.setPen(Qt.PenStyle.NoPen)
-        self.setBrush(Qt.BrushStyle.NoBrush)
+        self.setPen(QPen(Qt.PenStyle.NoPen))
+        self.setBrush(QBrush(Qt.BrushStyle.NoBrush))
 
     @staticmethod
     def _compute_height(node: Node) -> int:
