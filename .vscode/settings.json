@@ -1,4 +1,9 @@
 {
+
+    "python.pythonPath": "C:\\Users\\jwaechter0153\\Downloads\\aphelion\\.venv\\Scripts\\python.exe",
+
+    "python.terminal.activateEnvironment": true,
     "python.analysis.languageServerMode": "full",
-    "python.analysis.autoImportCompletions": true
+    "python.analysis.autoImportCompletions": true,
+    "cursorpyright.analysis.autoImportCompletions": true
 }
