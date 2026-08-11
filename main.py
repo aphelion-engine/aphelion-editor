@@ -1,21 +1,21 @@
+"""Aphelion application entry point."""
 
 import sys
 
 from PyQt6.QtWidgets import QApplication
 
-from core.loader import Loader
+from app_io.node_loader import NodeLoader
 from core.project import Project
-from gui.editor import Editor
+from ui.windows.editor import Editor
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    
-    Loader.load_defaults_into_node_registry()
-    
-    project = Project()
 
+    NodeLoader.load_defaults()
+
+    project = Project()
     editor = Editor(project)
     editor.show()
-    
+
     sys.exit(app.exec())
-    
