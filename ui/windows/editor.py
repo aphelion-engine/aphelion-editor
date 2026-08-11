@@ -28,6 +28,7 @@ class Editor(QMainWindow):
         super().__init__()
         self.setWindowTitle(f"Aphelion | {project.name}")
         self.setGeometry(position[0], position[1], size[0], size[1])
+        
         self.apply_dark_theme()
         self.project = project
         self.setup_ui()
@@ -95,6 +96,9 @@ class Editor(QMainWindow):
         node = self.project.nodes[item.node_id]
         if node.node_type == "Viewer":
             self.project.set_active_viewer(item.node_id)
+            status = self.statusBar()
+            if status is not None:
+                status.showMessage(f"Active viewer: {node.name}", 2000)
 
     def insert_node_from_menu(self, name: str, category: str) -> None:
         """Insert a node at the graph view center from the menu bar."""

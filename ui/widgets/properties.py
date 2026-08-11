@@ -22,7 +22,12 @@ from PyQt6.QtWidgets import (
 )
 
 from core.events import ObserverEvent
-from core.nodes import NodeProperty, NodePropertyInputType, VideoFrameErrorMethod
+from core.nodes import (
+    NodeProperty,
+    NodePropertyInputType,
+    VideoFrameErrorMethod,
+    VideoInputNode,
+)
 from core.project import Project
 
 
@@ -484,14 +489,30 @@ class PropertiesPanel(QWidget):
         return None
 
     def update_property(self, prop_name: str, value: Any) -> None:
-        """Update a node property"""
-        if self.current_node_id and self.current_node_id in self.project.nodes:
-            node = self.project.nodes[self.current_node_id]
-            prop = node.get_property(prop_name)
-            if prop:
-                prop.value = value
-                # Invalidate cache to force re-evaluation
-                self.project.invalidate_cache(self.current_node_id)
+        """Update a node property and sync media metadata when needed."""
+        if not self.current_node_id or self.current_node_id not in self.project.nodes:
+            return
+        node = self.project.nodes[self.current_node_id]
+        prop = node.get_property(prop_name)
+        if prop is None:
+            return
+        prop.value = value
+        self.project.invalidate_cache(self.current_node_id)
+        if prop_name == "file_path" and isinstance(node, VideoInputNode):
+            self._sync_video_media(node)
+
+    def _sync_video_media(self, node: VideoInputNode) -> None:
+        """Align project fps/duration/size with the selected video file."""
+        meta = node.probe_media()
+        if meta is None:
+            return
+        fps, duration_sec, width, height = meta
+        self.project.sync_timeline_from_media(
+            fps=fps,
+            duration_sec=duration_sec,
+            width=width,
+            height=height,
+        )
 
     def browse_file(self, prop_name: str, widget: FilePropertyWidget) -> None:
         """Open file browser for file properties"""

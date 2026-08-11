@@ -47,6 +47,8 @@ class ViewportWidget(QWidget):
             ObserverEvent.ConnectionRemoved,
             ObserverEvent.NodeAdded,
             ObserverEvent.NodeRemoved,
+            ObserverEvent.ActiveViewerChanged,
+            ObserverEvent.ProjectModified,
         }:
             self.request_update()
 
@@ -91,7 +93,9 @@ class ViewportWidget(QWidget):
         h, w = frame.shape[:2]
 
         if len(frame.shape) == 3 and frame.shape[2] == 3:
-            frame_rgb = np.ascontiguousarray(frame[:, :, ::-1])
+            # MoviePy frames are RGB; keep channel order for Format_RGB888.
+            frame_rgb = np.ascontiguousarray(frame)
+            self._image_buffer = frame_rgb
             bytes_per_line = 3 * w
             q_img = QImage(
                 frame_rgb.data,
@@ -102,6 +106,7 @@ class ViewportWidget(QWidget):
             )
         else:
             gray = np.ascontiguousarray(frame)
+            self._image_buffer = gray
             bytes_per_line = w
             q_img = QImage(
                 gray.data,
@@ -119,11 +124,11 @@ class ViewportWidget(QWidget):
 
     def set_playback_active(self, active: bool) -> None:
         if active:
-            interval = max(1, 1000 // self.project.fps)
+            interval = max(1, 1000 // max(1, self.project.fps))
             self._playback_timer.start(interval)
         else:
             self._playback_timer.stop()
 
-    def closeEvent(self, event) -> None:
+    def closeEvent(self, event: Any) -> None:
         self._worker.stop()
         super().closeEvent(event)

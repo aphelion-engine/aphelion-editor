@@ -204,7 +204,11 @@ class TimelineWidget(QWidget):
         if event == ObserverEvent.FrameChanged and isinstance(data, int):
             self._sync_frame_ui(data)
         elif event == ObserverEvent.ProjectModified:
+            # Media load / project settings may change fps and duration.
+            was_playing = self.controller.is_playing
             self._sync_from_project()
+            if was_playing:
+                self.start_playback()
 
     def _sync_from_project(self) -> None:
         self.controller.set_max_frame(self.project.max_frame)
