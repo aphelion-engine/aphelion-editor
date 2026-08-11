@@ -23,9 +23,10 @@ from PyQt6.QtWidgets import (
     QMenu,
 )
 
-from core.events import ObserverEvent
+from core.events import Connection, ObserverEvent
 from core.nodes import global_node_registry
 from core.project import Project
+from ui.node_graph.connection_item import ConnectionItem, PreviewWireItem
 from ui.node_graph.constants import (
     COLOR_GRAPH_BG,
     COLOR_GRID_MAJOR,
@@ -49,17 +50,26 @@ class NodeGraphView(QGraphicsView):
         self.setScene(self.scene)
 
         self.node_items: dict[str, NodeItem] = {}
+        self.connection_items: dict[Connection, ConnectionItem] = {}
         self.selection_start: QPoint | None = None
         self.selection_rect: QRect | None = None
         self._panning: bool = False
         self._pan_anchor: QPointF = QPointF()
         self._context_menu: QMenu | None = None
+        self._preview_wire: PreviewWireItem | None = None
+        self._drag_source: tuple[str, str, bool] | None = None
 
         self._configure_view()
         self.project.subscribe(self.on_project_changed)
         for node_id in self.project.nodes:
             self.add_node_to_view(node_id)
+        for connection in self.project.connections:
+            self.add_connection_to_view(connection)
         QTimer.singleShot(80, self.fit_all_nodes)
+
+    @property
+    def is_connection_dragging(self) -> bool:
+        return self._drag_source is not None
 
     def _configure_view(self) -> None:
         self.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -174,6 +184,10 @@ class NodeGraphView(QGraphicsView):
             self.add_node_to_view(data)
         elif event == ObserverEvent.NodeRemoved and isinstance(data, str):
             self.remove_node_from_view(data)
+        elif event == ObserverEvent.ConnectionCreated and isinstance(data, Connection):
+            self.add_connection_to_view(data)
+        elif event == ObserverEvent.ConnectionRemoved and isinstance(data, Connection):
+            self.remove_connection_from_view(data)
 
     def add_node_to_view(self, node_id: str) -> None:
         if node_id in self.node_items:
@@ -187,9 +201,115 @@ class NodeGraphView(QGraphicsView):
         self.node_items[node_id] = item
 
     def remove_node_from_view(self, node_id: str) -> None:
+        stale = [
+            conn
+            for conn in self.connection_items
+            if conn.output_node_id == node_id or conn.input_node_id == node_id
+        ]
+        for conn in stale:
+            self.remove_connection_from_view(conn)
         item = self.node_items.pop(node_id, None)
         if item is not None:
             self.scene.removeItem(item)
+
+    def add_connection_to_view(self, connection: Connection) -> None:
+        if connection in self.connection_items:
+            return
+        item = ConnectionItem(connection, self)
+        self.scene.addItem(item)
+        self.connection_items[connection] = item
+
+    def remove_connection_from_view(self, connection: Connection) -> None:
+        item = self.connection_items.pop(connection, None)
+        if item is not None:
+            self.scene.removeItem(item)
+
+    def socket_scene_pos(
+        self,
+        node_id: str,
+        socket_name: str,
+        *,
+        is_input: bool,
+    ) -> QPointF | None:
+        item = self.node_items.get(node_id)
+        if item is None:
+            return None
+        return item.get_socket_position(socket_name, is_input)
+
+    def refresh_connections_for_node(self, node_id: str) -> None:
+        for conn, item in self.connection_items.items():
+            if conn.output_node_id == node_id or conn.input_node_id == node_id:
+                item.update_path()
+
+    def begin_connection_drag(
+        self,
+        node_id: str,
+        socket_name: str,
+        is_input: bool,
+        scene_pos: QPointF,
+    ) -> None:
+        start = self.socket_scene_pos(node_id, socket_name, is_input=is_input)
+        if start is None:
+            return
+        self._drag_source = (node_id, socket_name, is_input)
+        self._preview_wire = PreviewWireItem()
+        self.scene.addItem(self._preview_wire)
+        self._preview_wire.set_endpoints(start, scene_pos)
+        self.grabMouse()
+
+    def update_connection_drag(self, scene_pos: QPointF) -> None:
+        if self._preview_wire is None or self._drag_source is None:
+            return
+        node_id, socket_name, is_input = self._drag_source
+        start = self.socket_scene_pos(node_id, socket_name, is_input=is_input)
+        if start is None:
+            return
+        # Always draw from output toward input visually.
+        if is_input:
+            self._preview_wire.set_endpoints(scene_pos, start)
+        else:
+            self._preview_wire.set_endpoints(start, scene_pos)
+
+    def finish_connection_drag(self, scene_pos: QPointF) -> None:
+        source = self._drag_source
+        self._clear_connection_drag()
+        if source is None:
+            return
+        target = self._socket_at_scene(scene_pos)
+        if target is None:
+            return
+        src_node, src_slot, src_is_input = source
+        dst_node, dst_slot, dst_is_input = target
+        if src_node == dst_node or src_is_input == dst_is_input:
+            return
+        if src_is_input:
+            out_node, out_slot = dst_node, dst_slot
+            in_node, in_slot = src_node, src_slot
+        else:
+            out_node, out_slot = src_node, src_slot
+            in_node, in_slot = dst_node, dst_slot
+        self.project.connect_nodes(out_node, out_slot, in_node, in_slot)
+
+    def _clear_connection_drag(self) -> None:
+        self._drag_source = None
+        if self._preview_wire is not None:
+            self.scene.removeItem(self._preview_wire)
+            self._preview_wire = None
+        self.releaseMouse()
+
+    def _socket_at_scene(
+        self,
+        scene_pos: QPointF,
+    ) -> tuple[str, str, bool] | None:
+        for item in self.scene.items(scene_pos):
+            if not isinstance(item, NodeItem):
+                continue
+            local = item.mapFromScene(scene_pos)
+            hit = item.socket_at(local)
+            if hit is not None:
+                socket_name, is_input = hit
+                return item.node_id, socket_name, is_input
+        return None
 
     def delete_node(self, node_id: str) -> None:
         self.project.remove_node(node_id)
@@ -279,6 +399,9 @@ class NodeGraphView(QGraphicsView):
 
         if event.button() == Qt.MouseButton.LeftButton:
             item = self.itemAt(event.pos())
+            if isinstance(item, ConnectionItem):
+                super().mousePressEvent(event)
+                return
             if item is None or not isinstance(item, NodeItem):
                 self.selection_start = event.pos()
                 self.selection_rect = QRect(self.selection_start, self.selection_start)
@@ -289,6 +412,11 @@ class NodeGraphView(QGraphicsView):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: Any) -> None:
+        if self.is_connection_dragging:
+            self.update_connection_drag(self.mapToScene(event.position().toPoint()))
+            event.accept()
+            return
+
         if self._panning:
             delta = event.position() - self._pan_anchor
             self._pan_anchor = event.position()
@@ -324,6 +452,10 @@ class NodeGraphView(QGraphicsView):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: Any) -> None:
+        if self.is_connection_dragging and event.button() == Qt.MouseButton.LeftButton:
+            self.finish_connection_drag(self.mapToScene(event.position().toPoint()))
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.MiddleButton and self._panning:
             self._panning = False
             self.setCursor(Qt.CursorShape.ArrowCursor)
@@ -354,8 +486,17 @@ class NodeGraphView(QGraphicsView):
         mods = event.modifiers()
         items = self.selected_nodes()
 
-        if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) and items:
-            node_ops.delete_items(self, items)
+        if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            selected_wires = [
+                item
+                for item in self.scene.selectedItems()
+                if isinstance(item, ConnectionItem)
+            ]
+            if selected_wires:
+                for wire in selected_wires:
+                    self.project.disconnect_nodes(wire.connection)
+            elif items:
+                node_ops.delete_items(self, items)
         elif key == Qt.Key.Key_A and mods & Qt.KeyboardModifier.ControlModifier:
             self.select_all_nodes()
         elif key == Qt.Key.Key_D and mods & Qt.KeyboardModifier.ControlModifier and items:

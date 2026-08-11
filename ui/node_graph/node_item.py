@@ -34,6 +34,7 @@ from ui.node_graph.constants import (
     NODE_MIN_HEIGHT_PX,
     NODE_WIDTH_PX,
     SOCKET_EDGE_GAP_PX,
+    SOCKET_HIT_PAD_PX,
     SOCKET_SIZE_PX,
     SOCKET_SPACING_PX,
 )
@@ -246,6 +247,27 @@ class NodeItem(QGraphicsRectItem):
         painter.setBrush(QBrush(QColor(255, 255, 255, 70)))
         painter.drawEllipse(inner)
 
+    def socket_at(self, local_pos: QPointF) -> tuple[str, bool] | None:
+        """Return ``(socket_name, is_input)`` if ``local_pos`` hits a socket."""
+        point = QPoint(int(local_pos.x()), int(local_pos.y()))
+        for name, rect in self.input_sockets.items():
+            if rect.adjusted(
+                -SOCKET_HIT_PAD_PX,
+                -SOCKET_HIT_PAD_PX,
+                SOCKET_HIT_PAD_PX,
+                SOCKET_HIT_PAD_PX,
+            ).contains(point):
+                return name, True
+        for name, rect in self.output_sockets.items():
+            if rect.adjusted(
+                -SOCKET_HIT_PAD_PX,
+                -SOCKET_HIT_PAD_PX,
+                SOCKET_HIT_PAD_PX,
+                SOCKET_HIT_PAD_PX,
+            ).contains(point):
+                return name, False
+        return None
+
     def mousePressEvent(self, event: QGraphicsSceneMouseEvent | None) -> None:
         if event is None:
             return
@@ -263,6 +285,18 @@ class NodeItem(QGraphicsRectItem):
             return
 
         if event.button() == Qt.MouseButton.LeftButton:
+            hit = self.socket_at(event.pos())
+            if hit is not None and self.graph_view is not None:
+                socket_name, is_input = hit
+                self.graph_view.begin_connection_drag(
+                    self.node_id,
+                    socket_name,
+                    is_input,
+                    event.scenePos(),
+                )
+                event.accept()
+                return
+
             ctrl = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
             scene = self.scene()
             if ctrl:
@@ -281,6 +315,10 @@ class NodeItem(QGraphicsRectItem):
     def mouseMoveEvent(self, event: QGraphicsSceneMouseEvent | None) -> None:
         if event is None:
             return
+        if self.graph_view is not None and self.graph_view.is_connection_dragging:
+            self.graph_view.update_connection_drag(event.scenePos())
+            event.accept()
+            return
         origin = self._drag_origins.get(id(self), self.pos())
         super().mouseMoveEvent(event)
         delta = self.pos() - origin
@@ -292,13 +330,21 @@ class NodeItem(QGraphicsRectItem):
                     item.setPos(start + delta)
                     item._sync_node_position()
         self._sync_node_position()
+        if self.graph_view is not None:
+            self.graph_view.refresh_connections_for_node(self.node_id)
 
     def mouseReleaseEvent(self, event: QGraphicsSceneMouseEvent | None) -> None:
         if event is None:
             return
+        if self.graph_view is not None and self.graph_view.is_connection_dragging:
+            self.graph_view.finish_connection_drag(event.scenePos())
+            event.accept()
+            return
         super().mouseReleaseEvent(event)
         for item in self._selected_node_items():
             item._sync_node_position()
+            if self.graph_view is not None:
+                self.graph_view.refresh_connections_for_node(item.node_id)
         self._drag_origins.clear()
 
     def hoverEnterEvent(self, event: QGraphicsSceneHoverEvent | None) -> None:
@@ -334,4 +380,5 @@ class NodeItem(QGraphicsRectItem):
         rect = sockets.get(socket_name)
         if rect is None:
             return self.pos()
-        return self.mapToScene(QPoint(rect.center().x(), rect.center().y()))
+        center = rect.center()
+        return self.mapToScene(QPointF(float(center.x()), float(center.y())))
