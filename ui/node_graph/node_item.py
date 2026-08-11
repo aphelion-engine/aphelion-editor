@@ -285,18 +285,7 @@ class NodeItem(QGraphicsRectItem):
             return
 
         if event.button() == Qt.MouseButton.LeftButton:
-            hit = self.socket_at(event.pos())
-            if hit is not None and self.graph_view is not None:
-                socket_name, is_input = hit
-                self.graph_view.begin_connection_drag(
-                    self.node_id,
-                    socket_name,
-                    is_input,
-                    event.scenePos(),
-                )
-                event.accept()
-                return
-
+            # Socket wiring is handled by NodeGraphView (avoids mouse-grab freezes).
             ctrl = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
             scene = self.scene()
             if ctrl:
@@ -315,10 +304,6 @@ class NodeItem(QGraphicsRectItem):
     def mouseMoveEvent(self, event: QGraphicsSceneMouseEvent | None) -> None:
         if event is None:
             return
-        if self.graph_view is not None and self.graph_view.is_connection_dragging:
-            self.graph_view.update_connection_drag(event.scenePos())
-            event.accept()
-            return
         origin = self._drag_origins.get(id(self), self.pos())
         super().mouseMoveEvent(event)
         delta = self.pos() - origin
@@ -335,10 +320,6 @@ class NodeItem(QGraphicsRectItem):
 
     def mouseReleaseEvent(self, event: QGraphicsSceneMouseEvent | None) -> None:
         if event is None:
-            return
-        if self.graph_view is not None and self.graph_view.is_connection_dragging:
-            self.graph_view.finish_connection_drag(event.scenePos())
-            event.accept()
             return
         super().mouseReleaseEvent(event)
         for item in self._selected_node_items():
