@@ -46,6 +46,8 @@ class AppIcon(Enum):
     DISTRIBUTE_V = auto()
     SELECT_ALL = auto()
     ADD_NODE = auto()
+    COPY = auto()
+    PASTE = auto()
 
 
 def make_dot_icon(
@@ -168,6 +170,10 @@ def _draw_icon(
             _draw_select_all(painter, rect, color)
         case AppIcon.ADD_NODE:
             _draw_add_node(painter, rect, color)
+        case AppIcon.COPY:
+            _draw_copy(painter, rect, color)
+        case AppIcon.PASTE:
+            _draw_paste(painter, rect, color)
 
 
 def _draw_play(painter: QPainter, rect: QRectF, _color: QColor) -> None:
@@ -478,6 +484,23 @@ def _draw_add_node(painter: QPainter, rect: QRectF, _color: QColor) -> None:
     cy = rect.center().y()
     painter.drawLine(QPointF(cx, cy - 3), QPointF(cx, cy + 3))
     painter.drawLine(QPointF(cx - 3, cy), QPointF(cx + 3, cy))
+
+
+def _draw_copy(painter: QPainter, rect: QRectF, _color: QColor) -> None:
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawRoundedRect(rect.adjusted(3, 0, 0, -3), 1.5, 1.5)
+    painter.drawRoundedRect(rect.adjusted(0, 3, -3, 0), 1.5, 1.5)
+
+
+def _draw_paste(painter: QPainter, rect: QRectF, _color: QColor) -> None:
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawRoundedRect(rect.adjusted(1, 3, -1, 0), 1.5, 1.5)
+    clip_top = QRectF(rect.left() + 3, rect.top(), rect.width() - 6, 4)
+    painter.drawRoundedRect(clip_top, 1.0, 1.0)
+    painter.drawLine(
+        QPointF(rect.center().x(), rect.top() + 6),
+        QPointF(rect.center().x(), rect.bottom() - 3),
+    )
 
 
 def icon_size() -> QSize:

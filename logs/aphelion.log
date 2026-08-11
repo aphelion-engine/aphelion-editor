@@ -1,0 +1,47 @@
+2026-08-11 02:19:51 | DEBUG    | aphelion | Logging configured (level=10, file=C:\Users\jwaechter0153\Downloads\aphelion\logs\aphelion.log)
+2026-08-11 02:19:51 | INFO     | aphelion.main | smoke ok
+2026-08-11 02:19:51 | INFO     | aphelion.boot.driver | child ok
+2026-08-11 02:21:24 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-08-11 02:21:24 | INFO     | aphelion | Log file: C:\Users\jwaechter0153\Downloads\aphelion\logs\aphelion.log
+2026-08-11 02:21:24 | INFO     | aphelion.main | Starting application session
+2026-08-11 02:21:24 | INFO     | aphelion.session | Session start → project launcher
+2026-08-11 02:21:25 | INFO     | aphelion | Entering Qt event loop
+2026-08-11 02:22:00 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-08-11 02:22:00 | INFO     | aphelion | Log file: C:\Users\jwaechter0153\Downloads\aphelion\logs\aphelion.log
+2026-08-11 02:22:00 | INFO     | aphelion.main | Starting application session
+2026-08-11 02:22:00 | INFO     | aphelion.session | Session start → project launcher
+2026-08-11 02:22:01 | INFO     | aphelion | Entering Qt event loop
+2026-08-11 02:23:50 | INFO     | aphelion.main | Starting application session
+2026-08-11 02:23:50 | INFO     | aphelion.session | Session start → project launcher
+2026-08-11 02:28:06 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-08-11 02:28:06 | INFO     | aphelion | Log file: C:\Users\jwaechter0153\Downloads\aphelion\logs\aphelion.log
+2026-08-11 02:28:06 | INFO     | aphelion.main | Starting application session
+2026-08-11 02:28:06 | INFO     | aphelion.session | Session start → project launcher
+2026-08-11 02:28:07 | INFO     | aphelion | Entering Qt event loop
+2026-08-11 02:36:16 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-08-11 02:36:16 | INFO     | aphelion | Log file: C:\Users\jwaechter0153\Downloads\aphelion\logs\aphelion.log
+2026-08-11 02:36:18 | INFO     | aphelion.main | Starting application session
+2026-08-11 02:36:18 | INFO     | aphelion.session | Session start → project launcher
+2026-08-11 02:36:18 | INFO     | aphelion | Entering Qt event loop
+2026-08-11 02:36:36 | INFO     | aphelion.main | Starting application session
+2026-08-11 02:36:36 | INFO     | aphelion.session | Session start → project launcher
+2026-08-11 02:36:37 | INFO     | aphelion.session | Launcher closed without a project — quitting
+2026-08-11 02:36:37 | INFO     | aphelion.session | Launcher presented (visible=False, geo=(403, 139, 560, 480))
+2026-08-11 02:37:13 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-08-11 02:37:14 | INFO     | aphelion | Log file: C:\Users\jwaechter0153\Downloads\aphelion\logs\aphelion.log
+2026-08-11 02:37:15 | INFO     | aphelion.main | Starting application session
+2026-08-11 02:37:16 | INFO     | aphelion.session | Session start → project launcher
+2026-08-11 02:37:16 | INFO     | aphelion | Entering Qt event loop
+2026-08-11 02:37:22 | INFO     | aphelion.main | Starting application session
+2026-08-11 02:37:22 | INFO     | aphelion.session | Session start → project launcher
+2026-08-11 02:37:23 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(403, 139, 560, 480))
+2026-08-11 02:37:23 | INFO     | aphelion.session | Launcher closed without a project — quitting
+2026-08-11 02:38:34 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-08-11 02:38:34 | INFO     | aphelion | Log file: C:\Users\jwaechter0153\Downloads\aphelion\logs\aphelion.log
+2026-08-11 02:38:34 | INFO     | aphelion.main | Starting application session
+2026-08-11 02:38:34 | INFO     | aphelion.session | Session start → project launcher
+2026-08-11 02:38:35 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(403, 139, 560, 480))
+2026-08-11 02:38:36 | INFO     | aphelion | Entering Qt event loop
+2026-08-11 02:41:59 | INFO     | aphelion.session | Session start → project launcher
+2026-08-11 02:42:00 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(403, 139, 560, 480))
+2026-08-11 02:42:01 | INFO     | aphelion.session | Launcher closed without a project — quitting

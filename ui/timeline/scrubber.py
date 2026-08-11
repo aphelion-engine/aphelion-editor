@@ -6,8 +6,8 @@ from PyQt6.QtCore import QPoint, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPen, QPolygon
 from PyQt6.QtWidgets import QWidget
 
-RULER_HEIGHT_PX: int = 20
-TRACK_HEIGHT_PX: int = 34
+RULER_HEIGHT_PX: int = 16
+TRACK_HEIGHT_PX: int = 22
 LEFT_GUTTER_PX: int = 8
 RIGHT_GUTTER_PX: int = 8
 PLAYHEAD_WIDTH_PX: int = 2
@@ -44,7 +44,9 @@ class TimelineScrubber(QWidget):
         self._dragging_playhead: bool = False
         self._dragging_in: bool = False
         self._dragging_out: bool = False
-        self.setMinimumHeight(RULER_HEIGHT_PX + TRACK_HEIGHT_PX)
+        scrubber_height = RULER_HEIGHT_PX + TRACK_HEIGHT_PX
+        self.setMinimumHeight(scrubber_height)
+        self.setMaximumHeight(scrubber_height)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setCursor(Qt.CursorShape.PointingHandCursor)

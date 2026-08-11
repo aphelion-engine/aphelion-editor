@@ -1,4 +1,4 @@
-"""Background frame evaluation worker (keeps decode off the UI thread)."""
+"""Background frame evaluation with latest-wins requests and prefetch."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 
 class FrameEvaluationWorker(QThread):
-    """Evaluates one frame at a time on a background thread."""
+    """Evaluates frames off the UI thread; always prefers the newest request."""
 
     frame_ready = pyqtSignal(str, int, object)  # node_id, frame_num, ndarray | None
 
@@ -22,36 +22,79 @@ class FrameEvaluationWorker(QThread):
         self._project = project
         self._lock = threading.Lock()
         self._pending: tuple[str, int] | None = None
+        self._playing = False
         self._running = True
+        self._wake = threading.Event()
 
     def request_frame(self, node_id: str, frame_num: int) -> None:
+        """Queue a frame; replaces any older pending request (drop-on-lag)."""
         with self._lock:
             self._pending = (node_id, frame_num)
+        self._wake.set()
+
+    def set_playing(self, playing: bool) -> None:
+        """Enable short prefetch ahead of the playhead while playing."""
+        self._playing = playing
+
+    def set_project(self, project: Project) -> None:
+        """Point the worker at a newly loaded project document."""
+        with self._lock:
+            self._project = project
+            self._pending = None
+        self._wake.set()
 
     def stop(self) -> None:
         self._running = False
+        self._wake.set()
         self.requestInterruption()
         self.wait(2000)
 
     def run(self) -> None:
         while self._running and not self.isInterruptionRequested():
-            request: tuple[str, int] | None
-            with self._lock:
-                request = self._pending
-                self._pending = None
-
+            request = self._take_pending()
             if request is None:
-                self.msleep(5)
+                self._wake.wait(0.05)
+                self._wake.clear()
                 continue
 
             node_id, frame_num = request
-            try:
-                result = self._project.evaluate_node(node_id, frame_num)
-            except Exception as exc:  # noqa: BLE001
-                self._project.log_exception(exc)
-                result = None
+            frame = self._evaluate(node_id, frame_num)
+            self.frame_ready.emit(node_id, frame_num, frame)
 
-            if isinstance(result, np.ndarray):
-                self.frame_ready.emit(node_id, frame_num, result)
-            else:
-                self.frame_ready.emit(node_id, frame_num, None)
+            if self._playing and self._has_no_pending():
+                self._prefetch(node_id, frame_num)
+
+    def _take_pending(self) -> tuple[str, int] | None:
+        with self._lock:
+            request = self._pending
+            self._pending = None
+            return request
+
+    def _has_no_pending(self) -> bool:
+        with self._lock:
+            return self._pending is None
+
+    def _evaluate(self, node_id: str, frame_num: int) -> np.ndarray | None:
+        try:
+            result = self._project.evaluate_node(node_id, frame_num)
+        except Exception as exc:  # noqa: BLE001
+            self._project.log_exception(exc)
+            return None
+        if isinstance(result, np.ndarray):
+            return np.ascontiguousarray(result)
+        return None
+
+    def _prefetch(self, node_id: str, frame_num: int) -> None:
+        """Warm the cache for the next few frames while the UI displays."""
+        settings = self._project.get_preview_settings()
+        count = settings.prefetch_frames
+        if count <= 0:
+            return
+        max_frame = self._project.max_frame
+        for offset in range(1, count + 1):
+            if not self._has_no_pending():
+                return
+            nxt = frame_num + offset
+            if nxt > max_frame:
+                return
+            self._evaluate(node_id, nxt)

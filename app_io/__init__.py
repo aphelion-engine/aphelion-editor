@@ -3,6 +3,20 @@
 Named ``app_io`` (not ``io``) to avoid shadowing the Python standard library.
 """
 
+from app_io.aph_format import (
+    APH_EXTENSION,
+    APH_FILE_FILTER,
+    AphFormatError,
+    load_aph,
+    save_aph,
+)
 from app_io.node_loader import NodeLoader
 
-__all__ = ["NodeLoader"]
+__all__ = [
+    "APH_EXTENSION",
+    "APH_FILE_FILTER",
+    "AphFormatError",
+    "NodeLoader",
+    "load_aph",
+    "save_aph",
+]
