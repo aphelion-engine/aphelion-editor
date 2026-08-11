@@ -1,9 +1,20 @@
 {
-
-    "python.pythonPath": "C:\\Users\\jwaechter0153\\Downloads\\aphelion\\.venv\\Scripts\\python.exe",
-
+    "python.defaultInterpreterPath": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
     "python.terminal.activateEnvironment": true,
-    "python.analysis.languageServerMode": "full",
-    "python.analysis.autoImportCompletions": true,
-    "cursorpyright.analysis.autoImportCompletions": true
+    "python.languageServer": "None",
+
+    "cursorpyright.analysis.autoImportCompletions": true,
+    "cursorpyright.analysis.typeCheckingMode": "off",
+    "cursorpyright.analysis.useLibraryCodeForTypes": true,
+    "cursorpyright.analysis.diagnosticMode": "openFilesOnly",
+    "cursorpyright.analysis.disableWorkspaceSymbol": true,
+    "cursorpyright.analysis.exclude": [
+        "**/.venv",
+        "**/__pycache__",
+        "**/node_modules",
+        "**/build",
+        "**/dist",
+        "**/.mypy_cache",
+        "**/.pytest_cache"
+    ]
 }

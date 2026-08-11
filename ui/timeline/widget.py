@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QKeyEvent
 from PyQt6.QtWidgets import (
     QComboBox,
@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from config.keybinds import KeyAction, KeybindStore
 from config.theme import TIMELINE_STYLE
 from core.events import ObserverEvent
 from core.project import Project
@@ -30,7 +31,6 @@ from ui.icons import (
     AppIcon,
     DEFAULT_ICON_COLOR,
     LOOP_ACTIVE_COLOR,
-    icon_size,
     make_icon,
 )
 from ui.timeline.scrubber import TimelineScrubber
@@ -42,12 +42,17 @@ class TimelineWidget(QWidget):
     frame_changed = pyqtSignal(int)
     playback_changed = pyqtSignal(bool)
 
-    def __init__(self, project: Project) -> None:
+    def __init__(
+        self,
+        project: Project,
+        keybinds: KeybindStore | None = None,
+    ) -> None:
         super().__init__()
         self.setObjectName("TimelineWidget")
         self.setStyleSheet(TIMELINE_STYLE)
 
         self.project = project
+        self.keybinds = keybinds or KeybindStore()
         self.controller = PlaybackController(project.max_frame)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._advance_frame)
@@ -56,6 +61,15 @@ class TimelineWidget(QWidget):
         self._sync_from_project()
         self.project.subscribe(self._on_project_changed)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def set_project(self, project: Project) -> None:
+        """Retarget timeline controls at a newly loaded project."""
+        self.pause_playback()
+        self.project.unsubscribe(self._on_project_changed)
+        self.project = project
+        self.controller = PlaybackController(project.max_frame)
+        self.project.subscribe(self._on_project_changed)
+        self._sync_from_project()
 
     @property
     def is_playing(self) -> bool:
@@ -67,8 +81,8 @@ class TimelineWidget(QWidget):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(8, 6, 8, 8)
-        root.setSpacing(6)
+        root.setContentsMargins(6, 2, 6, 4)
+        root.setSpacing(3)
         root.addWidget(self._build_toolbar())
         self.scrubber = TimelineScrubber(self)
         self.scrubber.set_range(self.project.max_frame)
@@ -83,8 +97,8 @@ class TimelineWidget(QWidget):
         bar = QFrame(self)
         bar.setObjectName("TimelineToolbar")
         layout = QHBoxLayout(bar)
-        layout.setContentsMargins(0, 0, 0, 6)
-        layout.setSpacing(6)
+        layout.setContentsMargins(0, 0, 0, 2)
+        layout.setSpacing(4)
 
         self.timecode_label = QLabel("00:00:00:00")
         self.timecode_label.setObjectName("TimelineTimecodeLabel")
@@ -104,13 +118,28 @@ class TimelineWidget(QWidget):
         return bar
 
     def _add_transport_buttons(self, layout: QHBoxLayout) -> None:
-        self.btn_start = self._icon_button(AppIcon.TO_START, "Go to start (Home)")
-        self.btn_prev = self._icon_button(AppIcon.STEP_BACK, "Previous frame (Left)")
-        self.btn_play = self._icon_button(
-            AppIcon.PLAY, "Play / Pause (Space)", play=True
+        kb = self.keybinds
+        self.btn_start = self._icon_button(
+            AppIcon.TO_START,
+            kb.tooltip("Go to start", KeyAction.GO_TO_START),
         )
-        self.btn_next = self._icon_button(AppIcon.STEP_FORWARD, "Next frame (Right)")
-        self.btn_end = self._icon_button(AppIcon.TO_END, "Go to end (End)")
+        self.btn_prev = self._icon_button(
+            AppIcon.STEP_BACK,
+            kb.tooltip("Previous frame", KeyAction.STEP_BACK),
+        )
+        self.btn_play = self._icon_button(
+            AppIcon.PLAY,
+            kb.tooltip("Play / Pause", KeyAction.PLAY_PAUSE),
+            play=True,
+        )
+        self.btn_next = self._icon_button(
+            AppIcon.STEP_FORWARD,
+            kb.tooltip("Next frame", KeyAction.STEP_FORWARD),
+        )
+        self.btn_end = self._icon_button(
+            AppIcon.TO_END,
+            kb.tooltip("Go to end", KeyAction.GO_TO_END),
+        )
 
         self.btn_start.clicked.connect(self.go_to_start)
         self.btn_prev.clicked.connect(self.step_backward)
@@ -128,8 +157,15 @@ class TimelineWidget(QWidget):
             layout.addWidget(button)
 
     def _add_range_buttons(self, layout: QHBoxLayout) -> None:
-        self.btn_set_in = self._icon_button(AppIcon.MARK_IN, "Set in point (I)")
-        self.btn_set_out = self._icon_button(AppIcon.MARK_OUT, "Set out point (O)")
+        kb = self.keybinds
+        self.btn_set_in = self._icon_button(
+            AppIcon.MARK_IN,
+            kb.tooltip("Set in point", KeyAction.MARK_IN),
+        )
+        self.btn_set_out = self._icon_button(
+            AppIcon.MARK_OUT,
+            kb.tooltip("Set out point", KeyAction.MARK_OUT),
+        )
         self.btn_go_in = self._icon_button(AppIcon.GO_IN, "Jump to in point")
         self.btn_go_out = self._icon_button(AppIcon.GO_OUT, "Jump to out point")
         self.btn_clear_range = self._icon_button(
@@ -156,7 +192,9 @@ class TimelineWidget(QWidget):
             AppIcon.LOOP, "Loop within in/out range", toggle=True
         )
         self.btn_loop.setChecked(True)
-        self.btn_loop.setIcon(make_icon(AppIcon.LOOP, color=LOOP_ACTIVE_COLOR))
+        self.btn_loop.setIcon(
+            make_icon(AppIcon.LOOP, color=LOOP_ACTIVE_COLOR, size=14)
+        )
         self.btn_loop.toggled.connect(self._on_loop_toggled)
         layout.addWidget(self.btn_loop)
 
@@ -194,8 +232,8 @@ class TimelineWidget(QWidget):
             button.setCheckable(True)
         else:
             button.setObjectName("TimelineTransportButton")
-        button.setIcon(make_icon(icon))
-        button.setIconSize(icon_size())
+        button.setIcon(make_icon(icon, size=14))
+        button.setIconSize(QSize(14, 14))
         button.setToolTip(tooltip)
         button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         return button
@@ -253,9 +291,13 @@ class TimelineWidget(QWidget):
 
     def _set_play_button_state(self, *, playing: bool) -> None:
         if playing:
-            self.btn_play.setIcon(make_icon(AppIcon.PAUSE, color=ACTIVE_ICON_COLOR))
+            self.btn_play.setIcon(
+                make_icon(AppIcon.PAUSE, color=ACTIVE_ICON_COLOR, size=14)
+            )
         else:
-            self.btn_play.setIcon(make_icon(AppIcon.PLAY, color=DEFAULT_ICON_COLOR))
+            self.btn_play.setIcon(
+                make_icon(AppIcon.PLAY, color=DEFAULT_ICON_COLOR, size=14)
+            )
         self.btn_play.setProperty("playing", "true" if playing else "false")
         style = self.btn_play.style()
         if style is not None:
@@ -322,7 +364,7 @@ class TimelineWidget(QWidget):
     def _on_loop_toggled(self, checked: bool) -> None:
         self.controller.is_looping = checked
         color = LOOP_ACTIVE_COLOR if checked else DEFAULT_ICON_COLOR
-        self.btn_loop.setIcon(make_icon(AppIcon.LOOP, color=color))
+        self.btn_loop.setIcon(make_icon(AppIcon.LOOP, color=color, size=14))
 
     def _on_speed_changed(self, _index: int) -> None:
         speed = self.speed_combo.currentData()
@@ -333,24 +375,5 @@ class TimelineWidget(QWidget):
             self.start_playback()
 
     def keyPressEvent(self, event: QKeyEvent | None) -> None:
-        if event is None:
-            return
-        key = event.key()
-        if key == Qt.Key.Key_Space:
-            self.toggle_playback()
-        elif key == Qt.Key.Key_Left:
-            self.step_backward()
-        elif key == Qt.Key.Key_Right:
-            self.step_forward()
-        elif key == Qt.Key.Key_Home:
-            self.go_to_start()
-        elif key == Qt.Key.Key_End:
-            self.go_to_end()
-        elif key == Qt.Key.Key_I:
-            self.set_in_at_playhead()
-        elif key == Qt.Key.Key_O:
-            self.set_out_at_playhead()
-        else:
-            super().keyPressEvent(event)
-            return
-        event.accept()
+        # Playback shortcuts are owned by the global keybind action registry.
+        super().keyPressEvent(event)

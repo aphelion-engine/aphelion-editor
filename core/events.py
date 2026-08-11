@@ -8,11 +8,27 @@ class ObserverEvent(Enum):
     NodeAdded = auto()
     NodeRemoved = auto()
     NodeModified = auto()
+    NodesMoved = auto()
     ConnectionCreated = auto()
     ConnectionRemoved = auto()
     FrameChanged = auto()
     ActiveViewerChanged = auto()
     ProjectModified = auto()
+
+
+# Document mutations that should mark the project dirty (excludes playhead).
+DOCUMENT_DIRTY_EVENTS: frozenset[ObserverEvent] = frozenset(
+    {
+        ObserverEvent.NodeAdded,
+        ObserverEvent.NodeRemoved,
+        ObserverEvent.NodeModified,
+        ObserverEvent.NodesMoved,
+        ObserverEvent.ConnectionCreated,
+        ObserverEvent.ConnectionRemoved,
+        ObserverEvent.ActiveViewerChanged,
+        ObserverEvent.ProjectModified,
+    }
+)
 
 
 @dataclass(frozen=True)

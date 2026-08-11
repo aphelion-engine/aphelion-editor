@@ -23,7 +23,17 @@ from PyQt6.QtWidgets import (
     QMenu,
 )
 
+from config.keybinds import KeybindStore
 from core.events import Connection, ObserverEvent
+from core.history import (
+    AddNodeCommand,
+    CompositeCommand,
+    ConnectCommand,
+    DisconnectCommand,
+    HistoryStack,
+    MoveNodesCommand,
+    RemoveNodesCommand,
+)
 from core.nodes import global_node_registry
 from core.project import Project
 from ui.node_graph.connection_item import ConnectionItem, PreviewWireItem
@@ -37,16 +47,26 @@ from ui.node_graph.constants import (
     GRID_SPACING_PX,
     SOCKET_SNAP_DISTANCE_PX,
 )
+from ui.node_graph.clipboard import GraphClipboard
 from ui.node_graph.node_item import NodeItem
+from ui.node_graph.search_palette import NodeSearchPalette
 import ui.node_graph.operations as node_ops
 
 
 class NodeGraphView(QGraphicsView):
     """Interactive node graph canvas."""
 
-    def __init__(self, project: Project) -> None:
+    def __init__(
+        self,
+        project: Project,
+        history: HistoryStack,
+        keybinds: KeybindStore | None = None,
+    ) -> None:
         super().__init__()
         self.project = project
+        self.history = history
+        self.keybinds = keybinds or KeybindStore()
+        self.clipboard = GraphClipboard()
         self.scene = QGraphicsScene(self)
         self.setScene(self.scene)
 
@@ -60,6 +80,9 @@ class NodeGraphView(QGraphicsView):
         self._preview_wire: PreviewWireItem | None = None
         self._drag_source: tuple[str, str, bool] | None = None
         self._snap_target: tuple[str, str, bool] | None = None
+        self._cursor_scene_pos: QPointF = QPointF(0.0, 0.0)
+        self._paste_generation: int = 0
+        self._search_palette: NodeSearchPalette | None = None
 
         self._configure_view()
         self.project.subscribe(self.on_project_changed)
@@ -68,6 +91,24 @@ class NodeGraphView(QGraphicsView):
         for connection in self.project.connections:
             self.add_connection_to_view(connection)
         QTimer.singleShot(80, self.fit_all_nodes)
+
+    def set_project(self, project: Project, history: HistoryStack) -> None:
+        """Rebuild the graph view for a newly loaded project document."""
+        self.cancel_connection_drag()
+        self.project.unsubscribe(self.on_project_changed)
+        self.project = project
+        self.history = history
+        self.clipboard.clear()
+        self._paste_generation = 0
+        self.node_items.clear()
+        self.connection_items.clear()
+        self.scene.clear()
+        self.project.subscribe(self.on_project_changed)
+        for node_id in self.project.nodes:
+            self.add_node_to_view(node_id)
+        for connection in self.project.connections:
+            self.add_connection_to_view(connection)
+        QTimer.singleShot(40, self.fit_all_nodes)
 
     @property
     def is_connection_dragging(self) -> bool:
@@ -190,6 +231,17 @@ class NodeGraphView(QGraphicsView):
             self.add_connection_to_view(data)
         elif event == ObserverEvent.ConnectionRemoved and isinstance(data, Connection):
             self.remove_connection_from_view(data)
+        elif event == ObserverEvent.NodesMoved and isinstance(data, dict):
+            self._apply_nodes_moved(data)
+
+    def _apply_nodes_moved(self, positions: dict[str, tuple[float, float]]) -> None:
+        """Sync item transforms after undo/redo or programmatic moves."""
+        for node_id, (x, y) in positions.items():
+            item = self.node_items.get(node_id)
+            if item is None:
+                continue
+            item.setPos(float(x), float(y))
+            self.refresh_connections_for_node(node_id)
 
     def add_node_to_view(self, node_id: str) -> None:
         if node_id in self.node_items:
@@ -306,7 +358,9 @@ class NodeGraphView(QGraphicsView):
         else:
             out_node, out_slot = src_node, src_slot
             in_node, in_slot = dst_node, dst_slot
-        self.project.connect_nodes(out_node, out_slot, in_node, in_slot)
+        self.history.push(
+            ConnectCommand(out_node, out_slot, in_node, in_slot)
+        )
 
     def cancel_connection_drag(self) -> None:
         """Abort an in-progress wire drag without creating a connection."""
@@ -385,7 +439,7 @@ class NodeGraphView(QGraphicsView):
         return best
 
     def delete_node(self, node_id: str) -> None:
-        self.project.remove_node(node_id)
+        self.history.push(RemoveNodesCommand([node_id]))
 
     def duplicate_node(
         self,
@@ -394,6 +448,14 @@ class NodeGraphView(QGraphicsView):
         offset_y: float = 36,
     ) -> str | None:
         return node_ops.create_node_copy(self, node_id, offset_x, offset_y)
+
+    def commit_node_move(
+        self,
+        before: dict[str, tuple[float, float]],
+        after: dict[str, tuple[float, float]],
+    ) -> None:
+        """Record a completed interactive node drag as one undo step."""
+        self.history.push(MoveNodesCommand(before, after))
 
     def selected_nodes(self) -> list[NodeItem]:
         return node_ops.selected_node_items(self)
@@ -405,12 +467,16 @@ class NodeGraphView(QGraphicsView):
         if isinstance(item, NodeItem):
             return
         scene_pos = self.mapToScene(position)
+        self._cursor_scene_pos = scene_pos
         # Keep a strong reference until exec finishes so actions stay alive.
         self._context_menu = GraphContextMenu(
             scene_pos,
             on_add_node=self.insert_node,
+            on_paste=lambda: node_ops.paste_items(self, scene_pos),
+            can_paste=not self.clipboard.is_empty,
             on_select_all=self.select_all_nodes,
             on_fit_view=self.fit_all_nodes,
+            keybinds=self.keybinds,
             parent=self,
         )
         self._context_menu.exec(self.mapToGlobal(position))
@@ -422,6 +488,40 @@ class NodeGraphView(QGraphicsView):
         self._context_menu = NodeOperationsMenu(self, self)
         self._context_menu.exec(global_pos)
         self._context_menu = None
+
+    def copy_selection(self) -> None:
+        """Copy selected nodes into the graph clipboard."""
+        items = self.selected_nodes()
+        if items and node_ops.copy_items(self, items):
+            self._paste_generation = 0
+
+    @property
+    def cursor_scene_pos(self) -> QPointF:
+        """Last known cursor position in scene coordinates."""
+        return QPointF(self._cursor_scene_pos)
+
+    def paste_clipboard(self) -> None:
+        """Paste clipboard nodes near the last cursor / view center."""
+        node_ops.paste_items(self, self._cursor_scene_pos)
+
+    def consume_paste_generation(self) -> int:
+        """Return the current paste stack index and advance it."""
+        generation = self._paste_generation
+        self._paste_generation += 1
+        return generation
+
+    def open_node_search(self) -> None:
+        """Open the Tab search palette for creating a node at the cursor."""
+        if self._search_palette is None:
+            self._search_palette = NodeSearchPalette(
+                self,
+                on_chosen=self._create_from_search,
+                keybinds=self.keybinds,
+            )
+        self._search_palette.open_palette()
+
+    def _create_from_search(self, name: str, category: str) -> None:
+        self.insert_node(name, category, self._cursor_scene_pos)
 
     def insert_node(
         self,
@@ -438,7 +538,12 @@ class NodeGraphView(QGraphicsView):
             position = self.view_center_scene_pos()
         node.x = position.x()
         node.y = position.y()
-        node_id = self.project.add_node(node)
+        command = AddNodeCommand(node)
+        if not self.history.push(command):
+            return None
+        node_id = command.node_id
+        if node_id is None:
+            return None
 
         # Ensure the item exists even if an observer failed to run.
         self.add_node_to_view(node_id)
@@ -490,8 +595,10 @@ class NodeGraphView(QGraphicsView):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: Any) -> None:
+        self._cursor_scene_pos = self._event_scene_pos(event)
+
         if self.is_connection_dragging:
-            self.update_connection_drag(self._event_scene_pos(event))
+            self.update_connection_drag(self._cursor_scene_pos)
             event.accept()
             return
 
@@ -557,33 +664,49 @@ class NodeGraphView(QGraphicsView):
         if 0.2 <= scale <= 3.0:
             self.scale(factor, factor)
 
+    def delete_selection(self) -> bool:
+        """Delete selected wires or nodes. Returns whether something was removed."""
+        selected_wires = [
+            item
+            for item in self.scene.selectedItems()
+            if isinstance(item, ConnectionItem)
+        ]
+        if selected_wires:
+            commands = [
+                DisconnectCommand(wire.connection) for wire in selected_wires
+            ]
+            if len(commands) == 1:
+                return self.history.push(commands[0])
+            return self.history.push(
+                CompositeCommand(commands, f"Disconnect {len(commands)} Wires")
+            )
+        items = self.selected_nodes()
+        if items:
+            node_ops.delete_items(self, items)
+            return True
+        return False
+
     def keyPressEvent(self, event: QKeyEvent | None) -> None:
         if event is None:
             return
         key = event.key()
-        mods = event.modifiers()
-        items = self.selected_nodes()
+        palette = self._search_palette
 
-        if key == Qt.Key.Key_Escape and self.is_connection_dragging:
-            self.cancel_connection_drag()
-        elif key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
-            selected_wires = [
-                item
-                for item in self.scene.selectedItems()
-                if isinstance(item, ConnectionItem)
-            ]
-            if selected_wires:
-                for wire in selected_wires:
-                    self.project.disconnect_nodes(wire.connection)
-            elif items:
-                node_ops.delete_items(self, items)
-        elif key == Qt.Key.Key_A and mods & Qt.KeyboardModifier.ControlModifier:
-            self.select_all_nodes()
-        elif key == Qt.Key.Key_D and mods & Qt.KeyboardModifier.ControlModifier and items:
-            node_ops.duplicate_items(self, items)
-        elif key == Qt.Key.Key_F:
-            self.fit_all_nodes()
-        else:
-            super().keyPressEvent(event)
+        # Document shortcuts live on EditorActions; keep graph-local escapes here.
+        if key == Qt.Key.Key_Escape:
+            if palette is not None and palette.isVisible():
+                palette.close_palette()
+            elif self.is_connection_dragging:
+                self.cancel_connection_drag()
+            else:
+                super().keyPressEvent(event)
+                return
+            event.accept()
             return
-        event.accept()
+
+        if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            if self.delete_selection():
+                event.accept()
+                return
+
+        super().keyPressEvent(event)

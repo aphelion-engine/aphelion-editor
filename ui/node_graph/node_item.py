@@ -57,6 +57,7 @@ class NodeItem(QGraphicsRectItem):
         self.graph_view: NodeGraphView | None = None
         self.is_hovered: bool = False
         self._drag_origins: dict[int, QPointF] = {}
+        self._drag_before_positions: dict[str, tuple[float, float]] = {}
 
         r, g, b = node.node_color
         self.accent_color = QColor(r, g, b)
@@ -322,11 +323,23 @@ class NodeItem(QGraphicsRectItem):
         if event is None:
             return
         super().mouseReleaseEvent(event)
-        for item in self._selected_node_items():
+        moved_items = self._selected_node_items()
+        after: dict[str, tuple[float, float]] = {}
+        for item in moved_items:
             item._sync_node_position()
+            after[item.node_id] = (float(item.node.x), float(item.node.y))
             if self.graph_view is not None:
                 self.graph_view.refresh_connections_for_node(item.node_id)
+        before = self._drag_before_positions
+        if (
+            self.graph_view is not None
+            and before
+            and after
+            and before != after
+        ):
+            self.graph_view.commit_node_move(before, after)
         self._drag_origins.clear()
+        self._drag_before_positions.clear()
 
     def hoverEnterEvent(self, event: QGraphicsSceneHoverEvent | None) -> None:
         self.is_hovered = True
@@ -339,11 +352,19 @@ class NodeItem(QGraphicsRectItem):
         super().hoverLeaveEvent(event)
 
     def _capture_drag_origins(self) -> None:
-        self._drag_origins = {
-            id(item): item.pos() for item in self._selected_node_items()
-        }
+        selected = self._selected_node_items()
+        self._drag_origins = {id(item): item.pos() for item in selected}
         if id(self) not in self._drag_origins:
             self._drag_origins[id(self)] = self.pos()
+        self._drag_before_positions = {
+            item.node_id: (float(item.node.x), float(item.node.y))
+            for item in selected
+        }
+        if self.node_id not in self._drag_before_positions:
+            self._drag_before_positions[self.node_id] = (
+                float(self.node.x),
+                float(self.node.y),
+            )
 
     def _selected_node_items(self) -> list[NodeItem]:
         scene = self.scene()

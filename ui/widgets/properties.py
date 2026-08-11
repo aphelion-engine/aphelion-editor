@@ -1,27 +1,30 @@
-"""
-Properties panel for node parameter editing with advanced controls
-"""
+"""Properties panel for editing the selected node's parameters."""
+
+from __future__ import annotations
 
 from typing import Any
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QFont
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
-    QFormLayout,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
     QScrollArea,
     QSlider,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
+from config.theme import PROPERTIES_STYLE
 from core.events import ObserverEvent
+from core.history import HistoryStack, SetPropertyCommand
 from core.nodes import (
     NodeProperty,
     NodePropertyInputType,
@@ -29,168 +32,119 @@ from core.nodes import (
     VideoInputNode,
 )
 from core.project import Project
+from render.video_decoder import probe_video
+
+
+class MediaProbeThread(QThread):
+    """Probe video metadata off the UI thread so file browse stays responsive."""
+
+    probed = pyqtSignal(float, float, int, int)
+    failed = pyqtSignal(str)
+
+    def __init__(self, path: str) -> None:
+        super().__init__()
+        self._path = path
+
+    def run(self) -> None:
+        info = probe_video(self._path)
+        if info is None or info.duration_sec <= 0.0:
+            self.failed.emit(f"Could not read video: {self._path}")
+            return
+        self.probed.emit(info.fps, info.duration_sec, info.width, info.height)
 
 
 class PropertyWidget(QWidget):
-    """Base class for property input widgets"""
+    """Base class for a single property editor control."""
 
     def __init__(self, prop: NodeProperty, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.prop = prop
-        self.layout = QHBoxLayout()
-        self.layout.setContentsMargins(0, 0, 0, 0)
-        self.layout.setSpacing(6)
-        self.setLayout(self.layout)
+        self._row = QHBoxLayout(self)
+        self._row.setContentsMargins(0, 0, 0, 0)
+        self._row.setSpacing(6)
 
     def get_value(self) -> Any:
-        """Get the current value from the widget"""
         raise NotImplementedError
 
     def set_value(self, value: Any) -> None:
-        """Set the value in the widget"""
         raise NotImplementedError
 
 
 class NumberPropertyWidget(PropertyWidget):
-    """Widget for number properties"""
+    """Integer or float numeric editor (spin box, not a slider)."""
 
     def __init__(self, prop: NodeProperty, parent: QWidget | None = None) -> None:
         super().__init__(prop, parent)
+        self._is_int = isinstance(prop.value, int)
+        low = float(prop.slider_min_value)
+        high = float(prop.slider_max_value)
+        if high <= low:
+            low, high = -999999.0, 999999.0
 
-        self.spinbox = QDoubleSpinBox()
-        self.spinbox.setValue(float(prop.value or 0))
-        self.spinbox.setRange(-999999, 999999)
-        self.spinbox.setDecimals(2)
-        self.spinbox.setSingleStep(0.1)
-        self.spinbox.setMinimumHeight(28)
-        self.spinbox.setStyleSheet("""
-            QDoubleSpinBox {
-                background-color: #2a2a2a;
-                color: #ffffff;
-                border: 1px solid #444444;
-                border-radius: 3px;
-                padding: 4px 6px;
-                font-size: 10px;
-                font-weight: 500;
-            }
-            QDoubleSpinBox:focus {
-                border: 1px solid #0078d4;
-                background-color: #313131;
-            }
-            QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
-                background-color: #2a2a2a;
-                border: none;
-                width: 16px;
-            }
-            QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {
-                background-color: #353535;
-            }
-        """)
+        if self._is_int:
+            spin: QSpinBox | QDoubleSpinBox = QSpinBox()
+            spin.setRange(int(low), int(high))
+            spin.setValue(int(prop.value or 0))
+            spin.setSingleStep(1)
+        else:
+            spin = QDoubleSpinBox()
+            spin.setRange(low, high)
+            spin.setDecimals(2)
+            spin.setSingleStep(0.1)
+            spin.setValue(float(prop.value or 0.0))
 
-        self.layout.addWidget(self.spinbox)
+        spin.setObjectName("PropertySpin")
+        spin.setMinimumHeight(28)
+        self.spinbox = spin
+        self._row.addWidget(spin)
 
     def get_value(self) -> Any:
-        return self.spinbox.value()
+        return int(self.spinbox.value()) if self._is_int else float(self.spinbox.value())
 
     def set_value(self, value: Any) -> None:
-        self.spinbox.setValue(float(value or 0))
+        if self._is_int:
+            self.spinbox.setValue(int(value or 0))
+        else:
+            self.spinbox.setValue(float(value or 0.0))
 
 
 class SliderPropertyWidget(PropertyWidget):
-    """Widget for slider properties"""
+    """Horizontal slider with a recessed value readout."""
 
     def __init__(self, prop: NodeProperty, parent: QWidget | None = None) -> None:
         super().__init__(prop, parent)
-
         self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider.setObjectName("PropertySlider")
         self.slider.setMinimum(int(prop.slider_min_value or 0))
         self.slider.setMaximum(int(prop.slider_max_value or 100))
         self.slider.setValue(int(prop.value or 0))
         self.slider.setMinimumHeight(28)
-        self.slider.setStyleSheet("""
-            QSlider::groove:horizontal {
-                background-color: #3a3a3a;
-                height: 4px;
-                border-radius: 2px;
-            }
-            QSlider::handle:horizontal {
-                background-color: #0078d4;
-                width: 12px;
-                margin: -4px 0px;
-                border-radius: 6px;
-            }
-            QSlider::handle:horizontal:hover {
-                background-color: #0084db;
-            }
-        """)
 
         self.value_label = QLabel(str(int(prop.value or 0)))
-        self.value_label.setStyleSheet(
-            "color: #0078d4; font-weight: bold; font-size: 9px; min-width: 30px;"
-        )
+        self.value_label.setObjectName("PropertySliderValue")
         self.value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
         self.slider.valueChanged.connect(lambda v: self.value_label.setText(str(v)))
 
-        self.layout.addWidget(self.slider, 1)
-        self.layout.addWidget(self.value_label)
-
-    def get_value(self) -> Any:
-        return self.slider.value()
-
-    def set_value(self, value: Any) -> None:
-        self.slider.setValue(int(value or 0))
+        self._row.addWidget(self.slider, 1)
+        self._row.addWidget(self.value_label)
 
 
 class FilePropertyWidget(PropertyWidget):
-    """Widget for file path properties"""
+    """Read-only path field with a browse button."""
 
     def __init__(self, prop: NodeProperty, parent: QWidget | None = None) -> None:
         super().__init__(prop, parent)
-
         self.file_input = QLineEdit()
+        self.file_input.setObjectName("PropertyField")
         self.file_input.setText(str(prop.value or ""))
         self.file_input.setReadOnly(True)
-        self.file_input.setPlaceholderText("No file")
+        self.file_input.setPlaceholderText("No file selected")
         self.file_input.setMinimumHeight(28)
-        self.file_input.setStyleSheet("""
-            QLineEdit {
-                background-color: #2a2a2a;
-                color: #888888;
-                border: 1px solid #444444;
-                border-radius: 3px;
-                padding: 4px 6px;
-                font-size: 9px;
-            }
-            QLineEdit:focus {
-                border: 1px solid #0078d4;
-                color: #ffffff;
-            }
-        """)
 
         self.browse_btn = QPushButton("…")
-        self.browse_btn.setMaximumWidth(30)
-        self.browse_btn.setMinimumHeight(28)
-        self.browse_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #0078d4;
-                color: #ffffff;
-                border: none;
-                border-radius: 3px;
-                padding: 2px;
-                font-weight: bold;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: #0084db;
-            }
-            QPushButton:pressed {
-                background-color: #006abb;
-            }
-        """)
-
-        self.layout.addWidget(self.file_input, 1)
-        self.layout.addWidget(self.browse_btn)
+        self.browse_btn.setObjectName("PropertyBrowseButton")
+        self._row.addWidget(self.file_input, 1)
+        self._row.addWidget(self.browse_btn)
 
     def get_value(self) -> Any:
         return self.file_input.text()
@@ -203,67 +157,31 @@ class FilePropertyWidget(PropertyWidget):
 
 
 class EnumPropertyWidget(PropertyWidget):
-    """Widget for enum properties"""
+    """Dropdown for enum-backed properties."""
 
     def __init__(
-        self, prop: NodeProperty, enum_class: Any, parent: QWidget | None = None
+        self,
+        prop: NodeProperty,
+        enum_class: type[Any],
+        parent: QWidget | None = None,
     ) -> None:
         super().__init__(prop, parent)
-
         self.enum_class = enum_class
         self.combo = QComboBox()
+        self.combo.setObjectName("PropertyCombo")
         self.combo.setMinimumHeight(28)
 
-        # Populate combo box with enum values
         for member in enum_class:
-            self.combo.addItem(member.name, member.value)
+            self.combo.addItem(member.name, member)
 
-        # Set current value
-        if prop.value:
+        if prop.value is not None:
             index = self.combo.findData(prop.value)
+            if index < 0 and isinstance(prop.value, int):
+                index = self.combo.findData(enum_class(prop.value))
             if index >= 0:
                 self.combo.setCurrentIndex(index)
 
-        self.combo.setStyleSheet("""
-            QComboBox {
-                background-color: #2a2a2a;
-                color: #ffffff;
-                border: 1px solid #444444;
-                border-radius: 3px;
-                padding: 4px 6px;
-                font-size: 10px;
-                font-weight: 500;
-            }
-            QComboBox:focus {
-                border: 1px solid #0078d4;
-                background-color: #313131;
-            }
-            QComboBox::drop-down {
-                border: none;
-                background-color: #2a2a2a;
-                width: 16px;
-            }
-            QComboBox::down-arrow {
-                image: url(none);
-                width: 0px;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #1e1e1e;
-                color: #ffffff;
-                selection-background-color: #0078d4;
-                border: 1px solid #444444;
-                outline: none;
-            }
-            QComboBox QAbstractItemView::item {
-                padding: 4px 6px;
-                height: 26px;
-            }
-            QComboBox QAbstractItemView::item:selected {
-                background-color: #0078d4;
-            }
-        """)
-
-        self.layout.addWidget(self.combo)
+        self._row.addWidget(self.combo)
 
     def get_value(self) -> Any:
         return self.combo.currentData()
@@ -274,255 +192,352 @@ class EnumPropertyWidget(PropertyWidget):
             self.combo.setCurrentIndex(index)
 
 
+class CheckboxPropertyWidget(PropertyWidget):
+    """Boolean toggle rendered as a styled checkbox."""
+
+    def __init__(self, prop: NodeProperty, parent: QWidget | None = None) -> None:
+        super().__init__(prop, parent)
+        self.checkbox = QCheckBox("On")
+        self.checkbox.setObjectName("PropertyCheck")
+        self.checkbox.setChecked(bool(prop.value))
+        self.checkbox.toggled.connect(self._sync_label)
+        self._sync_label(bool(prop.value))
+        self._row.addWidget(self.checkbox)
+        self._row.addStretch(1)
+
+    def _sync_label(self, checked: bool) -> None:
+        self.checkbox.setText("On" if checked else "Off")
+
+    def get_value(self) -> Any:
+        return bool(self.checkbox.isChecked())
+
+    def set_value(self, value: Any) -> None:
+        checked = bool(value)
+        self.checkbox.blockSignals(True)
+        self.checkbox.setChecked(checked)
+        self.checkbox.blockSignals(False)
+        self._sync_label(checked)
+
+
+class PropertyRow(QWidget):
+    """Compact property block: label above control, no card chrome."""
+
+    def __init__(self, title: str, editor: PropertyWidget, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("PropertyRow")
+        self.editor = editor
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(3)
+
+        label = QLabel(title)
+        label.setObjectName("PropertyRowLabel")
+        layout.addWidget(label)
+        layout.addWidget(editor)
+
+
 class PropertiesPanel(QWidget):
-    """Edit selected node properties with advanced controls"""
+    """Edit selected node properties without stacking previous UI."""
 
-    def __init__(self, project: Project) -> None:
+    def __init__(self, project: Project, history: HistoryStack) -> None:
         super().__init__()
+        self.setObjectName("PropertiesPanel")
+        self.setStyleSheet(PROPERTIES_STYLE)
+
         self.project = project
-        self.current_node_id = None
+        self.history = history
+        self.current_node_id: str | None = None
         self.property_widgets: dict[str, PropertyWidget] = {}
+        self._probe_thread: MediaProbeThread | None = None
+        self._probe_generation: int = 0
 
-        # Set dark background
-        self.setStyleSheet("""
-            PropertiesPanel {
-                background-color: #1e1e1e;
-            }
-        """)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(8, 8, 8, 8)
+        root.setSpacing(0)
 
-        # Main layout
-        main_layout = QVBoxLayout()
-        main_layout.setContentsMargins(8, 8, 8, 8)
-        main_layout.setSpacing(0)
-        self.setLayout(main_layout)
+        self._scroll = QScrollArea()
+        self._scroll.setObjectName("PropertiesScroll")
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        root.addWidget(self._scroll)
 
-        # Scroll area for properties
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setMaximumWidth(280)
-        scroll.setStyleSheet("""
-            QScrollArea {
-                border: none;
-                background-color: #1e1e1e;
-            }
-            QScrollBar:vertical {
-                width: 8px;
-                background-color: #1e1e1e;
-            }
-            QScrollBar::handle:vertical {
-                background-color: #444444;
-                border-radius: 4px;
-                min-height: 40px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background-color: #555555;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                border: none;
-                background: none;
-            }
-        """)
-
-        # Container for properties
-        self.scroll_widget = QWidget()
-        self.scroll_widget.setStyleSheet("background-color: #1e1e1e;")
-        self.scroll_layout = QVBoxLayout(self.scroll_widget)
-        self.scroll_layout.setContentsMargins(0, 0, 0, 0)
-        self.scroll_layout.setSpacing(8)
-
-        scroll.setWidget(self.scroll_widget)
-        main_layout.addWidget(scroll)
+        self._content = QWidget()
+        self._content.setObjectName("PropertiesContent")
+        self._content_layout = QVBoxLayout(self._content)
+        self._content_layout.setContentsMargins(0, 0, 0, 0)
+        self._content_layout.setSpacing(10)
+        self._scroll.setWidget(self._content)
 
         self.project.subscribe(self.on_project_changed)
+        self._show_empty_state("Select a node")
 
-        # Default message
-        label = QLabel("Select a node")
-        label.setStyleSheet("color: #555555; font-style: italic; font-size: 10px;")
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.scroll_layout.addWidget(label)
-        self.scroll_layout.addStretch()
+    def set_project(self, project: Project, history: HistoryStack) -> None:
+        """Retarget the panel at a newly loaded project / history stack."""
+        self.project.unsubscribe(self.on_project_changed)
+        self.project = project
+        self.history = history
+        self.current_node_id = None
+        self.project.subscribe(self.on_project_changed)
+        self._show_empty_state("Select a node")
 
     def on_project_changed(self, event: ObserverEvent, data: Any) -> None:
-        """Handle project changes"""
-        pass
+        if (
+            event == ObserverEvent.NodeRemoved
+            and isinstance(data, str)
+            and data == self.current_node_id
+        ):
+            self.current_node_id = None
+            self._show_empty_state("Select a node")
+            return
+        if (
+            event == ObserverEvent.NodeModified
+            and isinstance(data, str)
+            and data == self.current_node_id
+            and self.history.is_applying
+        ):
+            self._reload_current_node()
+            node = self.project.nodes.get(data)
+            if isinstance(node, VideoInputNode):
+                path_prop = node.get_property("file_path")
+                if path_prop is not None and path_prop.value:
+                    self._start_media_probe(str(path_prop.value), data)
+
+    def _reload_current_node(self) -> None:
+        """Rebuild editors so undo/redo values match the model."""
+        node_id = self.current_node_id
+        if node_id is None:
+            return
+        self.current_node_id = None
+        self.set_node(node_id)
 
     def _format_property_name(self, name: str) -> str:
-        """Format property name from snake_case to Title Case"""
-        # Remove leading underscores if any
-        name = name.lstrip("_")
-        # Replace underscores with spaces
-        name = name.replace("_", " ")
-        # Title case each word
-        return name.title()
+        labels: dict[str, str] = {
+            "file_path": "File Path",
+            "start_frame": "Start Frame",
+            "end_frame": "End Frame (-1 = last)",
+            "frame_offset": "Frame Offset",
+            "fps": "FPS (0 = source)",
+            "speed": "Speed",
+            "before_start": "Before Start",
+            "after_end": "After End",
+            "on_error": "On Error",
+            "auto_sync_timeline": "Auto Sync Timeline",
+            "preview_max_width": "Preview Max Width",
+            "apply_exposure": "Apply Exposure",
+            "flip_horizontal": "Flip Horizontal",
+            "flip_vertical": "Flip Vertical",
+            "prefetch_frames": "Prefetch Frames",
+            "fit_mode": "Fit Mode",
+        }
+        if name in labels:
+            return labels[name]
+        return name.lstrip("_").replace("_", " ").title()
+
+    def _replace_content(self) -> QVBoxLayout:
+        """Swap the scroll content widget so old controls cannot ghost/stack.
+
+        ``QScrollArea.setWidget`` takes ownership and destroys the previous
+        widget, so we must not call ``deleteLater`` on it again.
+        """
+        self._content = QWidget()
+        self._content.setObjectName("PropertiesContent")
+        self._content_layout = QVBoxLayout(self._content)
+        self._content_layout.setContentsMargins(0, 0, 0, 0)
+        self._content_layout.setSpacing(10)
+        self._scroll.setWidget(self._content)
+        self.property_widgets.clear()
+        return self._content_layout
+
+    def _show_empty_state(self, message: str) -> None:
+        layout = self._replace_content()
+        label = QLabel(message)
+        label.setObjectName("PropertiesEmptyLabel")
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(label)
+        layout.addStretch(1)
 
     def set_node(self, node_id: str) -> None:
-        """Display properties for a specific node"""
-        # If same node, don't refresh
-        if self.current_node_id == node_id:
+        """Rebuild the panel for ``node_id`` (always replaces previous content)."""
+        if self.current_node_id == node_id and self.property_widgets:
+            return
+
+        node = self.project.nodes.get(node_id)
+        if node is None:
+            self.current_node_id = None
+            self._show_empty_state("Select a node")
             return
 
         self.current_node_id = node_id
-        self.property_widgets.clear()
+        layout = self._replace_content()
 
-        node = self.project.nodes.get(node_id)
+        title = QLabel(node.name)
+        title.setObjectName("PropertiesNodeTitle")
+        layout.addWidget(title)
 
-        if not node:
-            return
-
-        # Completely clear layout
-        while self.scroll_layout.count():
-            item = self.scroll_layout.takeAt(0)
-            if item is not None:
-                widget = item.widget()
-                if widget is not None:
-                    widget.deleteLater()
-                layout = item.layout()
-                if layout is not None:
-                    layout.deleteLater()
-
-        # Add node name header
-        name_label = QLabel(node.name)
-        name_font = QFont()
-        name_font.setPointSize(10)
-        name_font.setBold(True)
-        name_label.setFont(name_font)
-        name_label.setStyleSheet(
-            "color: #ffffff; padding-bottom: 4px; padding-top: 2px;"
-        )
-        self.scroll_layout.addWidget(name_label)
-
-        # Add separator
-        separator = QLabel()
-        separator.setFixedHeight(1)
-        separator.setStyleSheet("background-color: #333333; margin-bottom: 6px;")
-        self.scroll_layout.addWidget(separator)
-
-        # Create form for properties
-        form = QFormLayout()
-        form.setSpacing(6)
-        form.setContentsMargins(0, 0, 0, 0)
-        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
-        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        divider = QFrame()
+        divider.setObjectName("PropertiesDivider")
+        divider.setFrameShape(QFrame.Shape.HLine)
+        layout.addWidget(divider)
 
         has_properties = False
-
-        for prop_name, prop in sorted(node.properties.items()):
-            # Skip internal properties
-            if prop_name.startswith("_input_"):
+        # Lower ``priority`` values appear first; ties break by name.
+        ordered = sorted(
+            node.properties.items(),
+            key=lambda item: (item[1].priority, item[0]),
+        )
+        for prop_name, prop in ordered:
+            if prop_name.startswith("_input_") or not isinstance(prop, NodeProperty):
                 continue
-
-            if not isinstance(prop, NodeProperty):
+            editor = self._create_property_widget(prop, prop_name)
+            if editor is None:
                 continue
-
             has_properties = True
+            self.property_widgets[prop_name] = editor
+            self._wire_editor(prop_name, editor)
+            row = PropertyRow(self._format_property_name(prop_name), editor)
+            layout.addWidget(row)
 
-            # Property label with formatted name
-            formatted_name = self._format_property_name(prop_name)
-            label = QLabel(formatted_name)
-            label.setStyleSheet("""
-                color: #b0b0b0;
-                font-weight: 600;
-                font-size: 9px;
-            """)
-            label.setMinimumWidth(60)
-            label.setMaximumWidth(100)
+        if not has_properties:
+            empty = QLabel("No properties")
+            empty.setObjectName("PropertiesEmptyLabel")
+            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(empty)
 
-            # Create appropriate widget based on input type
-            widget = self._create_property_widget(prop, prop_name)
+        layout.addStretch(1)
 
-            if widget:
-                self.property_widgets[prop_name] = widget
-                # Connect value changes
-                if hasattr(widget, "spinbox"):
-                    widget.spinbox.valueChanged.connect(
-                        lambda v, p=prop_name: self.update_property(p, v)
-                    )
-                elif hasattr(widget, "slider"):
-                    widget.slider.valueChanged.connect(
-                        lambda v, p=prop_name: self.update_property(p, v)
-                    )
-                elif hasattr(widget, "combo"):
-                    widget.combo.currentIndexChanged.connect(
-                        lambda _, p=prop_name: self.update_property(
-                            p, widget.get_value()
-                        )
-                    )
-
-                form.addRow(label, widget)
-
-        if has_properties:
-            self.scroll_layout.addLayout(form)
-        else:
-            no_props = QLabel("No properties")
-            no_props.setStyleSheet(
-                "color: #555555; font-style: italic; font-size: 9px;"
+    def _wire_editor(self, prop_name: str, editor: PropertyWidget) -> None:
+        if isinstance(editor, NumberPropertyWidget):
+            editor.spinbox.valueChanged.connect(
+                lambda v, p=prop_name: self.update_property(p, v)
             )
-            no_props.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.scroll_layout.addWidget(no_props)
-
-        self.scroll_layout.addStretch()
+        elif isinstance(editor, SliderPropertyWidget):
+            editor.slider.valueChanged.connect(
+                lambda v, p=prop_name: self.update_property(p, v)
+            )
+        elif isinstance(editor, EnumPropertyWidget):
+            editor.combo.currentIndexChanged.connect(
+                lambda _i, p=prop_name, w=editor: self.update_property(p, w.get_value())
+            )
+        elif isinstance(editor, CheckboxPropertyWidget):
+            editor.checkbox.toggled.connect(
+                lambda checked, p=prop_name: self.update_property(p, bool(checked))
+            )
+        elif isinstance(editor, FilePropertyWidget):
+            editor.get_browse_button().clicked.connect(
+                lambda _checked=False, p=prop_name, w=editor: self.browse_file(p, w)
+            )
 
     def _create_property_widget(
-        self, prop: NodeProperty, prop_name: str
+        self,
+        prop: NodeProperty,
+        prop_name: str,
     ) -> PropertyWidget | None:
-        """Create appropriate widget based on property type"""
-
+        _ = prop_name
         if prop.input_type == NodePropertyInputType.File:
-            widget = FilePropertyWidget(prop)
-            widget.get_browse_button().clicked.connect(
-                lambda: self.browse_file(prop_name, widget)
-            )
-            return widget
-
-        elif prop.input_type == NodePropertyInputType.Slider:
+            return FilePropertyWidget(prop)
+        if prop.input_type == NodePropertyInputType.Slider:
             return SliderPropertyWidget(prop)
-
-        elif prop.input_type == NodePropertyInputType.Number:
+        if prop.input_type == NodePropertyInputType.Number:
             return NumberPropertyWidget(prop)
-
-        elif prop.input_type == NodePropertyInputType.VideoFrameErrorMethod:
+        if prop.input_type == NodePropertyInputType.Checkbox:
+            return CheckboxPropertyWidget(prop)
+        if prop.input_type == NodePropertyInputType.VideoFrameErrorMethod:
             return EnumPropertyWidget(prop, VideoFrameErrorMethod)
-
-        elif prop.input_type == NodePropertyInputType.CustomChoice:
+        if prop.input_type == NodePropertyInputType.CustomChoice:
+            if prop.value is None:
+                return None
             return EnumPropertyWidget(prop, type(prop.value))
-
         return None
 
     def update_property(self, prop_name: str, value: Any) -> None:
-        """Update a node property and sync media metadata when needed."""
-        if not self.current_node_id or self.current_node_id not in self.project.nodes:
+        """Write a property value through history (coalesces rapid edits)."""
+        if self.current_node_id is None or self.current_node_id not in self.project.nodes:
             return
         node = self.project.nodes[self.current_node_id]
         prop = node.get_property(prop_name)
         if prop is None:
             return
-        prop.value = value
-        self.project.invalidate_cache(self.current_node_id)
-        if prop_name == "file_path" and isinstance(node, VideoInputNode):
-            self._sync_video_media(node)
 
-    def _sync_video_media(self, node: VideoInputNode) -> None:
-        """Align project fps/duration/size with the selected video file."""
-        meta = node.probe_media()
-        if meta is None:
+        if prop.input_type in {
+            NodePropertyInputType.CustomChoice,
+            NodePropertyInputType.VideoFrameErrorMethod,
+        } and isinstance(value, int):
+            enum_type = type(prop.value) if prop.value is not None else None
+            if enum_type is not None:
+                try:
+                    value = enum_type(value)
+                except ValueError:
+                    pass
+
+        if prop.value == value:
             return
-        fps, duration_sec, width, height = meta
-        self.project.sync_timeline_from_media(
-            fps=fps,
-            duration_sec=duration_sec,
-            width=width,
-            height=height,
+
+        node_id = self.current_node_id
+        if not self.history.push(
+            SetPropertyCommand(node_id, prop_name, value, old_value=prop.value)
+        ):
+            return
+
+        if prop_name == "file_path" and isinstance(node, VideoInputNode):
+            self._start_media_probe(str(value), node_id)
+
+    def _start_media_probe(self, path: str, node_id: str) -> None:
+        if not path:
+            return
+        self._probe_generation += 1
+        generation = self._probe_generation
+        thread = MediaProbeThread(path)
+        thread.probed.connect(
+            lambda fps, dur, w, h, gen=generation, nid=node_id: self._on_probe_ok(
+                gen, nid, fps, dur, w, h
+            )
         )
+        thread.failed.connect(
+            lambda msg, gen=generation, nid=node_id: self._on_probe_failed(
+                gen, nid, msg
+            )
+        )
+        self._probe_thread = thread
+        thread.start()
+
+    def _on_probe_ok(
+        self,
+        generation: int,
+        node_id: str,
+        fps: float,
+        duration_sec: float,
+        width: int,
+        height: int,
+    ) -> None:
+        if generation != self._probe_generation:
+            return
+        node = self.project.nodes.get(node_id)
+        sync_prop = node.get_property("auto_sync_timeline") if node is not None else None
+        should_sync = sync_prop is None or bool(sync_prop.value)
+        if should_sync:
+            # sync_timeline_from_media clears cache and emits FrameChanged.
+            self.project.sync_timeline_from_media(
+                fps=fps,
+                duration_sec=duration_sec,
+                width=width,
+                height=height,
+            )
+        self.project.invalidate_cache(node_id)
+
+    def _on_probe_failed(self, generation: int, node_id: str, message: str) -> None:
+        if generation != self._probe_generation:
+            return
+        _ = message
+        self.project.invalidate_cache(node_id)
 
     def browse_file(self, prop_name: str, widget: FilePropertyWidget) -> None:
-        """Open file browser for file properties"""
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "Select a video file",
             "",
             "Video Files (*.mp4 *.avi *.mov *.mkv);;All Files (*)",
         )
-
         if file_path:
             widget.set_value(file_path)
             self.update_property(prop_name, file_path)

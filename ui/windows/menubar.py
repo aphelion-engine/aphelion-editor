@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PyQt6.QtGui import QAction, QKeySequence
-from PyQt6.QtWidgets import QMenu, QMenuBar
+from PyQt6.QtGui import QAction, QActionGroup
+from PyQt6.QtWidgets import QDockWidget, QMenu, QMenuBar
 
+from config.keybinds import KeyAction
 from config.theme import CONTEXT_MENU_STYLE, MENUBAR_STYLE
 from ui.icons import AppIcon, make_icon
 from ui.node_graph.node_menu import populate_add_node_menu
+from ui.windows.layouts import LAYOUT_LABELS, LayoutMode
 
 if TYPE_CHECKING:
     from ui.windows.editor import Editor
@@ -33,6 +35,9 @@ def build_menu_bar(editor: Editor) -> QMenuBar:
     _build_edit_menu(menubar, editor)
     _build_nodes_menu(menubar, editor)
     _build_view_menu(menubar, editor)
+    _build_window_menu(menubar, editor)
+    _build_playback_menu(menubar, editor)
+    _build_help_menu(menubar, editor)
     return menubar
 
 
@@ -40,33 +45,22 @@ def _style_menu(menu: QMenu) -> None:
     menu.setStyleSheet(CONTEXT_MENU_STYLE)
 
 
+def _add_action(menu: QMenu, editor: Editor, key_action: KeyAction) -> QAction:
+    action = editor.actions.get(key_action)
+    menu.addAction(action)
+    return action
+
+
 def _build_file_menu(menubar: QMenuBar, editor: Editor) -> None:
     file_menu = menubar.addMenu("File")
     assert file_menu is not None
     _style_menu(file_menu)
 
-    new_action = file_menu.addAction(make_icon(AppIcon.NEW_FILE), "New Project")
-    assert new_action is not None
-    new_action.setShortcut(QKeySequence("Ctrl+N"))
-    new_action.setStatusTip("Create a new project")
-
-    open_action = file_menu.addAction(make_icon(AppIcon.OPEN_FILE), "Open Project…")
-    assert open_action is not None
-    open_action.setShortcut(QKeySequence("Ctrl+O"))
-    open_action.setStatusTip("Open an existing project")
-
-    save_action = file_menu.addAction(make_icon(AppIcon.SAVE_FILE), "Save Project")
-    assert save_action is not None
-    save_action.setShortcut(QKeySequence("Ctrl+S"))
-    save_action.setStatusTip("Save the current project")
-
+    _add_action(file_menu, editor, KeyAction.NEW_PROJECT)
+    _add_action(file_menu, editor, KeyAction.OPEN_PROJECT)
+    _add_action(file_menu, editor, KeyAction.SAVE_PROJECT)
     file_menu.addSeparator()
-
-    exit_action = file_menu.addAction("Exit")
-    assert exit_action is not None
-    exit_action.setShortcut(QKeySequence("Ctrl+Q"))
-    exit_action.setStatusTip("Quit Aphelion")
-    exit_action.triggered.connect(editor.close)
+    _add_action(file_menu, editor, KeyAction.EXIT)
 
 
 def _build_edit_menu(menubar: QMenuBar, editor: Editor) -> None:
@@ -74,32 +68,16 @@ def _build_edit_menu(menubar: QMenuBar, editor: Editor) -> None:
     assert edit_menu is not None
     _style_menu(edit_menu)
 
-    undo_action = edit_menu.addAction(make_icon(AppIcon.UNDO), "Undo")
-    assert undo_action is not None
-    undo_action.setShortcut(QKeySequence("Ctrl+Z"))
-    undo_action.setEnabled(False)
-
-    redo_action = edit_menu.addAction(make_icon(AppIcon.REDO), "Redo")
-    assert redo_action is not None
-    redo_action.setShortcut(QKeySequence("Ctrl+Shift+Z"))
-    redo_action.setEnabled(False)
-
+    _add_action(edit_menu, editor, KeyAction.UNDO)
+    _add_action(edit_menu, editor, KeyAction.REDO)
     edit_menu.addSeparator()
-
-    select_all = edit_menu.addAction(make_icon(AppIcon.SELECT_ALL), "Select All Nodes")
-    assert select_all is not None
-    select_all.setShortcut(QKeySequence("Ctrl+A"))
-    select_all.triggered.connect(editor.node_graph.select_all_nodes)
-
-    duplicate = edit_menu.addAction(make_icon(AppIcon.DUPLICATE), "Duplicate Selection")
-    assert duplicate is not None
-    duplicate.setShortcut(QKeySequence("Ctrl+D"))
-    duplicate.triggered.connect(editor.duplicate_selected_nodes)
-
-    delete_action = edit_menu.addAction(make_icon(AppIcon.DELETE), "Delete Selection")
-    assert delete_action is not None
-    delete_action.setShortcut(QKeySequence("Delete"))
-    delete_action.triggered.connect(editor.delete_selected_nodes)
+    _add_action(edit_menu, editor, KeyAction.COPY)
+    _add_action(edit_menu, editor, KeyAction.PASTE)
+    edit_menu.addSeparator()
+    _add_action(edit_menu, editor, KeyAction.SELECT_ALL)
+    _add_action(edit_menu, editor, KeyAction.DUPLICATE)
+    _add_action(edit_menu, editor, KeyAction.DELETE)
+    editor._sync_history_actions()
 
 
 def _build_nodes_menu(menubar: QMenuBar, editor: Editor) -> None:
@@ -111,12 +89,18 @@ def _build_nodes_menu(menubar: QMenuBar, editor: Editor) -> None:
     assert add_root is not None
     populate_add_node_menu(add_root, editor.insert_node_from_menu)
 
-    nodes_menu.addSeparator()
+    search = _add_action(nodes_menu, editor, KeyAction.SEARCH_NODE)
+    search.setText("Search Nodes…")
 
-    fit = nodes_menu.addAction(make_icon(AppIcon.FIT_VIEW), "Fit Graph to View")
-    assert fit is not None
-    fit.setShortcut(QKeySequence("F"))
-    fit.triggered.connect(editor.node_graph.fit_all_nodes)
+    quick = nodes_menu.addMenu("Quick Create")
+    assert quick is not None
+    _style_menu(quick)
+    for action in editor.actions.node_create_actions():
+        if action.isEnabled():
+            quick.addAction(action)
+
+    nodes_menu.addSeparator()
+    _add_action(nodes_menu, editor, KeyAction.FIT_GRAPH)
 
 
 def _build_view_menu(menubar: QMenuBar, editor: Editor) -> None:
@@ -124,19 +108,106 @@ def _build_view_menu(menubar: QMenuBar, editor: Editor) -> None:
     assert view_menu is not None
     _style_menu(view_menu)
 
-    fit_action = view_menu.addAction(make_icon(AppIcon.FIT_VIEW), "Fit Graph to View")
-    assert fit_action is not None
-    fit_action.setShortcut(QKeySequence("Shift+F"))
-    fit_action.triggered.connect(editor.node_graph.fit_all_nodes)
-
+    _add_action(view_menu, editor, KeyAction.FIT_GRAPH_ALT)
     view_menu.addSeparator()
+    _add_action(view_menu, editor, KeyAction.TOGGLE_FULLSCREEN)
+    view_menu.addSeparator()
+    _add_action(view_menu, editor, KeyAction.FOCUS_VIEWPORT)
+    _add_action(view_menu, editor, KeyAction.FOCUS_GRAPH)
+    _add_action(view_menu, editor, KeyAction.FOCUS_TIMELINE)
+    _add_action(view_menu, editor, KeyAction.FOCUS_PROPERTIES)
 
-    focus_graph = QAction("Focus Node Graph", editor)
-    focus_graph.setShortcut(QKeySequence("Ctrl+1"))
-    focus_graph.triggered.connect(lambda: editor.node_graph.setFocus())
-    view_menu.addAction(focus_graph)
 
-    focus_timeline = QAction("Focus Timeline", editor)
-    focus_timeline.setShortcut(QKeySequence("Ctrl+2"))
-    focus_timeline.triggered.connect(lambda: editor.timeline.setFocus())
-    view_menu.addAction(focus_timeline)
+def _build_window_menu(menubar: QMenuBar, editor: Editor) -> None:
+    window_menu = menubar.addMenu("Window")
+    assert window_menu is not None
+    _style_menu(window_menu)
+
+    layouts_menu = window_menu.addMenu("Layout")
+    assert layouts_menu is not None
+    _style_menu(layouts_menu)
+
+    layout_group = QActionGroup(editor)
+    layout_group.setExclusive(True)
+    editor.layout_actions = {}
+    for mode in LayoutMode:
+        action = QAction(LAYOUT_LABELS[mode], editor)
+        action.setCheckable(True)
+        action.setChecked(mode == editor.layout_mode)
+        action.triggered.connect(
+            lambda _checked=False, m=mode: editor.set_layout_mode(m)
+        )
+        layout_group.addAction(action)
+        layouts_menu.addAction(action)
+        editor.layout_actions[mode] = action
+
+    layouts_menu.addSeparator()
+    _add_action(layouts_menu, editor, KeyAction.RESET_LAYOUT)
+
+    window_menu.addSeparator()
+
+    panels_menu = window_menu.addMenu("Panels")
+    assert panels_menu is not None
+    _style_menu(panels_menu)
+
+    panel_entries: tuple[tuple[str, QDockWidget], ...] = (
+        ("Viewport", editor.docks.viewport),
+        ("Node Graph", editor.docks.node_graph),
+        ("Timeline", editor.docks.timeline),
+        ("Properties", editor.docks.properties),
+    )
+    for label, dock in panel_entries:
+        action = QAction(label, editor)
+        action.setCheckable(True)
+        action.setChecked(dock.isVisible())
+        dock.visibilityChanged.connect(action.setChecked)
+        action.triggered.connect(
+            lambda checked=False, d=dock: d.setVisible(bool(checked))
+        )
+        panels_menu.addAction(action)
+
+    panels_menu.addSeparator()
+    _add_action(panels_menu, editor, KeyAction.SHOW_ALL_PANELS)
+
+    window_menu.addSeparator()
+    reset_window = window_menu.addAction("Reset Layout")
+    assert reset_window is not None
+    reset_window.setStatusTip(editor.actions.store.spec(KeyAction.RESET_LAYOUT).description)
+    reset_window.triggered.connect(editor.reset_layout)
+
+
+def _build_playback_menu(menubar: QMenuBar, editor: Editor) -> None:
+    playback_menu = menubar.addMenu("Playback")
+    assert playback_menu is not None
+    _style_menu(playback_menu)
+
+    _add_action(playback_menu, editor, KeyAction.PLAY_PAUSE)
+    playback_menu.addSeparator()
+    _add_action(playback_menu, editor, KeyAction.GO_TO_START)
+    _add_action(playback_menu, editor, KeyAction.STEP_BACK)
+    _add_action(playback_menu, editor, KeyAction.STEP_FORWARD)
+    _add_action(playback_menu, editor, KeyAction.GO_TO_END)
+    playback_menu.addSeparator()
+    _add_action(playback_menu, editor, KeyAction.MARK_IN)
+    _add_action(playback_menu, editor, KeyAction.MARK_OUT)
+
+
+def _build_help_menu(menubar: QMenuBar, editor: Editor) -> None:
+    help_menu = menubar.addMenu("Help")
+    assert help_menu is not None
+    _style_menu(help_menu)
+
+    _add_action(help_menu, editor, KeyAction.SHOW_SHORTCUTS)
+    help_menu.addSeparator()
+
+    about = help_menu.addAction("About Aphelion")
+    assert about is not None
+    about.triggered.connect(
+        lambda: _status(editor, "Aphelion — node-based video editor")
+    )
+
+
+def _status(editor: Editor, message: str) -> None:
+    status = editor.statusBar()
+    if status is not None:
+        status.showMessage(message, 4000)
