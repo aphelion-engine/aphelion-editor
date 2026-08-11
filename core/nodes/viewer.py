@@ -14,11 +14,11 @@ class ViewerNode(Node):
     node_color = (200, 50, 50)
 
     def _setup_sockets(self) -> None:
+        # Viewer is a sink: input only — preview comes from evaluate().
         self.add_input("frame", NodeSocketType.Frame)
-        self.add_output("frame", NodeSocketType.Frame)
 
     def evaluate(self, frame_num: int) -> np.ndarray:
-        """Pass through the connected frame stream (or blank if unconnected)."""
+        """Return the connected frame stream (or blank if unconnected)."""
         _ = frame_num
         input_frame = self.get_input_value("frame")
         if input_frame is None:

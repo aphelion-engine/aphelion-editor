@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import QPointF, Qt
-from PyQt6.QtGui import QPainter, QPainterPath, QPainterPathStroker, QPen
+from PyQt6.QtGui import QBrush, QPainter, QPainterPath, QPainterPathStroker, QPen
 from PyQt6.QtWidgets import (
     QGraphicsPathItem,
     QStyleOptionGraphicsItem,
@@ -85,7 +85,7 @@ class ConnectionItem(QGraphicsPathItem):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         color = COLOR_WIRE_ACTIVE if self.isSelected() else COLOR_WIRE
         painter.setPen(QPen(color, WIRE_WIDTH_PX, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setBrush(QBrush(Qt.BrushStyle.NoBrush))
         painter.drawPath(self.path())
 
 
@@ -104,7 +104,7 @@ class PreviewWireItem(QGraphicsPathItem):
                 Qt.PenCapStyle.RoundCap,
             )
         )
-        self.setBrush(Qt.BrushStyle.NoBrush)
+        self.setBrush(QBrush(Qt.BrushStyle.NoBrush))
 
     def set_endpoints(self, start: QPointF, end: QPointF) -> None:
         self._start = start
