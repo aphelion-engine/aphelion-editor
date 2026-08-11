@@ -1,10 +1,11 @@
 
-import sys 
-from PyQt6.QtWidgets import QApplication
-from gui.editor import Editor 
+import sys
 
+from PyQt6.QtWidgets import QApplication
+
+from core.loader import Loader
 from core.project import Project
-from core.loader import Loader 
+from gui.editor import Editor
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
@@ -12,7 +13,7 @@ if __name__ == "__main__":
     Loader.load_defaults_into_node_registry()
     
     project = Project()
-    
+
     editor = Editor(project)
     editor.show()
     
