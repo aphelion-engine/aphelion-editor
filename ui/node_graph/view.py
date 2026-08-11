@@ -338,7 +338,7 @@ class NodeGraphView(QGraphicsView):
             self._preview_wire.set_endpoints(fixed, free, snapped=snapped)
 
     def _event_scene_pos(self, event: Any) -> QPointF:
-        return self.mapToScene(event.position())
+        return self.mapToScene(event.position().toPoint())
 
     def _try_begin_socket_drag(self, event: Any) -> bool:
         """If press hits a socket, start a connection drag and return True."""
