@@ -1,0 +1,6 @@
+# Ignore heavy directories
+venv/
+build/
+dist/
+__pycache__/
+node_modules/

@@ -1,0 +1,4 @@
+{
+    "python.analysis.languageServerMode": "full",
+    "python.analysis.autoImportCompletions": true
+}
