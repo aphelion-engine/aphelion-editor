@@ -7,12 +7,13 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from config.theme import DARK_THEME, DOCK_STYLE, MENUBAR_STYLE
+from config.theme import DARK_THEME, DOCK_STYLE
 from core.project import Project
-from ui.icons import AppIcon, make_icon
 from ui.node_graph import NodeGraphView
+from ui.node_graph import operations as node_ops
 from ui.timeline import TimelineWidget
 from ui.widgets import PropertiesPanel, ViewportWidget
+from ui.windows.menubar import build_menu_bar
 
 
 class Editor(QMainWindow):
@@ -71,8 +72,9 @@ class Editor(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, properties_dock)
         self.resizeDocks([properties_dock], [250], Qt.Orientation.Horizontal)
 
-        self.node_graph.scene.selectionChanged.connect(self.on_node_selected)
-        self.create_menu_bar()
+        self.node_graph.scene.selectionChanged.connect(self.on_graph_selection_changed)
+        build_menu_bar(self)
+        _ = self.statusBar()
 
     def create_dock(self, title: str, widget: QWidget) -> QDockWidget:
         """Create a styled dock widget."""
@@ -81,7 +83,7 @@ class Editor(QMainWindow):
         dock.setStyleSheet(DOCK_STYLE)
         return dock
 
-    def on_node_selected(self) -> None:
+    def on_graph_selection_changed(self) -> None:
         """Sync properties panel (and active viewer) with graph selection."""
         selected_items = self.node_graph.scene.selectedItems()
         if not selected_items:
@@ -94,45 +96,21 @@ class Editor(QMainWindow):
         if node.node_type == "Viewer":
             self.project.set_active_viewer(item.node_id)
 
-    def create_menu_bar(self) -> None:
-        """Create application menu bar with icons and shortcuts."""
-        menubar = self.menuBar()
-        assert menubar is not None, "No menubar"
-        menubar.setStyleSheet(MENUBAR_STYLE)
+    def insert_node_from_menu(self, name: str, category: str) -> None:
+        """Insert a node at the graph view center from the menu bar."""
+        self.node_graph.insert_node(name, category)
+        status = self.statusBar()
+        if status is not None:
+            status.showMessage(f"Added node: {name}", 2500)
 
-        file_menu = menubar.addMenu("File")
-        assert file_menu is not None
-        new_action = file_menu.addAction(make_icon(AppIcon.NEW_FILE), "New Project")
-        new_action.setShortcut("Ctrl+N")
-        open_action = file_menu.addAction(make_icon(AppIcon.OPEN_FILE), "Open Project")
-        open_action.setShortcut("Ctrl+O")
-        save_action = file_menu.addAction(make_icon(AppIcon.SAVE_FILE), "Save Project")
-        save_action.setShortcut("Ctrl+S")
-        file_menu.addSeparator()
-        exit_action = file_menu.addAction("Exit")
-        exit_action.setShortcut("Ctrl+Q")
+    def delete_selected_nodes(self) -> None:
+        """Delete all currently selected graph nodes."""
+        items = self.node_graph.selected_nodes()
+        if items:
+            node_ops.delete_items(self.node_graph, items)
 
-        edit_menu = menubar.addMenu("Edit")
-        assert edit_menu is not None
-        undo_action = edit_menu.addAction(make_icon(AppIcon.UNDO), "Undo")
-        undo_action.setShortcut("Ctrl+Z")
-        redo_action = edit_menu.addAction(make_icon(AppIcon.REDO), "Redo")
-        redo_action.setShortcut("Ctrl+Shift+Z")
-        edit_menu.addSeparator()
-        delete_action = edit_menu.addAction(make_icon(AppIcon.DELETE), "Delete Node")
-        delete_action.setShortcut("Delete")
-        delete_action.triggered.connect(self.delete_selected_node)
-
-        view_menu = menubar.addMenu("View")
-        assert view_menu is not None
-        fit_action = view_menu.addAction(make_icon(AppIcon.FIT_VIEW), "Fit to Window")
-        fit_action.setShortcut("Shift+F")
-
-    def delete_selected_node(self) -> None:
-        """Delete the currently selected graph node."""
-        selected_items = self.node_graph.scene.selectedItems()
-        if not selected_items:
-            return
-        item = selected_items[0]
-        if hasattr(item, "node_id"):
-            self.project.remove_node(item.node_id)
+    def duplicate_selected_nodes(self) -> None:
+        """Duplicate the current graph selection."""
+        items = self.node_graph.selected_nodes()
+        if items:
+            node_ops.duplicate_items(self.node_graph, items)

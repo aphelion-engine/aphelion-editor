@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QGraphicsScene,
     QGraphicsView,
+    QMenu,
 )
 
 from core.events import ObserverEvent
@@ -52,6 +53,7 @@ class NodeGraphView(QGraphicsView):
         self.selection_rect: QRect | None = None
         self._panning: bool = False
         self._pan_anchor: QPointF = QPointF()
+        self._context_menu: QMenu | None = None
 
         self._configure_view()
         self.project.subscribe(self.on_project_changed)
@@ -210,25 +212,58 @@ class NodeGraphView(QGraphicsView):
         if isinstance(item, NodeItem):
             return
         scene_pos = self.mapToScene(position)
-        menu = GraphContextMenu(self.project, scene_pos, self)
-        menu.node_selected.connect(self.on_node_selected)
-        menu.select_all_requested.connect(self.select_all_nodes)
-        menu.fit_view_requested.connect(self.fit_all_nodes)
-        menu.exec(self.mapToGlobal(position))
+        # Keep a strong reference until exec finishes so actions stay alive.
+        self._context_menu = GraphContextMenu(
+            scene_pos,
+            on_add_node=self.insert_node,
+            on_select_all=self.select_all_nodes,
+            on_fit_view=self.fit_all_nodes,
+            parent=self,
+        )
+        self._context_menu.exec(self.mapToGlobal(position))
+        self._context_menu = None
 
     def show_node_context_menu(self, global_pos: QPoint) -> None:
         from ui.node_graph.menus import NodeOperationsMenu
 
-        menu = NodeOperationsMenu(self, self)
-        menu.exec(global_pos)
+        self._context_menu = NodeOperationsMenu(self, self)
+        self._context_menu.exec(global_pos)
+        self._context_menu = None
 
-    def on_node_selected(self, name: str, category: str, position: QPointF) -> None:
+    def insert_node(
+        self,
+        name: str,
+        category: str,
+        position: QPointF | None = None,
+    ) -> str | None:
+        """Create a registry node at ``position`` (or view center) and select it."""
         node = global_node_registry.create_node(name, category=category)
         if node is None:
-            return
+            return None
+
+        if position is None:
+            position = self.view_center_scene_pos()
         node.x = position.x()
         node.y = position.y()
-        self.project.add_node(node)
+        node_id = self.project.add_node(node)
+
+        # Ensure the item exists even if an observer failed to run.
+        self.add_node_to_view(node_id)
+        self.scene.clearSelection()
+        item = self.node_items.get(node_id)
+        if item is not None:
+            item.setSelected(True)
+        viewport = self.viewport()
+        if viewport is not None:
+            viewport.update()
+        return node_id
+
+    def view_center_scene_pos(self) -> QPointF:
+        """Return the scene coordinate at the center of the viewport."""
+        viewport = self.viewport()
+        if viewport is None:
+            return QPointF(0.0, 0.0)
+        return self.mapToScene(viewport.rect().center())
 
     def select_all_nodes(self) -> None:
         for item in self.node_items.values():

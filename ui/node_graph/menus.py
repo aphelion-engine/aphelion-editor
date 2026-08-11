@@ -2,79 +2,55 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import QPointF, pyqtSignal
+from PyQt6.QtCore import QPointF
 from PyQt6.QtWidgets import QMenu, QWidget
 
 from config.theme import CONTEXT_MENU_STYLE
-from core.nodes import global_node_registry
-from core.project import Project
-from ui.icons import AppIcon, make_dot_icon, make_icon
-from ui.node_graph.constants import MENU_ICON_SIZE_PX
+from ui.icons import AppIcon, make_icon
+from ui.node_graph.node_menu import populate_add_node_menu
 
 if TYPE_CHECKING:
     from ui.node_graph.node_item import NodeItem
     from ui.node_graph.view import NodeGraphView
 
+AddNodeAtCallback = Callable[[str, str, QPointF], None]
+
 
 class GraphContextMenu(QMenu):
     """Empty-canvas menu: add nodes, select all, fit view."""
 
-    node_selected = pyqtSignal(str, str, QPointF)
-    select_all_requested = pyqtSignal()
-    fit_view_requested = pyqtSignal()
-
     def __init__(
         self,
-        project: Project,
         position: QPointF,
+        *,
+        on_add_node: AddNodeAtCallback,
+        on_select_all: Callable[[], None],
+        on_fit_view: Callable[[], None],
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.project = project
-        self.position = position
+        self._position = position
+        self._on_add_node = on_add_node
         self.setStyleSheet(CONTEXT_MENU_STYLE)
-        self._populate()
 
-    def _populate(self) -> None:
         add_menu = self.addMenu(make_icon(AppIcon.ADD_NODE), "Add Node")
         assert add_menu is not None
-        add_menu.setStyleSheet(CONTEXT_MENU_STYLE)
-        self._populate_add_nodes(add_menu)
+        populate_add_node_menu(
+            add_menu,
+            lambda name, cat: self._on_add_node(name, cat, self._position),
+        )
 
         self.addSeparator()
         select_all = self.addAction(make_icon(AppIcon.SELECT_ALL), "Select All")
         assert select_all is not None
-        select_all.setShortcut("Ctrl+A")
-        select_all.triggered.connect(self.select_all_requested.emit)
+        select_all.triggered.connect(on_select_all)
 
         fit = self.addAction(make_icon(AppIcon.FIT_VIEW), "Fit to View")
         assert fit is not None
-        fit.setShortcut("F")
-        fit.triggered.connect(self.fit_view_requested.emit)
-
-    def _populate_add_nodes(self, menu: QMenu) -> None:
-        for category in sorted(global_node_registry.get_categories()):
-            category_menu = menu.addMenu(category)
-            assert category_menu is not None
-            category_menu.setStyleSheet(CONTEXT_MENU_STYLE)
-
-            for node_name in global_node_registry.get_nodes_in_category(category):
-                info = global_node_registry.get_node_info(category, node_name)
-                if info is None:
-                    continue
-                action = category_menu.addAction(
-                    make_dot_icon(info.color, size=MENU_ICON_SIZE_PX),
-                    node_name,
-                )
-                assert action is not None
-                action.setToolTip(info.description)
-                action.triggered.connect(
-                    lambda _checked=False, cat=category, name=node_name: (
-                        self.node_selected.emit(name, cat, self.position)
-                    )
-                )
+        fit.triggered.connect(on_fit_view)
 
 
 class NodeOperationsMenu(QMenu):
@@ -97,7 +73,6 @@ class NodeOperationsMenu(QMenu):
             f"Delete {count} Nodes" if count > 1 else "Delete Node",
         )
         assert delete is not None
-        delete.setShortcut("Delete")
         delete.triggered.connect(lambda: node_ops.delete_items(self.view, items))
 
         duplicate = self.addAction(
@@ -105,7 +80,6 @@ class NodeOperationsMenu(QMenu):
             f"Duplicate {count} Nodes" if count > 1 else "Duplicate Node",
         )
         assert duplicate is not None
-        duplicate.setShortcut("Ctrl+D")
         duplicate.triggered.connect(lambda: node_ops.duplicate_items(self.view, items))
 
         self.addSeparator()
@@ -160,4 +134,3 @@ class NodeOperationsMenu(QMenu):
         assert v_action is not None
         v_action.setEnabled(enabled)
         v_action.triggered.connect(lambda: node_ops.distribute_vertical(items))
-

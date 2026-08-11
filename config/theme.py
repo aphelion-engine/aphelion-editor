@@ -143,24 +143,27 @@ DOCK_STYLE = """
 
 MENUBAR_STYLE = """
     QMenuBar {
-        background-color: #2a2a2a;
-        color: #ffffff;
-        border-bottom: 1px solid #3a3a3a;
-        spacing: 12px;
-        padding: 0px 8px;
+        background-color: #1e1e1e;
+        color: #e8e8e8;
+        border-bottom: 1px solid #121212;
+        spacing: 4px;
+        padding: 4px 10px;
+        font-size: 12px;
     }
     QMenuBar::item {
         background-color: transparent;
-        padding: 4px 12px;
+        color: #d0d0d0;
+        padding: 5px 12px;
         border-radius: 4px;
         font-weight: 500;
     }
     QMenuBar::item:selected {
-        background-color: #0078d4;
-        border-radius: 4px;
+        background-color: #2b6ea8;
+        color: #ffffff;
     }
     QMenuBar::item:pressed {
-        background-color: #006abb;
+        background-color: #245f91;
+        color: #ffffff;
     }
 """
 
