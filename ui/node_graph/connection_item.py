@@ -48,6 +48,8 @@ class ConnectionItem(QGraphicsPathItem):
         self.graph_view = graph_view
         self.setZValue(0.0)
         self.setFlag(self.GraphicsItemFlag.ItemIsSelectable, True)
+        self.setPen(QPen(COLOR_WIRE, WIRE_WIDTH_PX))
+        self.setBrush(QBrush(Qt.BrushStyle.NoBrush))
         self.update_path()
 
     def update_path(self) -> None:
@@ -84,7 +86,14 @@ class ConnectionItem(QGraphicsPathItem):
             return
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         color = COLOR_WIRE_ACTIVE if self.isSelected() else COLOR_WIRE
-        painter.setPen(QPen(color, WIRE_WIDTH_PX, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.setPen(
+            QPen(
+                color,
+                WIRE_WIDTH_PX,
+                Qt.PenStyle.SolidLine,
+                Qt.PenCapStyle.RoundCap,
+            )
+        )
         painter.setBrush(QBrush(Qt.BrushStyle.NoBrush))
         painter.drawPath(self.path())
 
@@ -94,18 +103,32 @@ class PreviewWireItem(QGraphicsPathItem):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setZValue(2.0)
-        self._start = QPointF()
+        self.setZValue(100.0)
+        self.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        self.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+        self._snapped = False
+        self._apply_style()
+
+    def set_endpoints(
+        self,
+        start: QPointF,
+        end: QPointF,
+        *,
+        snapped: bool = False,
+    ) -> None:
+        """Update the preview path; ``snapped`` switches to a solid stroke."""
+        if snapped != self._snapped:
+            self._snapped = snapped
+            self._apply_style()
+        self.setPath(build_wire_path(start, end))
+
+    def _apply_style(self) -> None:
+        style = Qt.PenStyle.SolidLine if self._snapped else Qt.PenStyle.DashLine
         self.setPen(
             QPen(
                 COLOR_WIRE_PREVIEW,
-                WIRE_WIDTH_PX,
-                Qt.PenStyle.DashLine,
+                WIRE_WIDTH_PX + (0.6 if self._snapped else 0.0),
+                style,
                 Qt.PenCapStyle.RoundCap,
             )
         )
-        self.setBrush(QBrush(Qt.BrushStyle.NoBrush))
-
-    def set_endpoints(self, start: QPointF, end: QPointF) -> None:
-        self._start = start
-        self.setPath(build_wire_path(start, end))

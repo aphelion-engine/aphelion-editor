@@ -35,6 +35,7 @@ from ui.node_graph.constants import (
     COLOR_MARQUEE_BORDER,
     COLOR_VIGNETTE,
     GRID_SPACING_PX,
+    SOCKET_SNAP_DISTANCE_PX,
 )
 from ui.node_graph.node_item import NodeItem
 import ui.node_graph.operations as node_ops
@@ -58,6 +59,7 @@ class NodeGraphView(QGraphicsView):
         self._context_menu: QMenu | None = None
         self._preview_wire: PreviewWireItem | None = None
         self._drag_source: tuple[str, str, bool] | None = None
+        self._snap_target: tuple[str, str, bool] | None = None
 
         self._configure_view()
         self.project.subscribe(self.on_project_changed)
@@ -248,14 +250,21 @@ class NodeGraphView(QGraphicsView):
         is_input: bool,
         scene_pos: QPointF,
     ) -> None:
+        """Start a view-owned wire drag (no mouse grab — avoids UI freezes)."""
         start = self.socket_scene_pos(node_id, socket_name, is_input=is_input)
         if start is None:
             return
         self._drag_source = (node_id, socket_name, is_input)
+        self._snap_target = None
+        if self._preview_wire is not None:
+            self.scene.removeItem(self._preview_wire)
         self._preview_wire = PreviewWireItem()
         self.scene.addItem(self._preview_wire)
-        self._preview_wire.set_endpoints(start, scene_pos)
-        self.grabMouse()
+        self._set_preview_endpoints(start, scene_pos, snapped=False)
+        self.setFocus(Qt.FocusReason.MouseFocusReason)
+        self.setCursor(Qt.CursorShape.CrossCursor)
+        # Track moves even if the cursor briefly leaves an item; view owns the drag.
+        self.setMouseTracking(True)
 
     def update_connection_drag(self, scene_pos: QPointF) -> None:
         if self._preview_wire is None or self._drag_source is None:
@@ -264,19 +273,28 @@ class NodeGraphView(QGraphicsView):
         start = self.socket_scene_pos(node_id, socket_name, is_input=is_input)
         if start is None:
             return
-        # Always draw from output toward input visually.
-        if is_input:
-            self._preview_wire.set_endpoints(scene_pos, start)
-        else:
-            self._preview_wire.set_endpoints(start, scene_pos)
+        snap = self._nearest_compatible_socket(scene_pos, node_id, is_input)
+        self._snap_target = None if snap is None else (snap[0], snap[1], snap[2])
+        end = scene_pos if snap is None else snap[3]
+        self._set_preview_endpoints(start, end, snapped=snap is not None)
 
     def finish_connection_drag(self, scene_pos: QPointF) -> None:
         source = self._drag_source
-        self._clear_connection_drag()
-        if source is None:
-            return
-        target = self._socket_at_scene(scene_pos)
+        target = self._snap_target
         if target is None:
+            nearest = (
+                self._nearest_compatible_socket(
+                    scene_pos,
+                    source[0],
+                    source[2],
+                )
+                if source is not None
+                else None
+            )
+            if nearest is not None:
+                target = (nearest[0], nearest[1], nearest[2])
+        self._clear_connection_drag()
+        if source is None or target is None:
             return
         src_node, src_slot, src_is_input = source
         dst_node, dst_slot, dst_is_input = target
@@ -290,26 +308,81 @@ class NodeGraphView(QGraphicsView):
             in_node, in_slot = dst_node, dst_slot
         self.project.connect_nodes(out_node, out_slot, in_node, in_slot)
 
+    def cancel_connection_drag(self) -> None:
+        """Abort an in-progress wire drag without creating a connection."""
+        self._clear_connection_drag()
+
     def _clear_connection_drag(self) -> None:
         self._drag_source = None
+        self._snap_target = None
         if self._preview_wire is not None:
             self.scene.removeItem(self._preview_wire)
             self._preview_wire = None
-        self.releaseMouse()
+        self.setMouseTracking(False)
+        self.unsetCursor()
 
-    def _socket_at_scene(
+    def _set_preview_endpoints(
         self,
-        scene_pos: QPointF,
-    ) -> tuple[str, str, bool] | None:
+        fixed: QPointF,
+        free: QPointF,
+        *,
+        snapped: bool,
+    ) -> None:
+        if self._preview_wire is None or self._drag_source is None:
+            return
+        _, _, is_input = self._drag_source
+        # Always draw visually from output toward input.
+        if is_input:
+            self._preview_wire.set_endpoints(free, fixed, snapped=snapped)
+        else:
+            self._preview_wire.set_endpoints(fixed, free, snapped=snapped)
+
+    def _event_scene_pos(self, event: Any) -> QPointF:
+        return self.mapToScene(event.position())
+
+    def _try_begin_socket_drag(self, event: Any) -> bool:
+        """If press hits a socket, start a connection drag and return True."""
+        scene_pos = self._event_scene_pos(event)
         for item in self.scene.items(scene_pos):
             if not isinstance(item, NodeItem):
                 continue
             local = item.mapFromScene(scene_pos)
             hit = item.socket_at(local)
-            if hit is not None:
-                socket_name, is_input = hit
-                return item.node_id, socket_name, is_input
-        return None
+            if hit is None:
+                continue
+            socket_name, is_input = hit
+            self.begin_connection_drag(
+                item.node_id,
+                socket_name,
+                is_input,
+                scene_pos,
+            )
+            return True
+        return False
+
+    def _nearest_compatible_socket(
+        self,
+        scene_pos: QPointF,
+        source_node_id: str,
+        source_is_input: bool,
+    ) -> tuple[str, str, bool, QPointF] | None:
+        """Return nearest opposite-side socket within snap distance, if any."""
+        best: tuple[str, str, bool, QPointF] | None = None
+        best_dist_sq = SOCKET_SNAP_DISTANCE_PX * SOCKET_SNAP_DISTANCE_PX
+        want_input = not source_is_input
+        for node_id, item in self.node_items.items():
+            if node_id == source_node_id:
+                continue
+            sockets = item.input_sockets if want_input else item.output_sockets
+            for socket_name in sockets:
+                pos = item.get_socket_position(socket_name, want_input)
+                dx = pos.x() - scene_pos.x()
+                dy = pos.y() - scene_pos.y()
+                dist_sq = dx * dx + dy * dy
+                if dist_sq <= best_dist_sq:
+                    best_dist_sq = dist_sq
+                    best = (node_id, socket_name, want_input, pos)
+        return best
 
     def delete_node(self, node_id: str) -> None:
         self.project.remove_node(node_id)
@@ -398,6 +471,11 @@ class NodeGraphView(QGraphicsView):
             return
 
         if event.button() == Qt.MouseButton.LeftButton:
+            # Own socket drags at the view so move/release keep tracking the cursor.
+            if self._try_begin_socket_drag(event):
+                event.accept()
+                return
+
             item = self.itemAt(event.pos())
             if isinstance(item, ConnectionItem):
                 super().mousePressEvent(event)
@@ -413,7 +491,7 @@ class NodeGraphView(QGraphicsView):
 
     def mouseMoveEvent(self, event: Any) -> None:
         if self.is_connection_dragging:
-            self.update_connection_drag(self.mapToScene(event.position().toPoint()))
+            self.update_connection_drag(self._event_scene_pos(event))
             event.accept()
             return
 
@@ -453,12 +531,12 @@ class NodeGraphView(QGraphicsView):
 
     def mouseReleaseEvent(self, event: Any) -> None:
         if self.is_connection_dragging and event.button() == Qt.MouseButton.LeftButton:
-            self.finish_connection_drag(self.mapToScene(event.position().toPoint()))
+            self.finish_connection_drag(self._event_scene_pos(event))
             event.accept()
             return
         if event.button() == Qt.MouseButton.MiddleButton and self._panning:
             self._panning = False
-            self.setCursor(Qt.CursorShape.ArrowCursor)
+            self.unsetCursor()
             event.accept()
             return
         if self.selection_start is not None:
@@ -486,7 +564,9 @@ class NodeGraphView(QGraphicsView):
         mods = event.modifiers()
         items = self.selected_nodes()
 
-        if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+        if key == Qt.Key.Key_Escape and self.is_connection_dragging:
+            self.cancel_connection_drag()
+        elif key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             selected_wires = [
                 item
                 for item in self.scene.selectedItems()
