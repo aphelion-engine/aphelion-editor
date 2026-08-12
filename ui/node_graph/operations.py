@@ -290,6 +290,45 @@ def insertable_node_types(
     return results
 
 
+def organize_graph(view: NodeGraphView) -> bool:
+    """Auto-arrange all nodes by data flow (left-to-right, grid-snapped).
+
+    Returns:
+        ``True`` when positions changed and were committed to history.
+    """
+    from core.graph_layout import compute_graph_layout
+    from ui.node_graph.node_layout import measure_node
+
+    nodes = view.project.nodes
+    if not nodes:
+        return False
+
+    sizes: dict[str, tuple[int, int]] = {}
+    for node_id, node in nodes.items():
+        item = view.node_items.get(node_id)
+        if item is not None:
+            measured = measure_node(node)
+            sizes[node_id] = (measured.width, measured.height)
+        else:
+            sizes[node_id] = (max(int(node.width), 160), max(int(node.height), 92))
+
+    after: dict[str, tuple[float, float]] = compute_graph_layout(
+        nodes,
+        view.project.connections,
+        sizes=sizes,
+    )
+    before: dict[str, tuple[float, float]] = {
+        node_id: (float(node.x), float(node.y)) for node_id, node in nodes.items()
+    }
+    if before == after:
+        return False
+
+    if not view.history.push(MoveNodesCommand(before, after)):
+        return False
+    view.fit_all_nodes()
+    return True
+
+
 def _build_node_copy(
     view: NodeGraphView,
     node_id: str,

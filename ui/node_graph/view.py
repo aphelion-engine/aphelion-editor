@@ -37,16 +37,8 @@ from core.history import (
 from core.nodes import global_node_registry
 from core.project import Project
 from ui.node_graph.connection_item import ConnectionItem, PreviewWireItem
-from ui.node_graph.constants import (
-    COLOR_GRAPH_BG,
-    COLOR_GRID_MAJOR,
-    COLOR_GRID_MINOR,
-    COLOR_MARQUEE,
-    COLOR_MARQUEE_BORDER,
-    COLOR_VIGNETTE,
-    GRID_SPACING_PX,
-    SOCKET_SNAP_DISTANCE_PX,
-)
+from ui.node_graph.constants import GRID_SPACING_PX, SOCKET_SNAP_DISTANCE_PX
+from ui.node_graph.theme_state import current_graph_palette
 from ui.node_graph.clipboard import GraphClipboard
 from ui.node_graph.node_item import NodeItem
 from ui.node_graph.search_palette import NodeSearchPalette
@@ -78,6 +70,7 @@ class NodeGraphView(QGraphicsView):
         self._pan_anchor: QPointF = QPointF()
         self._context_menu: QMenu | None = None
         self._preview_wire: PreviewWireItem | None = None
+        self._show_grid: bool = True
         self._drag_source: tuple[str, str, bool] | None = None
         self._snap_target: tuple[str, str, bool] | None = None
         self._cursor_scene_pos: QPointF = QPointF(0.0, 0.0)
@@ -117,6 +110,7 @@ class NodeGraphView(QGraphicsView):
     def _configure_view(self) -> None:
         self.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         self.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         self.setViewportUpdateMode(
             QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate
         )
@@ -131,30 +125,48 @@ class NodeGraphView(QGraphicsView):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setBackgroundBrush(QBrush(COLOR_GRAPH_BG))
+        palette = current_graph_palette()
+        self.setBackgroundBrush(QBrush(palette.graph_bg))
         self.scene.setItemIndexMethod(QGraphicsScene.ItemIndexMethod.BspTreeIndex)
         self.scene.setSceneRect(-10000, -10000, 20000, 20000)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_context_menu)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
+    def set_show_grid(self, enabled: bool) -> None:
+        """Toggle background grid rendering."""
+        self._show_grid = enabled
+        self.viewport().update()
+
+    def refresh_theme(self) -> None:
+        """Repaint the canvas after theme palette changes."""
+        palette = current_graph_palette()
+        self.setBackgroundBrush(QBrush(palette.graph_bg))
+        viewport = self.viewport()
+        if viewport is not None:
+            viewport.update()
+        for item in self.node_items.values():
+            item.update()
+
     def drawBackground(self, painter: QPainter | None, rect: QRectF) -> None:
         if painter is None:
             return
-        painter.fillRect(rect, COLOR_GRAPH_BG)
-        self._draw_grid(painter, rect)
+        palette = current_graph_palette()
+        painter.fillRect(rect, palette.graph_bg)
+        if self._show_grid:
+            self._draw_grid(painter, rect, palette)
 
     def drawForeground(self, painter: QPainter | None, _rect: QRectF) -> None:
         if painter is None:
             return
-        self._draw_vignette(painter)
+        self._draw_vignette(painter, current_graph_palette())
         if self.selection_rect is not None:
-            self._draw_marquee(painter)
+            self._draw_marquee(painter, current_graph_palette())
 
-    def _draw_grid(self, painter: QPainter, rect: QRectF) -> None:
+    def _draw_grid(self, painter: QPainter, rect: QRectF, palette: object) -> None:
         left = int(rect.left()) - (int(rect.left()) % GRID_SPACING_PX)
         top = int(rect.top()) - (int(rect.top()) % GRID_SPACING_PX)
-        painter.setPen(QPen(COLOR_GRID_MINOR, 1))
+        painter.setPen(QPen(palette.grid_minor, 1))  # type: ignore[attr-defined]
         x = left
         while x < rect.right():
             painter.drawLine(x, int(rect.top()), x, int(rect.bottom()))
@@ -167,7 +179,7 @@ class NodeGraphView(QGraphicsView):
         major = GRID_SPACING_PX * 4
         left_m = int(rect.left()) - (int(rect.left()) % major)
         top_m = int(rect.top()) - (int(rect.top()) % major)
-        painter.setPen(QPen(COLOR_GRID_MAJOR, 1))
+        painter.setPen(QPen(palette.grid_major, 1))  # type: ignore[attr-defined]
         x = left_m
         while x < rect.right():
             painter.drawLine(x, int(rect.top()), x, int(rect.bottom()))
@@ -177,7 +189,7 @@ class NodeGraphView(QGraphicsView):
             painter.drawLine(int(rect.left()), y, int(rect.right()), y)
             y += major
 
-    def _draw_vignette(self, painter: QPainter) -> None:
+    def _draw_vignette(self, painter: QPainter, palette: object) -> None:
         painter.save()
         painter.resetTransform()
         viewport = self.viewport()
@@ -188,7 +200,7 @@ class NodeGraphView(QGraphicsView):
         height = viewport.height()
         gradient = QRadialGradient(width / 2, height / 2, max(width, height) * 0.72)
         gradient.setColorAt(0.55, QColor(0, 0, 0, 0))
-        gradient.setColorAt(1.0, COLOR_VIGNETTE)
+        gradient.setColorAt(1.0, palette.vignette)  # type: ignore[attr-defined]
         painter.fillRect(0, 0, width, height, QBrush(gradient))
 
         edge = QLinearGradient(0, 0, 0, 28)
@@ -197,13 +209,13 @@ class NodeGraphView(QGraphicsView):
         painter.fillRect(0, 0, width, 28, QBrush(edge))
         painter.restore()
 
-    def _draw_marquee(self, painter: QPainter) -> None:
+    def _draw_marquee(self, painter: QPainter, palette: object) -> None:
         if self.selection_rect is None:
             return
         painter.save()
         painter.resetTransform()
-        painter.setBrush(COLOR_MARQUEE)
-        painter.setPen(QPen(COLOR_MARQUEE_BORDER, 1.0))
+        painter.setBrush(palette.marquee)  # type: ignore[attr-defined]
+        painter.setPen(QPen(palette.marquee_border, 1.0))  # type: ignore[attr-defined]
         painter.drawRect(self.selection_rect)
         painter.restore()
 
@@ -221,6 +233,10 @@ class NodeGraphView(QGraphicsView):
             self.scale(0.35 / scale, 0.35 / scale)
         elif scale > 1.4:
             self.scale(1.4 / scale, 1.4 / scale)
+
+    def organize_graph(self) -> bool:
+        """Clean up node positions using dependency-aware auto layout."""
+        return node_ops.organize_graph(self)
 
     def on_project_changed(self, event: ObserverEvent, data: Any) -> None:
         if event == ObserverEvent.NodeAdded and isinstance(data, str):
@@ -476,6 +492,7 @@ class NodeGraphView(QGraphicsView):
             can_paste=not self.clipboard.is_empty,
             on_select_all=self.select_all_nodes,
             on_fit_view=self.fit_all_nodes,
+            on_organize_graph=self.organize_graph,
             keybinds=self.keybinds,
             parent=self,
         )

@@ -7,16 +7,19 @@ from dataclasses import dataclass
 from core.nodes.base import Node
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class NodeInfo:
+    """Registration metadata for one creatable node type."""
+
     node_class: type[Node]
     category: str
     name: str
     description: str = ""
     color: tuple[int, int, int] = (100, 100, 100)
 
-    def create_instance(self, *args: object, **kwargs: object) -> Node:
-        return self.node_class(*args, **kwargs)
+    def create_instance(self) -> Node:
+        """Construct a default instance of this registered type."""
+        return self.node_class()
 
 
 class NodeRegistry:
@@ -25,6 +28,29 @@ class NodeRegistry:
     def __init__(self) -> None:
         self._nodes: dict[str, NodeInfo] = {}
         self._categories: dict[str, list[str]] = {}
+        self._color_overrides: dict[str, tuple[int, int, int]] = {}
+
+    def set_color_overrides(
+        self,
+        overrides: dict[str, tuple[int, int, int]],
+    ) -> None:
+        """Replace user-defined node header color overrides."""
+        self._color_overrides = dict(overrides)
+
+    def color_overrides(self) -> dict[str, tuple[int, int, int]]:
+        """Return a copy of active node color overrides."""
+        return dict(self._color_overrides)
+
+    def resolve_color(self, category: str, name: str) -> tuple[int, int, int]:
+        """Return override, registered, or default color for a node type."""
+        key = f"{category}.{name}"
+        override = self._color_overrides.get(key)
+        if override is not None:
+            return override
+        info = self.get_node_info(category, name)
+        if info is not None:
+            return info.color
+        return (100, 100, 100)
 
     def register(
         self,
@@ -38,7 +64,8 @@ class NodeRegistry:
         self._nodes[key] = NodeInfo(node_class, category, name, description, color)
         if category not in self._categories:
             self._categories[category] = []
-        self._categories[category].append(name)
+        if name not in self._categories[category]:
+            self._categories[category].append(name)
 
     def get_categories(self) -> list[str]:
         return list(self._categories.keys())
@@ -50,12 +77,25 @@ class NodeRegistry:
         return self._nodes.get(f"{category}.{name}")
 
     def create_node(self, name: str, category: str | None = None) -> Node | None:
-        for info in self._nodes.values():
-            if info.name != name:
-                continue
-            resolved = self.get_node_info(category or info.category, info.name)
-            if resolved is not None:
-                return resolved.create_instance()
+        """Create a node by exact category or unique-name fallback.
+
+        The fallback keeps older project files loadable when a built-in node
+        moves to a more precise category.
+        """
+        if category is not None:
+            exact: NodeInfo | None = self.get_node_info(category, name)
+            if exact is not None:
+                node = exact.create_instance()
+                node.node_color = self.resolve_color(category, name)
+                return node
+        matches: list[NodeInfo] = [
+            info for info in self._nodes.values() if info.name == name
+        ]
+        if len(matches) == 1:
+            info = matches[0]
+            node = info.create_instance()
+            node.node_color = self.resolve_color(info.category, info.name)
+            return node
         return None
 
     def get_all_nodes(self) -> dict[str, NodeInfo]:

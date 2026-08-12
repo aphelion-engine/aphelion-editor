@@ -6,6 +6,7 @@ import numpy as np
 
 from config.constants import DEFAULT_PREVIEW_MAX_WIDTH
 from core.nodes.base import (
+    FRAME_DTYPE,
     MediaEdgeMode,
     Node,
     NodeProperty,
@@ -13,6 +14,7 @@ from core.nodes.base import (
     NodeSocketType,
     VideoFrameErrorMethod,
 )
+from effects.frame_ops import from_source_u8
 from render.video_decoder import MediaInfo, VideoDecoder
 
 
@@ -39,6 +41,9 @@ class VideoInputNode(Node):
                 input_type=NodePropertyInputType.File,
                 value="",
                 priority=0,
+                group="Source",
+                label="File",
+                description="Video file decoded by this source node.",
             ),
         )
         self.set_property(
@@ -47,6 +52,9 @@ class VideoInputNode(Node):
                 input_type=NodePropertyInputType.Checkbox,
                 value=True,
                 priority=5,
+                group="Source",
+                label="Enabled",
+                description="Disable decoding without removing graph connections.",
             ),
         )
         self.set_property(
@@ -57,6 +65,9 @@ class VideoInputNode(Node):
                 slider_min_value=0,
                 slider_max_value=999999,
                 priority=10,
+                group="Trim",
+                label="Start",
+                description="First source frame included in playback.",
             ),
         )
         self.set_property(
@@ -67,6 +78,9 @@ class VideoInputNode(Node):
                 slider_min_value=-1,
                 slider_max_value=999999,
                 priority=11,
+                group="Trim",
+                label="End",
+                description="Last source frame; -1 uses the media end.",
             ),
         )
         self.set_property(
@@ -77,6 +91,10 @@ class VideoInputNode(Node):
                 slider_min_value=-999999,
                 slider_max_value=999999,
                 priority=20,
+                group="Timing",
+                label="Offset",
+                description="Project-frame delay before source playback begins.",
+                suffix=" fr",
             ),
         )
         self.set_property(
@@ -87,6 +105,10 @@ class VideoInputNode(Node):
                 slider_min_value=0.0,
                 slider_max_value=240.0,
                 priority=25,
+                group="Timing",
+                label="FPS",
+                description="Override source FPS; zero follows media metadata.",
+                suffix=" fps",
             ),
         )
         self.set_property(
@@ -97,6 +119,10 @@ class VideoInputNode(Node):
                 slider_min_value=0.01,
                 slider_max_value=16.0,
                 priority=26,
+                group="Timing",
+                label="Speed",
+                description="Playback speed multiplier.",
+                suffix="×",
             ),
         )
         self.set_property(
@@ -105,6 +131,9 @@ class VideoInputNode(Node):
                 input_type=NodePropertyInputType.Checkbox,
                 value=False,
                 priority=30,
+                group="Timing",
+                label="Reverse",
+                description="Read source frames in reverse order.",
             ),
         )
         self.set_property(
@@ -113,6 +142,9 @@ class VideoInputNode(Node):
                 input_type=NodePropertyInputType.CustomChoice,
                 value=MediaEdgeMode.Black,
                 priority=40,
+                group="Edges",
+                label="Before Start",
+                description="Sampling behavior before the active source range.",
             ),
         )
         self.set_property(
@@ -121,6 +153,9 @@ class VideoInputNode(Node):
                 input_type=NodePropertyInputType.CustomChoice,
                 value=MediaEdgeMode.Hold,
                 priority=41,
+                group="Edges",
+                label="After End",
+                description="Sampling behavior after the active source range.",
             ),
         )
         self.set_property(
@@ -129,6 +164,9 @@ class VideoInputNode(Node):
                 input_type=NodePropertyInputType.VideoFrameErrorMethod,
                 value=VideoFrameErrorMethod.Black,
                 priority=50,
+                group="Recovery",
+                label="On Error",
+                description="Fallback used when a source frame cannot be decoded.",
             ),
         )
         self.set_property(
@@ -137,6 +175,9 @@ class VideoInputNode(Node):
                 input_type=NodePropertyInputType.Checkbox,
                 value=True,
                 priority=60,
+                group="Project",
+                label="Sync Timeline",
+                description="Adopt loaded media duration, FPS, and frame dimensions.",
             ),
         )
 
@@ -146,6 +187,8 @@ class VideoInputNode(Node):
         height: int,
         preview_max_width: int = 960,
         project_fps: float = 0.0,
+        frame_num: int = 0,
+        project_max_frame: int = 0,
     ) -> None:
         """Store project size, fps, and active Viewer proxy width for decode."""
         super().prepare_evaluation(
@@ -153,6 +196,8 @@ class VideoInputNode(Node):
             height,
             preview_max_width=preview_max_width,
             project_fps=project_fps,
+            frame_num=frame_num,
+            project_max_frame=project_max_frame,
         )
         self._preview_max_width = max(0, int(preview_max_width))
 
@@ -161,8 +206,8 @@ class VideoInputNode(Node):
         if self._preview_max_width > 0 and self._eval_width > 0:
             width = min(self._eval_width, self._preview_max_width)
             scale = width / float(self._eval_width)
-            height = max(1, int(round(self._eval_height * scale)))
-            return np.zeros((height, width, 3), dtype=np.uint8)
+            height = max(1, round(self._eval_height * scale))
+            return np.zeros((height, width, 3), dtype=FRAME_DTYPE)
         return super().blank_frame()
 
     def handle_error_frame(self) -> np.ndarray:
@@ -229,8 +274,7 @@ class VideoInputNode(Node):
         end_value = self._int_prop("end_frame", -1)
         last = max(0, frame_count - 1)
         end = last if end_value < 0 else min(last, end_value)
-        if start > end:
-            start = end
+        start = min(start, end)
         return start, end
 
     def _apply_edge(
@@ -318,10 +362,11 @@ class VideoInputNode(Node):
             if source_frame is None:
                 return self.blank_frame()
 
-            frame = self._decoder.read_rgb(source_frame, self._preview_max_width)
-            if frame is None:
+            frame_u8 = self._decoder.read_rgb(source_frame, self._preview_max_width)
+            if frame_u8 is None:
                 return self.handle_error_frame()
 
+            frame: np.ndarray = from_source_u8(frame_u8)
             self._previous_frame = self._current_frame
             self._current_frame = frame
             return frame

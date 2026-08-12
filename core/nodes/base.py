@@ -1,6 +1,7 @@
 """Base node types, sockets, and property definitions."""
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import IntEnum, auto
 from typing import Any
@@ -8,12 +9,41 @@ from typing import Any
 import numpy as np
 
 from config.constants import DEFAULT_FPS, DEFAULT_HEIGHT, DEFAULT_WIDTH
+from core.animation import AnimationCurve
+
+# A node output is an image-like buffer (Frame/Mask sockets), a scalar
+# (Number sockets, e.g. math/value nodes feeding modulated properties), or —
+# for nodes with more than one Number output (e.g. a Tracker's x/y) — a dict
+# keyed by output slot name. ``Project.evaluate_node`` extracts the slot the
+# caller actually asked for; single-output nodes are unaffected.
+NodeValue = np.ndarray | float | dict[str, float]
+
+# Resolves an arbitrary absolute frame number against a node's connected
+# "frame" upstream, bypassing the current evaluation's own ``frame_num``.
+# Bound per-evaluation by ``Project.evaluate_node``; used by retiming nodes
+# (Time Remap, Frame Hold) to resample their source at a different frame.
+TimeResampler = Callable[[int], Any]
+
+# Resolves another node's (possibly keyframed) property by node name and
+# property key, at the resolving node's current evaluation frame. Bound
+# per-evaluation by ``Project.evaluate_node``; used by ``PropertyLinkNode``
+# to "extract" a property value as a graph-native Number output.
+PropertyResolver = Callable[[str, str], "float | None"]
+NodePropertyResolver = Callable[[str, str], "float | None"]
+PropertyDriveLookup = Callable[[str], "float | None"]
 
 
 class NodeSocketType(IntEnum):
     Frame = auto()
+    Mask = auto()
     Number = auto()
     Color = auto()
+    Node = auto()
+
+
+# Canonical in-graph frame dtype: HxWx3 float32, nominal range [0.0, 1.0].
+# See ``effects.frame_ops`` for the conversion boundary to/from 8-bit media.
+FRAME_DTYPE: np.dtype = np.dtype(np.float32)
 
 
 class VideoFrameErrorMethod(IntEnum):
@@ -42,19 +72,41 @@ class NodePropertyInputType(IntEnum):
     Slider = auto()
     File = auto()
     Checkbox = auto()
+    Color = auto()
     CustomChoice = auto()
     VideoFrameErrorMethod = auto()
     NodeSocketType = auto()
+    Text = auto()
+    NodePropertyChoice = auto()
+    # Distinct from ``File`` only so the Properties panel's browse dialog
+    # can show an image-specific filter instead of the video one.
+    ImageFile = auto()
+
+
+# RGB color property values are ``tuple[int, int, int]`` in 0–255.
+ColorRgb = tuple[int, int, int]
+NEUTRAL_COLOR_RGB: ColorRgb = (128, 128, 128)
+WHITE_COLOR_RGB: ColorRgb = (255, 255, 255)
 
 
 @dataclass
 class NodeProperty:
+    """Editable node value plus presentation metadata.
+
+    ``group`` / ``label`` / ``description`` / ``suffix`` are schema metadata
+    rebuilt by the node class. Only ``value`` is persisted in project files.
+    """
+
     input_type: NodePropertyInputType
     value: Any | None
     slider_min_value: int | float = 0.0
     slider_max_value: int | float = 0.0
     # Lower numbers appear first in the properties panel.
     priority: int = 100
+    group: str = "General"
+    label: str | None = None
+    description: str = ""
+    suffix: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         from core.serialization import encode_value
@@ -65,6 +117,10 @@ class NodeProperty:
             "slider_min_value": self.slider_min_value,
             "slider_max_value": self.slider_max_value,
             "priority": self.priority,
+            "group": self.group,
+            "label": self.label,
+            "description": self.description,
+            "suffix": self.suffix,
         }
 
 
@@ -101,16 +157,26 @@ class Node(ABC):
         self.name = name or self.node_type
         self.x: float = 0
         self.y: float = 0
-        self.width = 150
-        self.height = 100
+        self.width: int = 150
+        self.height: int = 100
 
         self.inputs: dict[str, NodeSocket] = {}
         self.outputs: dict[str, NodeSocket] = {}
         self.properties: dict[str, NodeProperty] = {}
+        # Optional per-property keyframe curves. Only numeric (Slider/Number)
+        # properties are animatable; see ``resolve_animation``.
+        self.animated_properties: dict[str, AnimationCurve] = {}
         self._input_values: dict[str, Any] = {}
-        self._eval_width = DEFAULT_WIDTH
-        self._eval_height = DEFAULT_HEIGHT
+        self._eval_width: int = DEFAULT_WIDTH
+        self._eval_height: int = DEFAULT_HEIGHT
+        self._preview_max_width: int = 0
         self._project_fps: float = float(DEFAULT_FPS)
+        self._project_max_frame: int = 0
+        self._current_frame_num: int = 0
+        self._time_resampler: TimeResampler | None = None
+        self._property_resolver: PropertyResolver | None = None
+        self._node_property_resolver: NodePropertyResolver | None = None
+        self._property_drive_lookup: PropertyDriveLookup | None = None
 
         self.exception_log: list[Exception] = []
         self._setup_sockets()
@@ -149,22 +215,97 @@ class Node(ABC):
     def get_input_value(self, slot: str) -> Any | None:
         return self._input_values.get(slot)
 
+    def clear_input_values(self) -> None:
+        """Clear transient values before evaluating current graph inputs."""
+        self._input_values.clear()
+
     def prepare_evaluation(
         self,
         width: int,
         height: int,
         preview_max_width: int = 0,
         project_fps: float = 0.0,
+        frame_num: int = 0,
+        project_max_frame: int = 0,
     ) -> None:
         """Prepare per-evaluation size; ``preview_max_width`` is used by decoders."""
-        _ = preview_max_width
         self._eval_width = width
         self._eval_height = height
+        self._preview_max_width = max(0, int(preview_max_width))
         if project_fps > 0.0:
             self._project_fps = float(project_fps)
+        self._project_max_frame = max(0, int(project_max_frame))
+        self._current_frame_num = int(frame_num)
+
+    def set_time_resampler(self, resampler: TimeResampler | None) -> None:
+        """Bind (or clear) the resampler for this evaluation's "frame" input.
+
+        Called by ``Project.evaluate_node`` before ``evaluate`` runs. Nodes
+        that retime (Time Remap, Frame Hold) call ``resample_frame`` instead
+        of relying on the eagerly-resolved current-frame input value.
+        """
+        self._time_resampler = resampler
+
+    def resample_frame(self, frame_num: int) -> Any | None:
+        """Pull the connected "frame" upstream at an arbitrary ``frame_num``.
+
+        Returns ``None`` when no "frame" input is connected (no resampler
+        bound for this evaluation).
+        """
+        if self._time_resampler is None:
+            return None
+        return self._time_resampler(int(frame_num))
+
+    def set_property_resolver(self, resolver: PropertyResolver | None) -> None:
+        """Bind (or clear) this evaluation's cross-node property lookup by name.
+
+        Legacy path for older Property Link documents that stored a node name.
+        """
+        self._property_resolver = resolver
+
+    def set_node_property_resolver(
+        self,
+        resolver: NodePropertyResolver | None,
+    ) -> None:
+        """Bind (or clear) property lookup by stable node id."""
+        self._node_property_resolver = resolver
+
+    def set_property_drive_lookup(
+        self,
+        lookup: PropertyDriveLookup | None,
+    ) -> None:
+        """Bind (or clear) cross-node property overrides for this evaluation."""
+        self._property_drive_lookup = lookup
+
+    def property_drive_value(self, key: str) -> float | None:
+        """Return a Property Drive override for ``key``, if active."""
+        if self._property_drive_lookup is None:
+            return None
+        return self._property_drive_lookup(key)
+
+    def resolve_named_property(self, node_name: str, property_key: str) -> float | None:
+        """Look up another node's resolved property value by name and key."""
+        if self._property_resolver is None:
+            return None
+        return self._property_resolver(node_name, property_key)
+
+    def resolve_node_property(self, node_id: str, property_key: str) -> float | None:
+        """Look up another node's resolved property value by id and key."""
+        if self._node_property_resolver is None:
+            return None
+        return self._node_property_resolver(node_id, property_key)
+
+    def evaluation_frame_size(self) -> tuple[int, int]:
+        """Return ``(width, height)`` respecting the active preview proxy."""
+        width: int = max(1, self._eval_width)
+        height: int = max(1, self._eval_height)
+        if self._preview_max_width <= 0 or width <= self._preview_max_width:
+            return width, height
+        scale: float = self._preview_max_width / float(width)
+        return self._preview_max_width, max(1, round(height * scale))
 
     def blank_frame(self) -> np.ndarray:
-        return np.zeros((self._eval_height, self._eval_width, 3), dtype=np.uint8)
+        return np.zeros((self._eval_height, self._eval_width, 3), dtype=FRAME_DTYPE)
 
     def log_exception(self, e: Exception) -> None:
         """Record ``e`` on the node and emit it to the app logger."""
@@ -180,7 +321,7 @@ class Node(ABC):
         )
 
     @abstractmethod
-    def evaluate(self, frame_num: int) -> np.ndarray:
+    def evaluate(self, frame_num: int) -> NodeValue:
         raise NotImplementedError
 
     def to_dict(self) -> dict[str, Any]:
@@ -197,6 +338,12 @@ class Node(ABC):
                 continue
             properties[key] = encode_value(prop.value)
 
+        animated: dict[str, Any] = {
+            key: curve.to_dict()
+            for key, curve in self.animated_properties.items()
+            if not curve.is_empty
+        }
+
         return {
             "node_type": self.node_type,
             "node_category": self.node_category,
@@ -204,6 +351,7 @@ class Node(ABC):
             "x": float(self.x),
             "y": float(self.y),
             "properties": properties,
+            "animated_properties": animated,
         }
 
     def apply_document(self, data: dict[str, Any]) -> None:
@@ -220,10 +368,18 @@ class Node(ABC):
             self.y = float(position[1])
 
         raw_props = data.get("properties", {})
-        if not isinstance(raw_props, dict):
-            return
-        defaults = {key: prop.value for key, prop in self.properties.items()}
-        restored = decode_properties(raw_props, defaults=defaults)
-        for key, value in restored.items():
-            if key in self.properties:
-                self.set_property(key, value)
+        if isinstance(raw_props, dict):
+            defaults = {key: prop.value for key, prop in self.properties.items()}
+            restored = decode_properties(raw_props, defaults=defaults)
+            for key, value in restored.items():
+                if key in self.properties:
+                    self.set_property(key, value)
+
+        raw_curves = data.get("animated_properties", {})
+        if isinstance(raw_curves, dict):
+            for key, curve_data in raw_curves.items():
+                if key not in self.properties or not isinstance(curve_data, dict):
+                    continue
+                curve = AnimationCurve.from_dict(curve_data)
+                if not curve.is_empty:
+                    self.animated_properties[key] = curve

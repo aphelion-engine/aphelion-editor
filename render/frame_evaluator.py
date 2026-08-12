@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from config.constants import DEFAULT_MAX_PREFETCH_FRAMES
+
 if TYPE_CHECKING:
     from core.project import Project
 
@@ -25,6 +27,13 @@ class FrameEvaluationWorker(QThread):
         self._playing = False
         self._running = True
         self._wake = threading.Event()
+        # Global ceiling applied on top of the per-Viewer prefetch property;
+        # tunable at runtime from Preferences without restarting playback.
+        self._max_prefetch: int = DEFAULT_MAX_PREFETCH_FRAMES
+
+    def set_max_prefetch(self, frame_count: int) -> None:
+        """Cap prefetch-ahead frames regardless of the active Viewer's setting."""
+        self._max_prefetch = max(0, int(frame_count))
 
     def request_frame(self, node_id: str, frame_num: int) -> None:
         """Queue a frame; replaces any older pending request (drop-on-lag)."""
@@ -44,10 +53,13 @@ class FrameEvaluationWorker(QThread):
         self._wake.set()
 
     def stop(self) -> None:
+        """Stop the worker thread and wait for the current evaluation to finish."""
         self._running = False
         self._wake.set()
         self.requestInterruption()
-        self.wait(2000)
+        if not self.wait(2000):
+            self.terminate()
+            self.wait(500)
 
     def run(self) -> None:
         while self._running and not self.isInterruptionRequested():
@@ -87,7 +99,7 @@ class FrameEvaluationWorker(QThread):
     def _prefetch(self, node_id: str, frame_num: int) -> None:
         """Warm the cache for the next few frames while the UI displays."""
         settings = self._project.get_preview_settings()
-        count = settings.prefetch_frames
+        count = min(settings.prefetch_frames, self._max_prefetch)
         if count <= 0:
             return
         max_frame = self._project.max_frame

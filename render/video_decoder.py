@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 
 # Must be set before the first OpenCV/FFmpeg capture is created.
@@ -21,12 +22,44 @@ os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "loglevel;quiet")
 import cv2
 import numpy as np
 
+from config.constants import DEFAULT_DECODE_CACHE_FRAMES
+
 # Prefer sequential decode over hard seeks within this many frames.
 _MAX_FORWARD_GRABS: int = 48
 _SEEK_READ_RETRIES: int = 3
 
 _CAPTURE_LOCK = threading.RLock()
 _LOGGING_CONFIGURED = False
+
+# Global performance knobs, pushed from Preferences via the setters below.
+# Kept module-level (rather than per-instance constructor args) so every
+# VideoInput node's decoder picks up a preference change immediately,
+# without the node graph needing to know about the preference system.
+_DECODE_CACHE_FRAMES: int = DEFAULT_DECODE_CACHE_FRAMES
+_HARDWARE_DECODE_ENABLED: bool = False
+
+
+def set_decode_cache_frames(frame_count: int) -> None:
+    """Set how many full-resolution decoded frames each decoder retains.
+
+    A larger LRU avoids re-seeking/re-decoding when a user scrubs back over
+    recently visited source frames, or when a downstream (non-source) node
+    property changes and invalidates only the node-output cache. Cost is
+    O(frame_count) full-resolution frames of RAM per open Video Input node.
+    """
+    global _DECODE_CACHE_FRAMES
+    _DECODE_CACHE_FRAMES = max(1, int(frame_count))
+
+
+def set_hardware_decode_enabled(enabled: bool) -> None:
+    """Toggle best-effort hardware-accelerated decode for newly opened media.
+
+    Side effects:
+        Takes effect the next time a ``VideoDecoder`` opens a file; already
+        open captures are unaffected until re-opened.
+    """
+    global _HARDWARE_DECODE_ENABLED
+    _HARDWARE_DECODE_ENABLED = bool(enabled)
 
 
 def _configure_decoder_logging() -> None:
@@ -47,6 +80,24 @@ def _configure_decoder_logging() -> None:
 
 
 _configure_decoder_logging()
+
+
+def _try_enable_hardware_acceleration(capture: cv2.VideoCapture) -> None:
+    """Best-effort request for hardware-accelerated decode.
+
+    Not every OpenCV build exposes ``CAP_PROP_HW_ACCELERATION`` and not every
+    platform has a working backend, so failures are silently ignored and
+    decode falls back to software — this is strictly an opt-in speed hint,
+    never a correctness requirement.
+    """
+    accel_flag = getattr(cv2, "CAP_PROP_HW_ACCELERATION", None)
+    accel_any = getattr(cv2, "VIDEO_ACCELERATION_ANY", None)
+    if accel_flag is None or accel_any is None:
+        return
+    try:
+        capture.set(accel_flag, accel_any)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,8 +122,10 @@ class VideoDecoder:
         self._width: int = 0
         self._height: int = 0
         self._next_index: int = 0
-        self._last_rgb: np.ndarray | None = None
-        self._last_index: int = -1
+        # Bounded LRU of full-resolution decoded frames, keyed by source
+        # frame index. Scaling to the requested proxy width happens on
+        # every read from this cache — cheap relative to decode/seek.
+        self._frame_cache: OrderedDict[int, np.ndarray] = OrderedDict()
 
     @property
     def path(self) -> str | None:
@@ -90,6 +143,8 @@ class VideoDecoder:
 
             self._close_unlocked()
             capture = cv2.VideoCapture(path, cv2.CAP_FFMPEG)
+            if _HARDWARE_DECODE_ENABLED:
+                _try_enable_hardware_acceleration(capture)
             if not capture.isOpened():
                 capture.release()
                 return None
@@ -111,8 +166,7 @@ class VideoDecoder:
             self._width = width
             self._height = height
             self._next_index = 0
-            self._last_rgb = None
-            self._last_index = -1
+            self._frame_cache.clear()
             return self.info()
 
     def info(self) -> MediaInfo | None:
@@ -141,8 +195,7 @@ class VideoDecoder:
         self._capture = None
         self._path = None
         self._next_index = 0
-        self._last_rgb = None
-        self._last_index = -1
+        self._frame_cache.clear()
 
     def read_rgb(self, frame_num: int, max_width: int) -> np.ndarray | None:
         """Return an RGB frame at ``frame_num``, optionally proxy-scaled."""
@@ -154,8 +207,10 @@ class VideoDecoder:
             if self._frame_count > 0:
                 target = min(target, self._frame_count - 1)
 
-            if target == self._last_index and self._last_rgb is not None:
-                return self._scale_rgb(self._last_rgb, max_width)
+            cached = self._frame_cache.get(target)
+            if cached is not None:
+                self._frame_cache.move_to_end(target)
+                return self._scale_rgb(cached, max_width)
 
             if not self._position_to(target):
                 return self._held_frame(max_width)
@@ -167,14 +222,21 @@ class VideoDecoder:
 
             self._next_index = target + 1
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            self._last_rgb = rgb
-            self._last_index = target
+            self._remember(target, rgb)
             return self._scale_rgb(rgb, max_width)
 
+    def _remember(self, frame_num: int, rgb: np.ndarray) -> None:
+        """Insert ``rgb`` into the bounded LRU, evicting the oldest entry."""
+        self._frame_cache[frame_num] = rgb
+        self._frame_cache.move_to_end(frame_num)
+        while len(self._frame_cache) > max(1, _DECODE_CACHE_FRAMES):
+            self._frame_cache.popitem(last=False)
+
     def _held_frame(self, max_width: int) -> np.ndarray | None:
-        if self._last_rgb is None:
+        if not self._frame_cache:
             return None
-        return self._scale_rgb(self._last_rgb, max_width)
+        _, last_rgb = next(reversed(self._frame_cache.items()))
+        return self._scale_rgb(last_rgb, max_width)
 
     def _read_bgr_with_retry(self) -> np.ndarray | None:
         if self._capture is None:

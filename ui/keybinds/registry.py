@@ -94,6 +94,12 @@ class EditorActions:
             icon=AppIcon.FIT_VIEW,
         )
         self._register(
+            KeyAction.ORGANIZE_GRAPH,
+            editor.node_graph.organize_graph,
+            icon=AppIcon.DISTRIBUTE_H,
+            widget_scope=editor.node_graph,
+        )
+        self._register(
             KeyAction.TOGGLE_FULLSCREEN,
             editor.toggle_fullscreen,
         )
@@ -155,6 +161,10 @@ class EditorActions:
             editor.show_keyboard_shortcuts,
         )
         self._register(
+            KeyAction.OPEN_PREFERENCES,
+            editor.show_preferences,
+        )
+        self._register(
             KeyAction.NEW_PROJECT,
             editor.new_project,
             icon=AppIcon.NEW_FILE,
@@ -168,6 +178,31 @@ class EditorActions:
             KeyAction.SAVE_PROJECT,
             editor.save_project,
             icon=AppIcon.SAVE_FILE,
+        )
+        self._register(
+            KeyAction.SAVE_PROJECT_AS,
+            editor.save_project_as,
+            icon=AppIcon.SAVE_FILE,
+        )
+        self._register(
+            KeyAction.PROJECT_SETTINGS,
+            editor.show_project_settings,
+            icon=AppIcon.SETTINGS,
+        )
+        self._register(
+            KeyAction.EXPORT_SEQUENCE,
+            editor.export_sequence,
+            icon=AppIcon.EXPORT,
+        )
+        self._register(
+            KeyAction.CLEAR_CACHE,
+            editor.clear_frame_cache,
+            icon=AppIcon.CLEAR_CACHE,
+        )
+        self._register(
+            KeyAction.TOGGLE_LOGS,
+            editor.toggle_logs_panel,
+            icon=AppIcon.LOGS,
         )
 
         self._register_node_create_slots()

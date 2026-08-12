@@ -11,6 +11,15 @@ from core.nodes.base import (
     NodeSocketType,
     VideoFrameErrorMethod,
 )
+from core.nodes.enums import (
+    BlendMode,
+    CombineMaskMode,
+    EdgeDisplayMode,
+    GradientMode,
+    MaskChannel,
+    SwitchInput,
+    TransformBorderMode,
+)
 from render.preview import ViewerBackground, ViewportFitMode
 
 APH_FORMAT_ID: str = "aphelion-project"
@@ -22,6 +31,13 @@ _ENUM_TYPES: dict[str, type[Enum]] = {
     "MediaLoopMode": MediaLoopMode,
     "VideoFrameErrorMethod": VideoFrameErrorMethod,
     "NodeSocketType": NodeSocketType,
+    "BlendMode": BlendMode,
+    "CombineMaskMode": CombineMaskMode,
+    "EdgeDisplayMode": EdgeDisplayMode,
+    "GradientMode": GradientMode,
+    "MaskChannel": MaskChannel,
+    "SwitchInput": SwitchInput,
+    "TransformBorderMode": TransformBorderMode,
     "ViewportFitMode": ViewportFitMode,
     "ViewerBackground": ViewerBackground,
 }
@@ -95,7 +111,7 @@ def decode_properties(
     *,
     defaults: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Decode property values, using ``defaults`` types as enum hints when needed."""
+    """Decode property values, using ``defaults`` types as enum/color hints."""
     defaults = defaults or {}
     restored: dict[str, Any] = {}
     for key, raw in properties.items():
@@ -103,5 +119,21 @@ def decode_properties(
         default_val = defaults.get(key)
         if isinstance(default_val, Enum):
             fallback = type(default_val)
-        restored[key] = decode_value(raw, fallback_enum=fallback)
+        value = decode_value(raw, fallback_enum=fallback)
+        # Color properties round-trip as JSON lists; restore RGB tuples.
+        if _is_rgb_tuple(default_val) and isinstance(value, list) and len(value) >= 3:
+            value = (
+                int(value[0]),
+                int(value[1]),
+                int(value[2]),
+            )
+        restored[key] = value
     return restored
+
+
+def _is_rgb_tuple(value: Any) -> bool:
+    return (
+        isinstance(value, tuple)
+        and len(value) == 3
+        and all(isinstance(channel, int) for channel in value)
+    )

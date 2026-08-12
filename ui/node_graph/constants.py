@@ -2,15 +2,21 @@
 
 from PyQt6.QtGui import QColor
 
+NODE_MIN_WIDTH_PX: int = 160
+NODE_MAX_WIDTH_PX: int = 280
 NODE_WIDTH_PX: int = 180
 NODE_MIN_HEIGHT_PX: int = 92
 HEADER_HEIGHT_PX: int = 30
 BODY_PADDING_PX: int = 10
 SOCKET_SIZE_PX: int = 16
-SOCKET_HIT_PAD_PX: int = 4
+# Extra radius (px) added around the drawn socket for hit-testing only —
+# sockets stay visually compact but are much easier to grab while wiring.
+SOCKET_HIT_PAD_PX: int = 12
 SOCKET_SPACING_PX: int = 24
 SOCKET_EDGE_GAP_PX: int = 2
 CORNER_RADIUS_PX: int = 8
+SHADOW_OFFSET_X_PX: float = 2.0
+SHADOW_OFFSET_Y_PX: float = 4.0
 GRID_SPACING_PX: int = 28
 MENU_ICON_SIZE_PX: int = 14
 

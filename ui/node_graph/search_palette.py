@@ -135,7 +135,10 @@ class NodeSearchPalette(QFrame):
             if needle and needle not in haystack:
                 continue
             item = QListWidgetItem(
-                make_dot_icon(info.color, size=MENU_ICON_SIZE_PX),
+                make_dot_icon(
+                    global_node_registry.resolve_color(info.category, info.name),
+                    size=MENU_ICON_SIZE_PX,
+                ),
                 f"{info.name}  ·  {info.category}",
             )
             item.setData(Qt.ItemDataRole.UserRole, (info.name, info.category))

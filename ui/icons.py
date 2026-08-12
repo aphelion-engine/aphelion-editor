@@ -48,6 +48,11 @@ class AppIcon(Enum):
     ADD_NODE = auto()
     COPY = auto()
     PASTE = auto()
+    SETTINGS = auto()
+    EXPORT = auto()
+    MEDIA = auto()
+    CLEAR_CACHE = auto()
+    LOGS = auto()
 
 
 def make_dot_icon(
@@ -174,6 +179,16 @@ def _draw_icon(
             _draw_copy(painter, rect, color)
         case AppIcon.PASTE:
             _draw_paste(painter, rect, color)
+        case AppIcon.SETTINGS:
+            _draw_settings(painter, rect, color)
+        case AppIcon.EXPORT:
+            _draw_export(painter, rect, color)
+        case AppIcon.MEDIA:
+            _draw_media(painter, rect, color)
+        case AppIcon.CLEAR_CACHE:
+            _draw_clear_cache(painter, rect, color)
+        case AppIcon.LOGS:
+            _draw_logs(painter, rect, color)
 
 
 def _draw_play(painter: QPainter, rect: QRectF, _color: QColor) -> None:
@@ -501,6 +516,59 @@ def _draw_paste(painter: QPainter, rect: QRectF, _color: QColor) -> None:
         QPointF(rect.center().x(), rect.top() + 6),
         QPointF(rect.center().x(), rect.bottom() - 3),
     )
+
+
+def _draw_settings(painter: QPainter, rect: QRectF, _color: QColor) -> None:
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    cx = rect.center().x()
+    cy = rect.center().y()
+    painter.drawEllipse(QRectF(cx - 4, cy - 4, 8, 8))
+    for angle in (0, 45, 90, 135, 180, 225, 270, 315):
+        painter.save()
+        painter.translate(cx, cy)
+        painter.rotate(angle)
+        painter.drawLine(QPointF(5, 0), QPointF(7, 0))
+        painter.restore()
+
+
+def _draw_export(painter: QPainter, rect: QRectF, _color: QColor) -> None:
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    cx = rect.center().x()
+    painter.drawRoundedRect(rect.adjusted(2, 5, -2, -1), 1.5, 1.5)
+    painter.drawLine(QPointF(cx, rect.top() + 1), QPointF(cx, rect.top() + 7))
+    painter.drawLine(QPointF(cx - 3, rect.top() + 4), QPointF(cx, rect.top() + 1))
+    painter.drawLine(QPointF(cx + 3, rect.top() + 4), QPointF(cx, rect.top() + 1))
+
+
+def _draw_media(painter: QPainter, rect: QRectF, _color: QColor) -> None:
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawRoundedRect(rect.adjusted(1, 2, -1, -2), 1.5, 1.5)
+    tri = QPolygonF(
+        [
+            QPointF(rect.left() + 4, rect.top() + 4),
+            QPointF(rect.left() + 4, rect.bottom() - 4),
+            QPointF(rect.right() - 4, rect.center().y()),
+        ]
+    )
+    painter.drawPolygon(tri)
+
+
+def _draw_clear_cache(painter: QPainter, rect: QRectF, _color: QColor) -> None:
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawEllipse(rect.adjusted(1, 1, -1, -1))
+    cx = rect.center().x()
+    cy = rect.center().y()
+    painter.drawLine(QPointF(cx - 3, cy - 3), QPointF(cx + 3, cy + 3))
+    painter.drawLine(QPointF(cx + 3, cy - 3), QPointF(cx - 3, cy + 3))
+
+
+def _draw_logs(painter: QPainter, rect: QRectF, _color: QColor) -> None:
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawRoundedRect(rect.adjusted(1, 2, -1, -2), 1.5, 1.5)
+    y = rect.top() + 5
+    for _ in range(3):
+        painter.drawLine(QPointF(rect.left() + 3, y), QPointF(rect.right() - 3, y))
+        y += 3.5
 
 
 def icon_size() -> QSize:

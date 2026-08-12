@@ -34,6 +34,7 @@ class GraphContextMenu(QMenu):
         can_paste: bool,
         on_select_all: Callable[[], None],
         on_fit_view: Callable[[], None],
+        on_organize_graph: Callable[[], None],
         keybinds: KeybindStore,
         parent: QWidget | None = None,
     ) -> None:
@@ -67,6 +68,11 @@ class GraphContextMenu(QMenu):
         assert fit is not None
         apply_menu_hint(fit, keybinds, KeyAction.FIT_GRAPH)
         fit.triggered.connect(on_fit_view)
+
+        organize = self.addAction(make_icon(AppIcon.DISTRIBUTE_H), "Organize Graph")
+        assert organize is not None
+        apply_menu_hint(organize, keybinds, KeyAction.ORGANIZE_GRAPH)
+        organize.triggered.connect(on_organize_graph)
 
 
 class NodeOperationsMenu(QMenu):
@@ -133,6 +139,11 @@ class NodeOperationsMenu(QMenu):
         apply_menu_hint(fit, keybinds, KeyAction.FIT_GRAPH)
         fit.triggered.connect(self.view.fit_all_nodes)
 
+        organize = self.addAction(make_icon(AppIcon.DISTRIBUTE_H), "Organize Graph")
+        assert organize is not None
+        apply_menu_hint(organize, keybinds, KeyAction.ORGANIZE_GRAPH)
+        organize.triggered.connect(self.view.organize_graph)
+
     def _add_insert_after_menu(self, item: NodeItem) -> None:
         from core.nodes import global_node_registry
         from ui.node_graph import operations as node_ops
@@ -149,10 +160,9 @@ class NodeOperationsMenu(QMenu):
 
         for name, category in options:
             info = global_node_registry.get_node_info(category, name)
-            icon = (
-                make_dot_icon(info.color, size=MENU_ICON_SIZE_PX)
-                if info is not None
-                else make_icon(AppIcon.ADD_NODE)
+            icon = make_dot_icon(
+                global_node_registry.resolve_color(category, name),
+                size=MENU_ICON_SIZE_PX,
             )
             action = insert_menu.addAction(icon, name)
             assert action is not None

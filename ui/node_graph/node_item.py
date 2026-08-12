@@ -5,7 +5,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, Qt
-from PyQt6.QtGui import QBrush, QColor, QFont, QPainter, QPen
+from PyQt6.QtGui import (
+    QBrush,
+    QColor,
+    QFont,
+    QLinearGradient,
+    QPainter,
+    QPen,
+)
 from PyQt6.QtWidgets import (
     QGraphicsItem,
     QGraphicsRectItem,
@@ -18,39 +25,37 @@ from PyQt6.QtWidgets import (
 from core.nodes import Node
 from ui.node_graph.constants import (
     BODY_PADDING_PX,
-    COLOR_NODE_BODY,
-    COLOR_NODE_BODY_HOVER,
-    COLOR_NODE_BORDER,
-    COLOR_NODE_BORDER_HOVER,
-    COLOR_SELECTION,
-    COLOR_SELECTION_SOFT,
-    COLOR_SOCKET_INPUT,
-    COLOR_SOCKET_OUTPUT,
-    COLOR_SOCKET_RING,
-    COLOR_TEXT_PRIMARY,
-    COLOR_TEXT_SECONDARY,
     CORNER_RADIUS_PX,
     HEADER_HEIGHT_PX,
-    NODE_MIN_HEIGHT_PX,
-    NODE_WIDTH_PX,
+    SHADOW_OFFSET_X_PX,
+    SHADOW_OFFSET_Y_PX,
     SOCKET_EDGE_GAP_PX,
     SOCKET_HIT_PAD_PX,
     SOCKET_SIZE_PX,
     SOCKET_SPACING_PX,
 )
+from ui.node_graph.node_layout import measure_node
+from ui.node_graph.theme_state import GraphThemePalette, current_graph_palette
 
 if TYPE_CHECKING:
     from ui.node_graph.view import NodeGraphView
 
 
+def _distance_squared(point: QPointF, other: QPoint) -> float:
+    """Return the squared Euclidean distance between a float and int point."""
+    dx = point.x() - other.x()
+    dy = point.y() - other.y()
+    return dx * dx + dy * dy
+
+
 class NodeItem(QGraphicsRectItem):
-    """Painted node with header accent and large sockets."""
+    """Painted node with header accent, depth, and large sockets."""
 
     def __init__(self, node: Node, node_id: str) -> None:
-        height = self._compute_height(node)
-        node.width = NODE_WIDTH_PX
-        node.height = height
-        super().__init__(0, 0, NODE_WIDTH_PX, height)
+        dimensions = measure_node(node)
+        node.width = float(dimensions.width)
+        node.height = float(dimensions.height)
+        super().__init__(0, 0, dimensions.width, dimensions.height)
 
         self.node = node
         self.node_id = node_id
@@ -58,6 +63,7 @@ class NodeItem(QGraphicsRectItem):
         self.is_hovered: bool = False
         self._drag_origins: dict[int, QPointF] = {}
         self._drag_before_positions: dict[str, tuple[float, float]] = {}
+        self._node_width: int = dimensions.width
 
         r, g, b = node.node_color
         self.accent_color = QColor(r, g, b)
@@ -67,7 +73,6 @@ class NodeItem(QGraphicsRectItem):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemUsesExtendedStyleOption, True)
-        self.setCacheMode(QGraphicsItem.CacheMode.ItemCoordinateCache)
         self.setAcceptHoverEvents(True)
         self.setZValue(1.0)
 
@@ -77,13 +82,29 @@ class NodeItem(QGraphicsRectItem):
         self.setPen(QPen(Qt.PenStyle.NoPen))
         self.setBrush(QBrush(Qt.BrushStyle.NoBrush))
 
-    @staticmethod
-    def _compute_height(node: Node) -> int:
-        socket_count = max(len(node.inputs), len(node.outputs), 1)
-        body = BODY_PADDING_PX * 2 + socket_count * SOCKET_SPACING_PX
-        return max(NODE_MIN_HEIGHT_PX, HEADER_HEIGHT_PX + body)
+    @property
+    def node_width(self) -> int:
+        """Current painted node width in pixels."""
+        return self._node_width
+
+    def relayout_from_content(self) -> None:
+        """Resize the item when node labels or sockets change."""
+        dimensions = measure_node(self.node)
+        if dimensions.width == self._node_width and dimensions.height == int(self.rect().height()):
+            return
+        self.prepareGeometryChange()
+        self._node_width = dimensions.width
+        self.node.width = float(dimensions.width)
+        self.node.height = float(dimensions.height)
+        self.setRect(0, 0, dimensions.width, dimensions.height)
+        self._calculate_socket_positions()
+        self.update()
 
     def _calculate_socket_positions(self) -> None:
+        """Lay out socket hit targets from the current node width."""
+        width = self._node_width
+        self.input_sockets.clear()
+        self.output_sockets.clear()
         start_y = HEADER_HEIGHT_PX + BODY_PADDING_PX + SOCKET_SIZE_PX // 2
         y = start_y
         for name in self.node.inputs:
@@ -98,7 +119,7 @@ class NodeItem(QGraphicsRectItem):
         y = start_y
         for name in self.node.outputs:
             self.output_sockets[name] = QRect(
-                NODE_WIDTH_PX - SOCKET_SIZE_PX // 2 + SOCKET_EDGE_GAP_PX,
+                width - SOCKET_SIZE_PX // 2 + SOCKET_EDGE_GAP_PX,
                 y - SOCKET_SIZE_PX // 2,
                 SOCKET_SIZE_PX,
                 SOCKET_SIZE_PX,
@@ -106,8 +127,10 @@ class NodeItem(QGraphicsRectItem):
             y += SOCKET_SPACING_PX
 
     def boundingRect(self) -> QRectF:
-        pad = SOCKET_SIZE_PX
-        return self.rect().adjusted(-pad, -4, pad, 4)
+        # Must fully cover the enlarged socket hit-circles (see ``socket_at``)
+        # or Qt will never deliver press/hover events near their outer edge.
+        pad = SOCKET_SIZE_PX + SOCKET_HIT_PAD_PX + 4
+        return self.rect().adjusted(-pad, -6, pad + SHADOW_OFFSET_X_PX, pad + SHADOW_OFFSET_Y_PX)
 
     def paint(
         self,
@@ -118,63 +141,120 @@ class NodeItem(QGraphicsRectItem):
         if painter is None:
             return
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        palette = current_graph_palette()
         body = self.rect()
         selected = self.isSelected()
-        self._paint_body(painter, body, selected)
-        self._paint_header(painter, body)
-        self._paint_labels(painter, body)
-        self._paint_sockets(painter)
+        self._paint_shadow(painter, body)
+        self._paint_body(painter, body, selected, palette)
+        self._paint_header(painter, body, palette)
+        self._paint_labels(painter, body, palette)
+        self._paint_sockets(painter, palette)
 
-    def _paint_body(self, painter: QPainter, body: QRectF, selected: bool) -> None:
+    def _paint_shadow(self, painter: QPainter, body: QRectF) -> None:
+        shadow = body.translated(SHADOW_OFFSET_X_PX, SHADOW_OFFSET_Y_PX)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(0, 0, 0, 72))
+        painter.drawRoundedRect(shadow, CORNER_RADIUS_PX + 1, CORNER_RADIUS_PX + 1)
+
+    def _paint_body(
+        self,
+        painter: QPainter,
+        body: QRectF,
+        selected: bool,
+        palette: GraphThemePalette,
+    ) -> None:
         if selected:
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(COLOR_SELECTION_SOFT)
+            painter.setBrush(palette.selection_soft)
             painter.drawRoundedRect(
                 body.adjusted(-3, -3, 3, 3),
                 CORNER_RADIUS_PX + 2,
                 CORNER_RADIUS_PX + 2,
             )
-            border = COLOR_SELECTION
-            fill = COLOR_NODE_BODY_HOVER
+            border = palette.selection
             width = 2.0
         else:
-            border = COLOR_NODE_BORDER_HOVER if self.is_hovered else COLOR_NODE_BORDER
-            fill = COLOR_NODE_BODY_HOVER if self.is_hovered else COLOR_NODE_BODY
-            width = 1.2
+            border = palette.node_border_hover if self.is_hovered else palette.node_border
+            width = 1.4 if self.is_hovered else 1.0
 
-        painter.setBrush(QBrush(fill))
+        body_top = QColor(palette.node_body)
+        body_bottom = QColor(palette.node_body)
+        body_top.setRed(min(255, body_top.red() + 6))
+        body_top.setGreen(min(255, body_top.green() + 6))
+        body_top.setBlue(min(255, body_top.blue() + 6))
+        body_bottom.setRed(max(0, body_bottom.red() - 8))
+        body_bottom.setGreen(max(0, body_bottom.green() - 8))
+        body_bottom.setBlue(max(0, body_bottom.blue() - 8))
+        if self.is_hovered:
+            hover = palette.node_body_hover
+            body_top = QColor(hover)
+            body_bottom = QColor(hover)
+            body_bottom.setRed(max(0, body_bottom.red() - 6))
+            body_bottom.setGreen(max(0, body_bottom.green() - 6))
+            body_bottom.setBlue(max(0, body_bottom.blue() - 6))
+
+        gradient = QLinearGradient(body.topLeft(), body.bottomLeft())
+        gradient.setColorAt(0.0, body_top)
+        gradient.setColorAt(1.0, body_bottom)
+        painter.setBrush(QBrush(gradient))
         painter.setPen(QPen(border, width))
         painter.drawRoundedRect(body, CORNER_RADIUS_PX, CORNER_RADIUS_PX)
 
-    def _paint_header(self, painter: QPainter, body: QRectF) -> None:
-        header = QRectF(body.x(), body.y(), body.width(), HEADER_HEIGHT_PX)
-        path_clip = body
+        highlight = QLinearGradient(body.topLeft(), QPointF(body.right(), body.top()))
+        highlight.setColorAt(0.0, QColor(255, 255, 255, 22))
+        highlight.setColorAt(1.0, QColor(255, 255, 255, 0))
         painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(highlight))
+        painter.drawRoundedRect(
+            QRectF(body.x() + 1, body.y() + 1, body.width() - 2, body.height() * 0.45),
+            CORNER_RADIUS_PX - 1,
+            CORNER_RADIUS_PX - 1,
+        )
+
+    def _paint_header(self, painter: QPainter, body: QRectF, palette: GraphThemePalette) -> None:
+        header = QRectF(body.x(), body.y(), body.width(), HEADER_HEIGHT_PX)
         accent = QColor(self.accent_color)
-        accent.setAlpha(220)
-        painter.setBrush(accent)
+        accent_dark = QColor(accent)
+        accent_dark.setRed(max(0, accent_dark.red() - 36))
+        accent_dark.setGreen(max(0, accent_dark.green() - 36))
+        accent_dark.setBlue(max(0, accent_dark.blue() - 36))
+        header_gradient = QLinearGradient(header.topLeft(), header.bottomLeft())
+        header_gradient.setColorAt(0.0, accent.lighter(112))
+        header_gradient.setColorAt(0.55, accent)
+        header_gradient.setColorAt(1.0, accent_dark)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(header_gradient))
         painter.drawRoundedRect(
             QRectF(header.x(), header.y(), header.width(), HEADER_HEIGHT_PX + 6),
             CORNER_RADIUS_PX,
             CORNER_RADIUS_PX,
         )
-        painter.setBrush(COLOR_NODE_BODY if not self.is_hovered else COLOR_NODE_BODY_HOVER)
+        painter.setBrush(
+            palette.node_body if not self.is_hovered else palette.node_body_hover
+        )
         painter.drawRect(
             QRectF(
-                path_clip.x(),
-                path_clip.y() + HEADER_HEIGHT_PX,
-                path_clip.width(),
-                path_clip.height() - HEADER_HEIGHT_PX,
+                body.x(),
+                body.y() + HEADER_HEIGHT_PX,
+                body.width(),
+                body.height() - HEADER_HEIGHT_PX,
             )
         )
-        painter.setBrush(QColor(255, 255, 255, 28))
-        painter.drawRect(QRectF(header.x(), header.y(), header.width(), 1.5))
+        painter.setBrush(QColor(255, 255, 255, 36))
+        painter.drawRect(QRectF(header.x() + 1, header.y() + 1, header.width() - 2, 1.5))
+        painter.setPen(QPen(QColor(0, 0, 0, 48), 1.0))
+        painter.drawLine(
+            QPointF(header.x() + 8, header.bottom()),
+            QPointF(header.right() - 8, header.bottom()),
+        )
 
-    def _paint_labels(self, painter: QPainter, body: QRectF) -> None:
+    def _paint_labels(self, painter: QPainter, body: QRectF, palette: GraphThemePalette) -> None:
         title_font = QFont("Segoe UI", 10)
         title_font.setWeight(QFont.Weight.DemiBold)
         painter.setFont(title_font)
-        painter.setPen(COLOR_TEXT_PRIMARY)
+        painter.setPen(palette.text_primary)
         title_rect = QRect(
             int(body.x()) + 10,
             int(body.y()) + 2,
@@ -204,15 +284,17 @@ class NodeItem(QGraphicsRectItem):
 
         label_font = QFont("Segoe UI", 8)
         painter.setFont(label_font)
-        self._paint_socket_labels(painter)
+        self._paint_socket_labels(painter, palette)
 
-    def _paint_socket_labels(self, painter: QPainter) -> None:
-        painter.setPen(COLOR_TEXT_SECONDARY)
+    def _paint_socket_labels(self, painter: QPainter, palette: GraphThemePalette) -> None:
+        width = self._node_width
+        half = width // 2
+        painter.setPen(palette.text_secondary)
         for name, rect in self.input_sockets.items():
             text_rect = QRect(
                 SOCKET_SIZE_PX,
                 rect.center().y() - 7,
-                NODE_WIDTH_PX // 2 - 8,
+                half - 8,
                 14,
             )
             painter.drawText(
@@ -222,9 +304,9 @@ class NodeItem(QGraphicsRectItem):
             )
         for name, rect in self.output_sockets.items():
             text_rect = QRect(
-                NODE_WIDTH_PX // 2,
+                half,
                 rect.center().y() - 7,
-                NODE_WIDTH_PX // 2 - SOCKET_SIZE_PX,
+                half - SOCKET_SIZE_PX,
                 14,
             )
             painter.drawText(
@@ -233,41 +315,57 @@ class NodeItem(QGraphicsRectItem):
                 name,
             )
 
-    def _paint_sockets(self, painter: QPainter) -> None:
+    def _paint_sockets(self, painter: QPainter, palette: GraphThemePalette) -> None:
         for rect in self.input_sockets.values():
-            self._paint_socket(painter, rect, COLOR_SOCKET_INPUT)
+            self._paint_socket(painter, rect, palette.socket_input, palette)
         for rect in self.output_sockets.values():
-            self._paint_socket(painter, rect, COLOR_SOCKET_OUTPUT)
+            self._paint_socket(painter, rect, palette.socket_output, palette)
 
-    def _paint_socket(self, painter: QPainter, rect: QRect, fill: QColor) -> None:
-        painter.setPen(QPen(COLOR_SOCKET_RING, 2.0))
-        painter.setBrush(QBrush(fill))
+    def _paint_socket(
+        self,
+        painter: QPainter,
+        rect: QRect,
+        fill: QColor,
+        palette: GraphThemePalette,
+    ) -> None:
+        painter.setPen(QPen(palette.socket_ring, 1.8))
+        socket_gradient = QLinearGradient(
+            QPointF(float(rect.left()), float(rect.top())),
+            QPointF(float(rect.right()), float(rect.bottom())),
+        )
+        socket_gradient.setColorAt(0.0, fill.lighter(118))
+        socket_gradient.setColorAt(1.0, fill.darker(118))
+        painter.setBrush(QBrush(socket_gradient))
         painter.drawEllipse(rect)
         inner = rect.adjusted(4, 4, -4, -4)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QBrush(QColor(255, 255, 255, 70)))
+        painter.setBrush(QBrush(QColor(255, 255, 255, 80)))
         painter.drawEllipse(inner)
 
     def socket_at(self, local_pos: QPointF) -> tuple[str, bool] | None:
-        """Return ``(socket_name, is_input)`` if ``local_pos`` hits a socket."""
-        point = QPoint(int(local_pos.x()), int(local_pos.y()))
+        """Return ``(socket_name, is_input)`` if ``local_pos`` hits a socket.
+
+        Uses a circular hit-test radiating from each socket's true center
+        (matching its drawn ellipse) rather than an axis-aligned square, so
+        corners of the padded hit zone don't feel harder to hit than the
+        center — and picks the *closest* socket when hit zones overlap on
+        tightly stacked sockets.
+        """
+        hit_radius = SOCKET_SIZE_PX / 2.0 + SOCKET_HIT_PAD_PX
+        hit_radius_sq = hit_radius * hit_radius
+        best: tuple[str, bool] | None = None
+        best_distance_sq = hit_radius_sq
         for name, rect in self.input_sockets.items():
-            if rect.adjusted(
-                -SOCKET_HIT_PAD_PX,
-                -SOCKET_HIT_PAD_PX,
-                SOCKET_HIT_PAD_PX,
-                SOCKET_HIT_PAD_PX,
-            ).contains(point):
-                return name, True
+            distance_sq = _distance_squared(local_pos, rect.center())
+            if distance_sq <= best_distance_sq:
+                best = (name, True)
+                best_distance_sq = distance_sq
         for name, rect in self.output_sockets.items():
-            if rect.adjusted(
-                -SOCKET_HIT_PAD_PX,
-                -SOCKET_HIT_PAD_PX,
-                SOCKET_HIT_PAD_PX,
-                SOCKET_HIT_PAD_PX,
-            ).contains(point):
-                return name, False
-        return None
+            distance_sq = _distance_squared(local_pos, rect.center())
+            if distance_sq <= best_distance_sq:
+                best = (name, False)
+                best_distance_sq = distance_sq
+        return best
 
     def mousePressEvent(self, event: QGraphicsSceneMouseEvent | None) -> None:
         if event is None:
@@ -286,7 +384,6 @@ class NodeItem(QGraphicsRectItem):
             return
 
         if event.button() == Qt.MouseButton.LeftButton:
-            # Socket wiring is handled by NodeGraphView (avoids mouse-grab freezes).
             ctrl = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
             scene = self.scene()
             if ctrl:
@@ -331,12 +428,7 @@ class NodeItem(QGraphicsRectItem):
             if self.graph_view is not None:
                 self.graph_view.refresh_connections_for_node(item.node_id)
         before = self._drag_before_positions
-        if (
-            self.graph_view is not None
-            and before
-            and after
-            and before != after
-        ):
+        if self.graph_view is not None and before and after and before != after:
             self.graph_view.commit_node_move(before, after)
         self._drag_origins.clear()
         self._drag_before_positions.clear()
@@ -357,8 +449,7 @@ class NodeItem(QGraphicsRectItem):
         if id(self) not in self._drag_origins:
             self._drag_origins[id(self)] = self.pos()
         self._drag_before_positions = {
-            item.node_id: (float(item.node.x), float(item.node.y))
-            for item in selected
+            item.node_id: (float(item.node.x), float(item.node.y)) for item in selected
         }
         if self.node_id not in self._drag_before_positions:
             self._drag_before_positions[self.node_id] = (
