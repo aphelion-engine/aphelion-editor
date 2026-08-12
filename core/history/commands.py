@@ -5,11 +5,16 @@ from __future__ import annotations
 from typing import Any
 
 from config.constants import NODE_CHAIN_GAP_PX
+from core.animation import AnimationCurve
 from core.events import Connection
 from core.history.command import Command
 from core.history.snapshots import NodeSnapshot, connections_touching
 from core.nodes import Node
+from core.nodes.roto_nodes import RotoNode
+from core.nodes.tracking_nodes import PlanarTrackerNode, TrackerNode
 from core.project import Project
+from core.project_settings import ProjectSettings
+from core.roto.model import RotoDocument
 
 
 class CompositeCommand(Command):
@@ -35,6 +40,27 @@ class CompositeCommand(Command):
 
     def description(self) -> str:
         return self._label
+
+
+class SetProjectSettingsCommand(Command):
+    """Change project timeline metadata (name, fps, resolution, duration)."""
+
+    def __init__(self, settings: ProjectSettings) -> None:
+        self._new = settings
+        self._old: ProjectSettings | None = None
+
+    def execute(self, project: Project) -> bool:
+        if self._old is None:
+            self._old = project.project_settings()
+        project.apply_project_settings(self._new)
+        return True
+
+    def undo(self, project: Project) -> None:
+        if self._old is not None:
+            project.apply_project_settings(self._old)
+
+    def description(self) -> str:
+        return "Project Settings"
 
 
 class AddNodeCommand(Command):
@@ -245,6 +271,245 @@ class SetPropertyCommand(Command):
         self._old_value = previous._old_value
         previous._new_value = self._new_value
         return True
+
+
+class SetKeyframeCommand(Command):
+    """Set (or overwrite) one keyframe on a property's animation curve.
+
+    Coalesces repeated edits at the same node/property/frame (e.g. dragging
+    a slider while parked on a keyed frame) into a single undo step.
+    """
+
+    def __init__(
+        self,
+        node_id: str,
+        prop_name: str,
+        frame: int,
+        value: float,
+    ) -> None:
+        self._node_id = node_id
+        self._prop_name = prop_name
+        self._frame = int(frame)
+        self._value = float(value)
+        self._had_curve: bool | None = None
+        self._previous_curve: AnimationCurve | None = None
+
+    def execute(self, project: Project) -> bool:
+        node = project.nodes.get(self._node_id)
+        if node is None or node.get_property(self._prop_name) is None:
+            return False
+        if self._had_curve is None:
+            existing = node.animated_properties.get(self._prop_name)
+            self._had_curve = existing is not None
+            if existing is not None:
+                self._previous_curve = AnimationCurve.from_dict(existing.to_dict())
+        curve = node.animated_properties.setdefault(self._prop_name, AnimationCurve())
+        curve.set_keyframe(self._frame, self._value)
+        project.invalidate_cache(self._node_id)
+        return True
+
+    def undo(self, project: Project) -> None:
+        node = project.nodes.get(self._node_id)
+        if node is None:
+            return
+        if self._had_curve and self._previous_curve is not None:
+            node.animated_properties[self._prop_name] = AnimationCurve.from_dict(
+                self._previous_curve.to_dict()
+            )
+        else:
+            node.animated_properties.pop(self._prop_name, None)
+        project.invalidate_cache(self._node_id)
+
+    def description(self) -> str:
+        return f"Set Keyframe ({self._prop_name.replace('_', ' ').title()})"
+
+    def merge_with(self, previous: Command) -> bool:
+        if not isinstance(previous, SetKeyframeCommand):
+            return False
+        if (
+            previous._node_id != self._node_id
+            or previous._prop_name != self._prop_name
+            or previous._frame != self._frame
+        ):
+            return False
+        # Keep the earliest pre-sequence snapshot; advance the retained
+        # (previous) command's redo value to the latest edit.
+        self._had_curve = previous._had_curve
+        self._previous_curve = previous._previous_curve
+        previous._value = self._value
+        return True
+
+
+class RemoveKeyframeCommand(Command):
+    """Remove one keyframe from a property's animation curve."""
+
+    def __init__(self, node_id: str, prop_name: str, frame: int) -> None:
+        self._node_id = node_id
+        self._prop_name = prop_name
+        self._frame = int(frame)
+        self._previous_curve: AnimationCurve | None = None
+
+    def execute(self, project: Project) -> bool:
+        node = project.nodes.get(self._node_id)
+        if node is None:
+            return False
+        curve = node.animated_properties.get(self._prop_name)
+        if curve is None or not curve.has_keyframe_at(self._frame):
+            return False
+        self._previous_curve = AnimationCurve.from_dict(curve.to_dict())
+        curve.remove_keyframe(self._frame)
+        if curve.is_empty:
+            node.animated_properties.pop(self._prop_name, None)
+        project.invalidate_cache(self._node_id)
+        return True
+
+    def undo(self, project: Project) -> None:
+        node = project.nodes.get(self._node_id)
+        if node is None or self._previous_curve is None:
+            return
+        node.animated_properties[self._prop_name] = AnimationCurve.from_dict(
+            self._previous_curve.to_dict()
+        )
+        project.invalidate_cache(self._node_id)
+
+    def description(self) -> str:
+        return f"Remove Keyframe ({self._prop_name.replace('_', ' ').title()})"
+
+
+class EditRotoDocumentCommand(Command):
+    """Replace a ``RotoNode``'s shape document (coalesces rapid drag edits)."""
+
+    def __init__(
+        self,
+        node_id: str,
+        new_document: RotoDocument,
+        *,
+        old_document: RotoDocument | None = None,
+    ) -> None:
+        self._node_id = node_id
+        self._new_document = new_document
+        self._old_document = old_document
+
+    def execute(self, project: Project) -> bool:
+        node = project.nodes.get(self._node_id)
+        if not isinstance(node, RotoNode):
+            return False
+        if self._old_document is None:
+            self._old_document = node.document
+        node.document = self._new_document
+        project.invalidate_cache(self._node_id)
+        return True
+
+    def undo(self, project: Project) -> None:
+        node = project.nodes.get(self._node_id)
+        if not isinstance(node, RotoNode) or self._old_document is None:
+            return
+        node.document = self._old_document
+        project.invalidate_cache(self._node_id)
+
+    def description(self) -> str:
+        return "Edit Roto Shape"
+
+    def merge_with(self, previous: Command) -> bool:
+        if not isinstance(previous, EditRotoDocumentCommand):
+            return False
+        if previous._node_id != self._node_id:
+            return False
+        self._old_document = previous._old_document
+        previous._new_document = self._new_document
+        return True
+
+
+class SetTrackCommand(Command):
+    """Replace a ``TrackerNode``'s tracked X/Y curves with a tracking result.
+
+    ``old_track_x``/``old_track_y`` let a caller that already live-mutated
+    the node in place (e.g. dragging a point on the viewport overlay) supply
+    the pre-drag snapshot explicitly — without them, ``execute`` would
+    capture whatever is already on the node, which by that point is the
+    *new* value, not the value to restore on undo.
+    """
+
+    def __init__(
+        self,
+        node_id: str,
+        track_x: AnimationCurve,
+        track_y: AnimationCurve,
+        *,
+        old_track_x: AnimationCurve | None = None,
+        old_track_y: AnimationCurve | None = None,
+    ) -> None:
+        self._node_id = node_id
+        self._new_x = track_x
+        self._new_y = track_y
+        self._old_x: AnimationCurve | None = old_track_x
+        self._old_y: AnimationCurve | None = old_track_y
+
+    def execute(self, project: Project) -> bool:
+        node = project.nodes.get(self._node_id)
+        if not isinstance(node, TrackerNode):
+            return False
+        if self._old_x is None:
+            self._old_x = node.track_x
+            self._old_y = node.track_y
+        node.track_x = self._new_x
+        node.track_y = self._new_y
+        project.invalidate_cache(self._node_id)
+        return True
+
+    def undo(self, project: Project) -> None:
+        node = project.nodes.get(self._node_id)
+        if not isinstance(node, TrackerNode) or self._old_x is None or self._old_y is None:
+            return
+        node.track_x = self._old_x
+        node.track_y = self._old_y
+        project.invalidate_cache(self._node_id)
+
+    def description(self) -> str:
+        return "Track"
+
+
+class SetPlanarTrackCommand(Command):
+    """Replace a ``PlanarTrackerNode``'s tracked corner curves with a result.
+
+    ``old_corner_curves`` lets a caller that already live-mutated the node
+    in place (e.g. dragging a corner on the viewport overlay) supply the
+    pre-drag snapshot explicitly; see ``SetTrackCommand`` for why this
+    matters.
+    """
+
+    def __init__(
+        self,
+        node_id: str,
+        corner_curves: dict[str, tuple[AnimationCurve, AnimationCurve]],
+        *,
+        old_corner_curves: dict[str, tuple[AnimationCurve, AnimationCurve]] | None = None,
+    ) -> None:
+        self._node_id = node_id
+        self._new_curves = corner_curves
+        self._old_curves: dict[str, tuple[AnimationCurve, AnimationCurve]] | None = (
+            old_corner_curves
+        )
+
+    def execute(self, project: Project) -> bool:
+        node = project.nodes.get(self._node_id)
+        if not isinstance(node, PlanarTrackerNode):
+            return False
+        if self._old_curves is None:
+            self._old_curves = dict(node.corner_curves)
+        node.corner_curves = dict(self._new_curves)
+        project.invalidate_cache(self._node_id)
+        return True
+
+    def undo(self, project: Project) -> None:
+        node = project.nodes.get(self._node_id)
+        if not isinstance(node, PlanarTrackerNode) or self._old_curves is None:
+            return
+        node.corner_curves = dict(self._old_curves)
+        project.invalidate_cache(self._node_id)
+
+    def description(self) -> str:
+        return "Planar Track"
 
 
 class MoveNodesCommand(Command):

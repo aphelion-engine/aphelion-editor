@@ -1,5 +1,7 @@
+import threading
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 
 from config.constants import (
@@ -13,6 +15,14 @@ from core.cache import FrameCache
 from core.events import Connection, ObserverEvent
 from core.graph import DependencyGraph
 from core.nodes import Node, VideoInputNode, global_node_registry
+from core.nodes.base import NodePropertyInputType, NodeSocketType
+from core.nodes.property_link import (
+    PROPERTY_DRIVE_PROPERTY_KEY,
+    PROPERTY_DRIVE_VALUE_SLOT,
+    property_drive_target_id,
+    sockets_compatible,
+)
+from core.project_settings import ProjectSettings
 from core.serialization import APH_FORMAT_ID, APH_FORMAT_VERSION
 from render.preview import PreviewSettings
 
@@ -37,11 +47,98 @@ class Project:
         self.exceptions_log: list[Exception] = []
 
         self._frame_cache = FrameCache(max_mb=FRAME_CACHE_MAX_MB)
-        self.dependency_graph = DependencyGraph(self.nodes, self.connections, self._frame_cache)
+        self.dependency_graph = DependencyGraph(
+            self.nodes, self.connections, self._frame_cache
+        )
+        # Optional forced decode width used only while actively playing (see
+        # ``set_playback_proxy_override``). ``None`` defers to each Viewer's
+        # own "Proxy Width" property.
+        self._playback_proxy_override_width: int | None = None
+        # Forces full-resolution evaluation (bypasses the Viewer proxy width)
+        # for final-quality export; see ``set_full_resolution_override``.
+        self._full_resolution_override: bool = False
+        # Serializes the entire recursive ``evaluate_node`` call graph so a
+        # background export worker and the interactive preview worker can
+        # never interleave writes to shared, unlocked per-node evaluation
+        # state (``_input_values``, ``_eval_width``, decoder buffers, etc.).
+        # Re-entrant because evaluation recurses into itself on the same
+        # thread to resolve upstream dependencies.
+        self._eval_lock = threading.RLock()
+        self._drive_overrides_frame: int | None = None
+        self._drive_overrides: dict[tuple[str, str], float] = {}
 
     @property
     def max_frame(self) -> int:
         return int(self.duration * self.fps)
+
+    def project_settings(self) -> ProjectSettings:
+        """Return the current editable project settings snapshot."""
+        return ProjectSettings(
+            name=self.name,
+            fps=int(self.fps),
+            width=int(self.width),
+            height=int(self.height),
+            duration=float(self.duration),
+        )
+
+    def apply_project_settings(self, settings: ProjectSettings) -> None:
+        """Apply timeline and format settings from ``settings``.
+
+        Parameters:
+            settings: New project metadata and timeline bounds.
+
+        Side effects:
+            Clamps the playhead, clears the frame cache, and notifies observers.
+        """
+        self.name = settings.name.strip() or "Untitled Project"
+        self.fps = max(1, int(settings.fps))
+        self.width = max(16, int(settings.width))
+        self.height = max(16, int(settings.height))
+        self.duration = max(0.1, float(settings.duration))
+        self.current_frame = min(self.current_frame, self.max_frame)
+        self.clear_cache()
+        self.notify_observers(ObserverEvent.ProjectModified, None)
+        self.notify_observers(ObserverEvent.FrameChanged, self.current_frame)
+
+    def cache_stats(self) -> tuple[float, float, int]:
+        """Return ``(used_mb, max_mb, entry_count)`` for the frame cache."""
+        cache = self._frame_cache
+        return cache.size_mb, cache.max_mb, cache.entry_count
+
+    def set_frame_cache_budget_mb(self, max_mb: int) -> None:
+        """Resize the in-memory frame cache budget (from Performance prefs)."""
+        self._frame_cache.set_max_mb(max_mb)
+
+    def set_full_resolution_override(self, enabled: bool) -> None:
+        """Force evaluation at full project resolution, bypassing Viewer proxy.
+
+        Parameters:
+            enabled: When ``True``, ``get_preview_settings`` reports an
+                unlimited decode/eval width regardless of the active
+                Viewer's "Proxy Width" property.
+
+        Side effects:
+            Changes the effective preview cache namespace (see
+            ``_preview_cache_slot``) so toggling this never serves a
+            wrong-size cached buffer to a final render.
+        """
+        self._full_resolution_override = bool(enabled)
+
+    def set_playback_proxy_override(self, max_width: int | None) -> None:
+        """Force a lower decode/eval width while playing, or clear the override.
+
+        Parameters:
+            max_width: Forced proxy width in pixels, or ``None`` to defer to
+                the active Viewer's own "Proxy Width" property.
+
+        Side effects:
+            Changes the effective preview cache namespace (see
+            ``_preview_cache_slot``), so switching the override in/out never
+            serves a wrong-size cached buffer — it simply starts filling a
+            separate cache bucket for the new width.
+        """
+        width = None if max_width is None else max(1, int(max_width))
+        self._playback_proxy_override_width = width
 
     def log_exception(self, e: Exception) -> None:
         """Record ``e`` on the project and emit it to the app logger."""
@@ -135,12 +232,15 @@ class Project:
         output_node = self.nodes[output_node_id]
         input_node = self.nodes[input_node_id]
 
-        if output_slot not in output_node.outputs or input_slot not in input_node.inputs:
+        if (
+            output_slot not in output_node.outputs
+            or input_slot not in input_node.inputs
+        ):
             return False
 
         out_sock = output_node.outputs[output_slot]
         in_sock = input_node.inputs[input_slot]
-        if out_sock.socket_type != in_sock.socket_type:
+        if not sockets_compatible(out_sock.socket_type, in_sock.socket_type):
             return False
 
         if self._would_create_cycle(output_node_id, input_node_id):
@@ -180,13 +280,25 @@ class Project:
         return output_node_id in downstream
 
     def get_preview_settings(self) -> PreviewSettings:
-        """Resolve decode/display settings from the active Viewer."""
+        """Resolve decode/display settings from the active Viewer.
+
+        When a playback proxy override is active (see
+        ``set_playback_proxy_override``), it takes precedence over the
+        Viewer's own proxy width so playback can decode/evaluate at a
+        smaller size than the quality used for paused review.
+        """
         viewer = (
             self.nodes.get(self.active_viewer)
             if self.active_viewer is not None
             else None
         )
-        return PreviewSettings.from_viewer(viewer)
+        settings = PreviewSettings.from_viewer(viewer)
+        if self._full_resolution_override:
+            return replace(settings, max_width=0)
+        override = self._playback_proxy_override_width
+        if override is not None and override < settings.max_width:
+            settings = replace(settings, max_width=override)
+        return settings
 
     def _preview_cache_slot(self, output_slot: str) -> str:
         """Namespace cache entries by proxy width so quality changes stay coherent."""
@@ -198,6 +310,20 @@ class Project:
         frame_num: int,
         output_slot: str = "frame",
     ) -> Any | None:
+        # Held for the full recursive call graph (see the lock's docstring
+        # in ``__init__``): a second thread calling in must wait for this
+        # entire top-level evaluation to finish rather than interleaving.
+        with self._eval_lock:
+            return self._evaluate_node_locked(node_id, frame_num, output_slot)
+
+    def _evaluate_node_locked(
+        self,
+        node_id: str,
+        frame_num: int,
+        output_slot: str,
+    ) -> Any | None:
+        """Evaluate one node; only called while holding ``_eval_lock``."""
+        self._ensure_property_drive_overrides(frame_num)
         if node_id not in self.nodes:
             return None
 
@@ -213,18 +339,58 @@ class Project:
             self.height,
             preview_max_width=settings.max_width,
             project_fps=float(self.fps),
+            frame_num=frame_num,
+            project_max_frame=self.max_frame,
+        )
+        # Lets PropertyLinkNode "extract" any other node's resolved property
+        # (by name) as a Number output, evaluated at this node's own frame.
+        node.set_property_resolver(
+            lambda name, key, fn=frame_num: self._resolve_named_property_value(
+                name, key, fn
+            )
+        )
+        node.set_node_property_resolver(
+            lambda source_id, key, fn=frame_num: self._resolve_node_property_value(
+                source_id, key, fn
+            )
+        )
+        node.set_property_drive_lookup(
+            lambda key, nid=node_id: self._drive_overrides.get((nid, key))
         )
 
+        # Connections are transient evaluation inputs. Clearing prevents a
+        # disconnected socket from retaining a stale frame from a prior run.
+        node.clear_input_values()
+        node.set_time_resampler(None)
         for conn in self.dependency_graph.get_input_connections(node_id):
+            in_sock = node.inputs[conn.input_slot]
+            if in_sock.socket_type == NodeSocketType.Node:
+                node.set_input_value(conn.input_slot, conn.output_node_id)
+                continue
             dep_output = self.evaluate_node(
                 conn.output_node_id,
                 frame_num,
                 conn.output_slot,
             )
             node.set_input_value(conn.input_slot, dep_output)
+            if conn.input_slot == "frame":
+                # Lets nodes like Time Remap / Frame Hold pull the same
+                # upstream chain at a frame other than ``frame_num``.
+                node.set_time_resampler(
+                    lambda target_frame, o=conn.output_node_id, s=conn.output_slot: (
+                        self.evaluate_node(o, target_frame, s)
+                    )
+                )
 
         try:
-            result = node.evaluate(frame_num)
+            raw_result = node.evaluate(frame_num)
+            # Multi-output nodes (e.g. a Tracker's x/y) return one dict for
+            # every slot; extract just the slot this call actually needs.
+            result = (
+                raw_result.get(output_slot)
+                if isinstance(raw_result, dict)
+                else raw_result
+            )
             # Viewer is a cheap passthrough — cache producers only to avoid
             # double-counting the same buffer in the LRU budget.
             if node.node_type != "Viewer":
@@ -238,6 +404,109 @@ class Project:
         except Exception as e:  # noqa: BLE001
             node.log_exception(e)
             return None
+
+    def _ensure_property_drive_overrides(self, frame_num: int) -> None:
+        """Collect Property Drive overrides once per evaluation frame."""
+        if self._drive_overrides_frame == frame_num:
+            return
+        self._drive_overrides_frame = frame_num
+        self._drive_overrides.clear()
+        for drive_id, drive in self.nodes.items():
+            if drive.node_type != "Property Drive":
+                continue
+            if not drive.bool_value("enabled", True):
+                continue
+            target_id = property_drive_target_id(self, drive_id)
+            if target_id is None:
+                continue
+            property_key = drive.string_value(PROPERTY_DRIVE_PROPERTY_KEY, "").strip()
+            if not property_key:
+                continue
+            resolved = self._resolve_drive_input_value(drive_id, frame_num)
+            self._drive_overrides[(target_id, property_key)] = resolved
+
+    def _resolve_drive_input_value(self, drive_id: str, frame_num: int) -> float:
+        """Resolve the Number wired into a Property Drive's value socket."""
+        drive = self.nodes.get(drive_id)
+        if drive is None:
+            return 0.0
+        for connection in self.dependency_graph.get_input_connections(drive_id):
+            if connection.input_slot != PROPERTY_DRIVE_VALUE_SLOT:
+                continue
+            result = self._evaluate_node_locked(
+                connection.output_node_id,
+                frame_num,
+                connection.output_slot,
+            )
+            if isinstance(result, (int, float)) and not isinstance(result, bool):
+                return float(result)
+        fallback = drive.get_property("fallback")
+        if fallback is None or not isinstance(fallback.value, (int, float)):
+            return 0.0
+        return float(fallback.value)
+
+    def _resolve_named_property_value(
+        self,
+        node_name: str,
+        property_key: str,
+        frame_num: int,
+    ) -> float | None:
+        """Resolve ``node_name``'s ``property_key`` value at ``frame_num``.
+
+        Honors an active keyframe curve, matching how the property would
+        resolve inside its own node's ``evaluate``. Returns ``None`` when
+        the node/property can't be found or isn't numeric.
+        """
+        for node in self.nodes.values():
+            if node.name != node_name:
+                continue
+            prop = node.get_property(property_key)
+            if prop is None:
+                return None
+            curve = node.animated_properties.get(property_key)
+            if (
+                curve is not None
+                and not curve.is_empty
+                and isinstance(prop.value, (int, float))
+                and not isinstance(prop.value, bool)
+            ):
+                return curve.value_at(frame_num)
+            if isinstance(prop.value, (int, float)) and not isinstance(
+                prop.value, bool
+            ):
+                return float(prop.value)
+            return None
+        return None
+
+    def _resolve_node_property_value(
+        self,
+        node_id: str,
+        property_key: str,
+        frame_num: int,
+    ) -> float | None:
+        """Resolve a numeric property on ``node_id`` at ``frame_num``."""
+        driven = self._drive_overrides.get((node_id, property_key))
+        if driven is not None:
+            return driven
+        node = self.nodes.get(node_id)
+        if node is None:
+            return None
+        prop = node.get_property(property_key)
+        if prop is None:
+            return None
+        curve = node.animated_properties.get(property_key)
+        if (
+            curve is not None
+            and not curve.is_empty
+            and isinstance(prop.value, (int, float))
+            and not isinstance(prop.value, bool)
+        ):
+            return curve.value_at(frame_num)
+        if prop.input_type == NodePropertyInputType.Checkbox:
+            return 1.0 if bool(prop.value) else 0.0
+        if isinstance(prop.value, (int, float)) and not isinstance(prop.value, bool):
+            return float(prop.value)
+        return None
 
     def invalidate_cache(self, node_id: str) -> None:
         self.dependency_graph.invalidate_node(node_id)
@@ -272,7 +541,7 @@ class Project:
         height: int,
     ) -> None:
         """Align project timeline and frame size with loaded media."""
-        self.fps = max(1, int(round(fps)))
+        self.fps = max(1, round(fps))
         self.duration = max(0.1, float(duration_sec))
         self.width = max(1, width)
         self.height = max(1, height)

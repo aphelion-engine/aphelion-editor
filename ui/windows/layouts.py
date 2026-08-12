@@ -39,11 +39,17 @@ class EditorDocks:
         node_graph: QDockWidget,
         timeline: QDockWidget,
         properties: QDockWidget,
+        keyframes: QDockWidget,
+        logs: QDockWidget,
+        media_pool: QDockWidget,
     ) -> None:
         self.viewport = viewport
         self.node_graph = node_graph
         self.timeline = timeline
         self.properties = properties
+        self.keyframes = keyframes
+        self.logs = logs
+        self.media_pool = media_pool
 
     def all(self) -> tuple[QDockWidget, ...]:
         return (
@@ -52,6 +58,10 @@ class EditorDocks:
             self.timeline,
             self.properties,
         )
+
+    def optional(self) -> tuple[QDockWidget, ...]:
+        """Panels excluded from layout presets but togglable from the Window menu."""
+        return (self.logs, self.media_pool, self.keyframes)
 
 
 def _show_all(docks: EditorDocks) -> None:

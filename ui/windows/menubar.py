@@ -37,6 +37,7 @@ def build_menu_bar(editor: Editor) -> QMenuBar:
     _build_view_menu(menubar, editor)
     _build_window_menu(menubar, editor)
     _build_playback_menu(menubar, editor)
+    _build_render_menu(menubar, editor)
     _build_help_menu(menubar, editor)
     return menubar
 
@@ -58,7 +59,17 @@ def _build_file_menu(menubar: QMenuBar, editor: Editor) -> None:
 
     _add_action(file_menu, editor, KeyAction.NEW_PROJECT)
     _add_action(file_menu, editor, KeyAction.OPEN_PROJECT)
+
+    recent_menu = file_menu.addMenu("Recent Projects")
+    assert recent_menu is not None
+    _style_menu(recent_menu)
+    _populate_recent_projects(recent_menu, editor)
+
+    file_menu.addSeparator()
     _add_action(file_menu, editor, KeyAction.SAVE_PROJECT)
+    _add_action(file_menu, editor, KeyAction.SAVE_PROJECT_AS)
+    file_menu.addSeparator()
+    _add_action(file_menu, editor, KeyAction.PROJECT_SETTINGS)
     file_menu.addSeparator()
     _add_action(file_menu, editor, KeyAction.EXIT)
 
@@ -77,6 +88,10 @@ def _build_edit_menu(menubar: QMenuBar, editor: Editor) -> None:
     _add_action(edit_menu, editor, KeyAction.SELECT_ALL)
     _add_action(edit_menu, editor, KeyAction.DUPLICATE)
     _add_action(edit_menu, editor, KeyAction.DELETE)
+    edit_menu.addSeparator()
+    _add_action(edit_menu, editor, KeyAction.CLEAR_CACHE)
+    edit_menu.addSeparator()
+    _add_action(edit_menu, editor, KeyAction.OPEN_PREFERENCES)
     editor._sync_history_actions()
 
 
@@ -101,6 +116,8 @@ def _build_nodes_menu(menubar: QMenuBar, editor: Editor) -> None:
 
     nodes_menu.addSeparator()
     _add_action(nodes_menu, editor, KeyAction.FIT_GRAPH)
+    organize = _add_action(nodes_menu, editor, KeyAction.ORGANIZE_GRAPH)
+    organize.setText("Organize Graph…")
 
 
 def _build_view_menu(menubar: QMenuBar, editor: Editor) -> None:
@@ -155,6 +172,9 @@ def _build_window_menu(menubar: QMenuBar, editor: Editor) -> None:
         ("Node Graph", editor.docks.node_graph),
         ("Timeline", editor.docks.timeline),
         ("Properties", editor.docks.properties),
+        ("Keyframes", editor.docks.keyframes),
+        ("Media Pool", editor.docks.media_pool),
+        ("Logs", editor.docks.logs),
     )
     for label, dock in panel_entries:
         action = QAction(label, editor)
@@ -168,12 +188,41 @@ def _build_window_menu(menubar: QMenuBar, editor: Editor) -> None:
 
     panels_menu.addSeparator()
     _add_action(panels_menu, editor, KeyAction.SHOW_ALL_PANELS)
+    _add_action(panels_menu, editor, KeyAction.TOGGLE_LOGS)
+
+    window_menu.addSeparator()
+    _build_pin_bar_entries(window_menu, editor)
 
     window_menu.addSeparator()
     reset_window = window_menu.addAction("Reset Layout")
     assert reset_window is not None
     reset_window.setStatusTip(editor.actions.store.spec(KeyAction.RESET_LAYOUT).description)
     reset_window.triggered.connect(editor.reset_layout)
+
+
+def _build_render_menu(menubar: QMenuBar, editor: Editor) -> None:
+    """Dedicated menu for exporting/rendering the active viewer output."""
+    render_menu = menubar.addMenu("Render")
+    assert render_menu is not None
+    _style_menu(render_menu)
+
+    _add_action(render_menu, editor, KeyAction.EXPORT_SEQUENCE)
+
+
+def _build_pin_bar_entries(window_menu: QMenu, editor: Editor) -> None:
+    """Add pin-bar visibility toggle and customization entries.
+
+    The pin bar is opt-in: it is never shown automatically, and its
+    contents are entirely user-chosen via the customize dialog.
+    """
+    toggle = editor.pin_bar.toggleViewAction()
+    toggle.setText("Pin Bar")
+    toggle.setStatusTip("Show or hide the pin bar of frequently used actions")
+    window_menu.addAction(toggle)
+
+    customize = window_menu.addAction("Customize Pin Bar…")
+    assert customize is not None
+    customize.triggered.connect(editor.customize_pin_bar)
 
 
 def _build_playback_menu(menubar: QMenuBar, editor: Editor) -> None:
@@ -202,12 +251,27 @@ def _build_help_menu(menubar: QMenuBar, editor: Editor) -> None:
 
     about = help_menu.addAction("About Aphelion")
     assert about is not None
-    about.triggered.connect(
-        lambda: _status(editor, "Aphelion — node-based video editor")
-    )
+    about.triggered.connect(editor.show_about)
 
 
-def _status(editor: Editor, message: str) -> None:
-    status = editor.statusBar()
-    if status is not None:
-        status.showMessage(message, 4000)
+def _populate_recent_projects(menu: QMenu, editor: Editor) -> None:
+    """Fill the recent-projects submenu from the persistent store."""
+    menu.clear()
+    entries = editor.recent_projects.list_entries()
+    if not entries:
+        empty = menu.addAction("No recent projects")
+        assert empty is not None
+        empty.setEnabled(False)
+        return
+
+    for entry in entries:
+        label = entry.name
+        if not entry.exists:
+            label = f"{label} (missing)"
+        action = menu.addAction(label)
+        assert action is not None
+        action.setEnabled(entry.exists)
+        action.setStatusTip(entry.path)
+        action.triggered.connect(
+            lambda _checked=False, path=entry.path: editor.open_recent_project(path)
+        )

@@ -2,37 +2,87 @@
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import QObject, Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
-    QCheckBox,
-    QComboBox,
-    QDoubleSpinBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
+    QMessageBox,
     QPushButton,
     QScrollArea,
-    QSlider,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
 from config.theme import PROPERTIES_STYLE
-from core.events import ObserverEvent
-from core.history import HistoryStack, SetPropertyCommand
+from core.animation import AnimationCurve
+from core.events import Connection, ObserverEvent
+from core.history import (
+    HistoryStack,
+    RemoveKeyframeCommand,
+    SetKeyframeCommand,
+    SetPlanarTrackCommand,
+    SetPropertyCommand,
+    SetTrackCommand,
+)
 from core.nodes import (
+    Node,
     NodeProperty,
     NodePropertyInputType,
     VideoFrameErrorMethod,
     VideoInputNode,
 )
+from core.nodes.tracking_nodes import PlanarTrackerNode, TrackerNode
+from core.nodes.math_nodes import PropertyDriveNode, PropertyLinkNode
+from core.nodes.property_link import (
+    PROPERTY_DRIVE_PROPERTY_KEY,
+    PROPERTY_DRIVE_TARGET_SLOT,
+    PROPERTY_LINK_PROPERTY_KEY,
+    PROPERTY_LINK_SOURCE_SLOT,
+    node_reference_id,
+)
 from core.project import Project
+from render.tracking_worker import (
+    PlanarTrackingWorker,
+    PointTrackingWorker,
+    TrackingRequest,
+)
 from render.video_decoder import probe_video
+from ui.widgets.property_editors import (
+    CheckboxPropertyWidget,
+    ColorPropertyWidget,
+    EnumPropertyWidget,
+    FilePropertyWidget,
+    KeyframeButtonWidget,
+    NodePropertyChoiceWidget,
+    NumberPropertyWidget,
+    PropertyRow,
+    PropertyWidget,
+    SliderPropertyWidget,
+    TextPropertyWidget,
+    coerce_color_rgb,
+)
+
+# Property input types eligible for keyframe animation (numeric-valued only).
+_ANIMATABLE_INPUT_TYPES: frozenset[NodePropertyInputType] = frozenset(
+    {NodePropertyInputType.Slider, NodePropertyInputType.Number}
+)
+
+
+def _split_xy_curves(
+    result: dict[int, tuple[float, float]],
+) -> tuple[AnimationCurve, AnimationCurve]:
+    """Split a tracker's ``{frame: (x, y)}`` result into two curves."""
+    curve_x = AnimationCurve()
+    curve_y = AnimationCurve()
+    for frame_num, (x, y) in result.items():
+        curve_x.set_keyframe(frame_num, x)
+        curve_y.set_keyframe(frame_num, y)
+    return curve_x, curve_y
 
 
 class MediaProbeThread(QThread):
@@ -41,8 +91,8 @@ class MediaProbeThread(QThread):
     probed = pyqtSignal(float, float, int, int)
     failed = pyqtSignal(str)
 
-    def __init__(self, path: str) -> None:
-        super().__init__()
+    def __init__(self, path: str, parent: QObject | None = None) -> None:
+        super().__init__(parent)
         self._path = path
 
     def run(self) -> None:
@@ -53,190 +103,6 @@ class MediaProbeThread(QThread):
         self.probed.emit(info.fps, info.duration_sec, info.width, info.height)
 
 
-class PropertyWidget(QWidget):
-    """Base class for a single property editor control."""
-
-    def __init__(self, prop: NodeProperty, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.prop = prop
-        self._row = QHBoxLayout(self)
-        self._row.setContentsMargins(0, 0, 0, 0)
-        self._row.setSpacing(6)
-
-    def get_value(self) -> Any:
-        raise NotImplementedError
-
-    def set_value(self, value: Any) -> None:
-        raise NotImplementedError
-
-
-class NumberPropertyWidget(PropertyWidget):
-    """Integer or float numeric editor (spin box, not a slider)."""
-
-    def __init__(self, prop: NodeProperty, parent: QWidget | None = None) -> None:
-        super().__init__(prop, parent)
-        self._is_int = isinstance(prop.value, int)
-        low = float(prop.slider_min_value)
-        high = float(prop.slider_max_value)
-        if high <= low:
-            low, high = -999999.0, 999999.0
-
-        if self._is_int:
-            spin: QSpinBox | QDoubleSpinBox = QSpinBox()
-            spin.setRange(int(low), int(high))
-            spin.setValue(int(prop.value or 0))
-            spin.setSingleStep(1)
-        else:
-            spin = QDoubleSpinBox()
-            spin.setRange(low, high)
-            spin.setDecimals(2)
-            spin.setSingleStep(0.1)
-            spin.setValue(float(prop.value or 0.0))
-
-        spin.setObjectName("PropertySpin")
-        spin.setMinimumHeight(28)
-        self.spinbox = spin
-        self._row.addWidget(spin)
-
-    def get_value(self) -> Any:
-        return int(self.spinbox.value()) if self._is_int else float(self.spinbox.value())
-
-    def set_value(self, value: Any) -> None:
-        if self._is_int:
-            self.spinbox.setValue(int(value or 0))
-        else:
-            self.spinbox.setValue(float(value or 0.0))
-
-
-class SliderPropertyWidget(PropertyWidget):
-    """Horizontal slider with a recessed value readout."""
-
-    def __init__(self, prop: NodeProperty, parent: QWidget | None = None) -> None:
-        super().__init__(prop, parent)
-        self.slider = QSlider(Qt.Orientation.Horizontal)
-        self.slider.setObjectName("PropertySlider")
-        self.slider.setMinimum(int(prop.slider_min_value or 0))
-        self.slider.setMaximum(int(prop.slider_max_value or 100))
-        self.slider.setValue(int(prop.value or 0))
-        self.slider.setMinimumHeight(28)
-
-        self.value_label = QLabel(str(int(prop.value or 0)))
-        self.value_label.setObjectName("PropertySliderValue")
-        self.value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.slider.valueChanged.connect(lambda v: self.value_label.setText(str(v)))
-
-        self._row.addWidget(self.slider, 1)
-        self._row.addWidget(self.value_label)
-
-
-class FilePropertyWidget(PropertyWidget):
-    """Read-only path field with a browse button."""
-
-    def __init__(self, prop: NodeProperty, parent: QWidget | None = None) -> None:
-        super().__init__(prop, parent)
-        self.file_input = QLineEdit()
-        self.file_input.setObjectName("PropertyField")
-        self.file_input.setText(str(prop.value or ""))
-        self.file_input.setReadOnly(True)
-        self.file_input.setPlaceholderText("No file selected")
-        self.file_input.setMinimumHeight(28)
-
-        self.browse_btn = QPushButton("…")
-        self.browse_btn.setObjectName("PropertyBrowseButton")
-        self._row.addWidget(self.file_input, 1)
-        self._row.addWidget(self.browse_btn)
-
-    def get_value(self) -> Any:
-        return self.file_input.text()
-
-    def set_value(self, value: Any) -> None:
-        self.file_input.setText(str(value or ""))
-
-    def get_browse_button(self) -> QPushButton:
-        return self.browse_btn
-
-
-class EnumPropertyWidget(PropertyWidget):
-    """Dropdown for enum-backed properties."""
-
-    def __init__(
-        self,
-        prop: NodeProperty,
-        enum_class: type[Any],
-        parent: QWidget | None = None,
-    ) -> None:
-        super().__init__(prop, parent)
-        self.enum_class = enum_class
-        self.combo = QComboBox()
-        self.combo.setObjectName("PropertyCombo")
-        self.combo.setMinimumHeight(28)
-
-        for member in enum_class:
-            self.combo.addItem(member.name, member)
-
-        if prop.value is not None:
-            index = self.combo.findData(prop.value)
-            if index < 0 and isinstance(prop.value, int):
-                index = self.combo.findData(enum_class(prop.value))
-            if index >= 0:
-                self.combo.setCurrentIndex(index)
-
-        self._row.addWidget(self.combo)
-
-    def get_value(self) -> Any:
-        return self.combo.currentData()
-
-    def set_value(self, value: Any) -> None:
-        index = self.combo.findData(value)
-        if index >= 0:
-            self.combo.setCurrentIndex(index)
-
-
-class CheckboxPropertyWidget(PropertyWidget):
-    """Boolean toggle rendered as a styled checkbox."""
-
-    def __init__(self, prop: NodeProperty, parent: QWidget | None = None) -> None:
-        super().__init__(prop, parent)
-        self.checkbox = QCheckBox("On")
-        self.checkbox.setObjectName("PropertyCheck")
-        self.checkbox.setChecked(bool(prop.value))
-        self.checkbox.toggled.connect(self._sync_label)
-        self._sync_label(bool(prop.value))
-        self._row.addWidget(self.checkbox)
-        self._row.addStretch(1)
-
-    def _sync_label(self, checked: bool) -> None:
-        self.checkbox.setText("On" if checked else "Off")
-
-    def get_value(self) -> Any:
-        return bool(self.checkbox.isChecked())
-
-    def set_value(self, value: Any) -> None:
-        checked = bool(value)
-        self.checkbox.blockSignals(True)
-        self.checkbox.setChecked(checked)
-        self.checkbox.blockSignals(False)
-        self._sync_label(checked)
-
-
-class PropertyRow(QWidget):
-    """Compact property block: label above control, no card chrome."""
-
-    def __init__(self, title: str, editor: PropertyWidget, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setObjectName("PropertyRow")
-        self.editor = editor
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(3)
-
-        label = QLabel(title)
-        label.setObjectName("PropertyRowLabel")
-        layout.addWidget(label)
-        layout.addWidget(editor)
-
-
 class PropertiesPanel(QWidget):
     """Edit selected node properties without stacking previous UI."""
 
@@ -245,28 +111,29 @@ class PropertiesPanel(QWidget):
         self.setObjectName("PropertiesPanel")
         self.setStyleSheet(PROPERTIES_STYLE)
 
-        self.project = project
-        self.history = history
+        self.project: Project = project
+        self.history: HistoryStack = history
         self.current_node_id: str | None = None
         self.property_widgets: dict[str, PropertyWidget] = {}
+        self.keyframe_buttons: dict[str, KeyframeButtonWidget] = {}
         self._probe_thread: MediaProbeThread | None = None
         self._probe_generation: int = 0
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(8, 8, 8, 8)
+        root: QVBoxLayout = QVBoxLayout(self)
+        root.setContentsMargins(5, 5, 5, 5)
         root.setSpacing(0)
 
-        self._scroll = QScrollArea()
+        self._scroll: QScrollArea = QScrollArea()
         self._scroll.setObjectName("PropertiesScroll")
         self._scroll.setWidgetResizable(True)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         root.addWidget(self._scroll)
 
-        self._content = QWidget()
+        self._content: QWidget = QWidget()
         self._content.setObjectName("PropertiesContent")
-        self._content_layout = QVBoxLayout(self._content)
+        self._content_layout: QVBoxLayout = QVBoxLayout(self._content)
         self._content_layout.setContentsMargins(0, 0, 0, 0)
-        self._content_layout.setSpacing(10)
+        self._content_layout.setSpacing(3)
         self._scroll.setWidget(self._content)
 
         self.project.subscribe(self.on_project_changed)
@@ -302,6 +169,67 @@ class PropertiesPanel(QWidget):
                 path_prop = node.get_property("file_path")
                 if path_prop is not None and path_prop.value:
                     self._start_media_probe(str(path_prop.value), data)
+            return
+        if event == ObserverEvent.FrameChanged:
+            self._refresh_animated_editors()
+            return
+        if event in {
+            ObserverEvent.ConnectionCreated,
+            ObserverEvent.ConnectionRemoved,
+        }:
+            self._refresh_property_link_picker(data)
+
+    def _refresh_property_link_picker(self, data: Any) -> None:
+        """Refresh property pickers when a link/drive reference wire changes."""
+        node_id = self.current_node_id
+        if node_id is None:
+            return
+        node = self.project.nodes.get(node_id)
+        if not isinstance(node, (PropertyLinkNode, PropertyDriveNode)):
+            return
+        if isinstance(data, Connection):
+            reference_slot = (
+                PROPERTY_DRIVE_TARGET_SLOT
+                if isinstance(node, PropertyDriveNode)
+                else PROPERTY_LINK_SOURCE_SLOT
+            )
+            reference_id = node_reference_id(self.project, node_id, reference_slot)
+            feeds_owner = (
+                data.input_node_id == node_id and data.input_slot == reference_slot
+            )
+            touches_reference = reference_id is not None and (
+                data.output_node_id == reference_id
+                or data.input_node_id == reference_id
+            )
+            if not feeds_owner and not touches_reference:
+                return
+        property_key = (
+            PROPERTY_DRIVE_PROPERTY_KEY
+            if isinstance(node, PropertyDriveNode)
+            else PROPERTY_LINK_PROPERTY_KEY
+        )
+        editor = self.property_widgets.get(property_key)
+        if isinstance(editor, NodePropertyChoiceWidget):
+            editor.refresh_choices()
+
+    def _refresh_animated_editors(self) -> None:
+        """Repaint animated properties' live value and keyframe state.
+
+        Runs on every playhead move, so this intentionally avoids rebuilding
+        the panel (``set_node``) and only touches properties that actually
+        carry a curve on the selected node.
+        """
+        node_id = self.current_node_id
+        if node_id is None:
+            return
+        node = self.project.nodes.get(node_id)
+        if node is None or not node.animated_properties:
+            return
+        for prop_name, curve in node.animated_properties.items():
+            editor = self.property_widgets.get(prop_name)
+            if editor is not None and not curve.is_empty:
+                editor.set_value(curve.value_at(self.project.current_frame))
+            self._refresh_keyframe_button(node, prop_name)
 
     def _reload_current_node(self) -> None:
         """Rebuild editors so undo/redo values match the model."""
@@ -329,6 +257,12 @@ class PropertiesPanel(QWidget):
             "flip_vertical": "Flip Vertical",
             "prefetch_frames": "Prefetch Frames",
             "fit_mode": "Fit Mode",
+            "lift_color": "Lift (Shadows)",
+            "gamma_color": "Gamma (Mids)",
+            "gain_color": "Gain (Highlights)",
+            "temperature": "Temperature",
+            "tint": "Tint",
+            "amount": "Mix",
         }
         if name in labels:
             return labels[name]
@@ -344,9 +278,10 @@ class PropertiesPanel(QWidget):
         self._content.setObjectName("PropertiesContent")
         self._content_layout = QVBoxLayout(self._content)
         self._content_layout.setContentsMargins(0, 0, 0, 0)
-        self._content_layout.setSpacing(10)
+        self._content_layout.setSpacing(3)
         self._scroll.setWidget(self._content)
         self.property_widgets.clear()
+        self.keyframe_buttons.clear()
         return self._content_layout
 
     def _show_empty_state(self, message: str) -> None:
@@ -362,49 +297,270 @@ class PropertiesPanel(QWidget):
         if self.current_node_id == node_id and self.property_widgets:
             return
 
-        node = self.project.nodes.get(node_id)
+        node: Node | None = self.project.nodes.get(node_id)
         if node is None:
             self.current_node_id = None
             self._show_empty_state("Select a node")
             return
 
         self.current_node_id = node_id
-        layout = self._replace_content()
+        layout: QVBoxLayout = self._replace_content()
+        self._add_node_header(layout, node)
+        has_properties: bool = self._add_property_rows(layout, node)
+        if not has_properties:
+            empty: QLabel = QLabel("No properties")
+            empty.setObjectName("PropertiesEmptyLabel")
+            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(empty)
+        self._add_tracking_controls(layout, node)
+        layout.addStretch(1)
 
-        title = QLabel(node.name)
+    def _add_node_header(self, layout: QVBoxLayout, node: Node) -> None:
+        """Add compact node identity and category details."""
+        title: QLabel = QLabel(node.name)
         title.setObjectName("PropertiesNodeTitle")
+        title.setToolTip(node.node_description)
         layout.addWidget(title)
 
-        divider = QFrame()
+        meta: QLabel = QLabel(f"{node.node_category}  ·  {node.node_type}")
+        meta.setObjectName("PropertiesNodeMeta")
+        meta.setToolTip(node.node_description)
+        layout.addWidget(meta)
+
+        divider: QFrame = QFrame()
         divider.setObjectName("PropertiesDivider")
         divider.setFrameShape(QFrame.Shape.HLine)
         layout.addWidget(divider)
 
-        has_properties = False
-        # Lower ``priority`` values appear first; ties break by name.
-        ordered = sorted(
-            node.properties.items(),
-            key=lambda item: (item[1].priority, item[0]),
-        )
+    def _add_property_rows(self, layout: QVBoxLayout, node: Node) -> bool:
+        """Create grouped rows for every visible property."""
+        node_id = self.current_node_id
+        if node_id is None:
+            return False
+        has_properties: bool = False
+        ordered: list[tuple[str, NodeProperty]] = self._ordered_properties(node)
+        current_group: str | None = None
         for prop_name, prop in ordered:
-            if prop_name.startswith("_input_") or not isinstance(prop, NodeProperty):
+            if prop_name.startswith("_input_"):
                 continue
-            editor = self._create_property_widget(prop, prop_name)
+            editor: PropertyWidget | None = self._create_property_widget(
+                prop,
+                prop_name,
+                self.current_node_id or "",
+            )
             if editor is None:
                 continue
+            if prop.group != current_group:
+                current_group = prop.group
+                section: QLabel = QLabel(current_group.upper())
+                section.setObjectName("PropertySectionLabel")
+                layout.addWidget(section)
             has_properties = True
             self.property_widgets[prop_name] = editor
             self._wire_editor(prop_name, editor)
-            row = PropertyRow(self._format_property_name(prop_name), editor)
+            keyframe_button = self._build_keyframe_button(node, prop_name, prop)
+            row: PropertyRow = PropertyRow(
+                prop.label or self._format_property_name(prop_name),
+                editor,
+                prop.description,
+                keyframe_button=keyframe_button,
+            )
             layout.addWidget(row)
+        return has_properties
 
-        if not has_properties:
-            empty = QLabel("No properties")
-            empty.setObjectName("PropertiesEmptyLabel")
-            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            layout.addWidget(empty)
+    def _build_keyframe_button(
+        self,
+        node: Node,
+        prop_name: str,
+        prop: NodeProperty,
+    ) -> KeyframeButtonWidget | None:
+        """Create a wired keyframe toggle for animatable properties, or ``None``."""
+        if prop.input_type not in _ANIMATABLE_INPUT_TYPES:
+            return None
+        button = KeyframeButtonWidget()
+        button.toggled_keyframe.connect(
+            lambda p=prop_name: self.toggle_keyframe(p)
+        )
+        self.keyframe_buttons[prop_name] = button
+        self._refresh_keyframe_button(node, prop_name)
+        return button
 
-        layout.addStretch(1)
+    def _refresh_keyframe_button(self, node: Node, prop_name: str) -> None:
+        """Sync one keyframe button's visual state with the model."""
+        button = self.keyframe_buttons.get(prop_name)
+        if button is None:
+            return
+        curve = node.animated_properties.get(prop_name)
+        is_animated = curve is not None and not curve.is_empty
+        is_keyed = is_animated and curve.has_keyframe_at(self.project.current_frame)
+        button.set_state(is_keyed=is_keyed, is_animated=is_animated)
+
+    def _resolved_property_value(self, node: Node, prop_name: str) -> Any:
+        """Return the property's value at the current frame (curve-aware)."""
+        prop = node.get_property(prop_name)
+        if prop is None:
+            return None
+        curve = node.animated_properties.get(prop_name)
+        if curve is not None and not curve.is_empty:
+            return curve.value_at(self.project.current_frame)
+        return prop.value
+
+    def toggle_keyframe(self, prop_name: str) -> None:
+        """Add or remove a keyframe for ``prop_name`` at the current frame."""
+        node_id = self.current_node_id
+        if node_id is None or node_id not in self.project.nodes:
+            return
+        node = self.project.nodes[node_id]
+        frame = self.project.current_frame
+        curve: AnimationCurve | None = node.animated_properties.get(prop_name)
+        if curve is not None and curve.has_keyframe_at(frame):
+            self.history.push(RemoveKeyframeCommand(node_id, prop_name, frame))
+        else:
+            value = self._resolved_property_value(node, prop_name)
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                return
+            self.history.push(
+                SetKeyframeCommand(node_id, prop_name, frame, float(value))
+            )
+        self._refresh_keyframe_button(node, prop_name)
+
+    def _add_tracking_controls(self, layout: QVBoxLayout, node: Node) -> None:
+        """Add Track Forward/Backward/Clear buttons for tracker nodes."""
+        if not isinstance(node, (TrackerNode, PlanarTrackerNode)):
+            return
+        section: QLabel = QLabel("TRACK")
+        section.setObjectName("PropertySectionLabel")
+        layout.addWidget(section)
+
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(6)
+        backward_button = QPushButton("◄ Backward")
+        forward_button = QPushButton("Forward ►")
+        clear_button = QPushButton("Clear")
+        backward_button.clicked.connect(lambda: self._run_tracking(node, direction=-1))
+        forward_button.clicked.connect(lambda: self._run_tracking(node, direction=1))
+        clear_button.clicked.connect(lambda: self._clear_tracking(node))
+        row_layout.addWidget(backward_button)
+        row_layout.addWidget(forward_button)
+        row_layout.addWidget(clear_button)
+        layout.addWidget(row)
+
+    def _run_tracking(self, node: Node, *, direction: int) -> None:
+        """Track ``node`` forward or backward from the current frame.
+
+        Runs synchronously (via a modal progress dialog) and writes the
+        result through an undoable command on success.
+        """
+        node_id = self.current_node_id
+        if node_id is None:
+            return
+        start = self.project.current_frame
+        end = self.project.max_frame if direction > 0 else 0
+        frame_numbers = (
+            list(range(start, end + 1))
+            if direction > 0
+            else list(range(start, end - 1, -1))
+        )
+        if len(frame_numbers) < 2:
+            QMessageBox.information(
+                self, "Tracking", "Nothing to track from the current frame."
+            )
+            return
+
+        # Deferred import: ``ui.dialogs`` transitively imports this module
+        # (via ``ui.widgets`` re-exports), so importing it at module scope
+        # here would create a circular import.
+        from ui.dialogs import TrackingProgressDialog
+
+        request = TrackingRequest(
+            node_id=node_id,
+            frame_numbers=frame_numbers,
+            region_size=node.region_size_normalized(),
+            search_radius=node.search_radius_normalized(),
+        )
+        if isinstance(node, PlanarTrackerNode):
+            self._run_planar_tracking(node_id, node, request, TrackingProgressDialog)
+        else:
+            self._run_point_tracking(node_id, node, request, TrackingProgressDialog)
+
+    def _run_point_tracking(
+        self,
+        node_id: str,
+        node: TrackerNode,
+        request: TrackingRequest,
+        dialog_cls: type,
+    ) -> None:
+        """Run a ``TrackerNode`` job and commit the result on success."""
+        worker = PointTrackingWorker(self.project, request, node.seed_position())
+        dialog = dialog_cls(worker, title=f"Tracking {node.name}", parent=self)
+        if not dialog.run_modal():
+            if dialog.error:
+                QMessageBox.warning(self, "Tracking Failed", dialog.error)
+            return
+        curve_x, curve_y = _split_xy_curves(dialog.result or {})
+        self.history.push(SetTrackCommand(node_id, curve_x, curve_y))
+        self._reload_current_node()
+
+    def _run_planar_tracking(
+        self,
+        node_id: str,
+        node: PlanarTrackerNode,
+        request: TrackingRequest,
+        dialog_cls: type,
+    ) -> None:
+        """Run a ``PlanarTrackerNode`` job and commit the result on success."""
+        worker = PlanarTrackingWorker(self.project, request, node.seed_corners())
+        dialog = dialog_cls(worker, title=f"Tracking {node.name}", parent=self)
+        if not dialog.run_modal():
+            if dialog.error:
+                QMessageBox.warning(self, "Tracking Failed", dialog.error)
+            return
+        raw = dialog.result or {}
+        corner_curves = {
+            corner: _split_xy_curves(raw.get(corner, {}))
+            for corner in ("top_left", "top_right", "bottom_right", "bottom_left")
+        }
+        self.history.push(SetPlanarTrackCommand(node_id, corner_curves))
+        self._reload_current_node()
+
+    def _clear_tracking(self, node: Node) -> None:
+        """Remove all tracked keyframes from a tracker node."""
+        node_id = self.current_node_id
+        if node_id is None:
+            return
+        if isinstance(node, TrackerNode):
+            self.history.push(
+                SetTrackCommand(node_id, AnimationCurve(), AnimationCurve())
+            )
+        elif isinstance(node, PlanarTrackerNode):
+            empty_curves = {
+                corner: (AnimationCurve(), AnimationCurve())
+                for corner in ("top_left", "top_right", "bottom_right", "bottom_left")
+            }
+            self.history.push(SetPlanarTrackCommand(node_id, empty_curves))
+        self._reload_current_node()
+
+    @staticmethod
+    def _ordered_properties(node: Node) -> list[tuple[str, NodeProperty]]:
+        """Keep groups contiguous while respecting their first priority."""
+        by_priority: list[tuple[str, NodeProperty]] = sorted(
+            node.properties.items(),
+            key=lambda item: (item[1].priority, item[0]),
+        )
+        group_order: dict[str, int] = {}
+        for _name, prop in by_priority:
+            if prop.group not in group_order:
+                group_order[prop.group] = len(group_order)
+        return sorted(
+            by_priority,
+            key=lambda item: (
+                group_order[item[1].group],
+                item[1].priority,
+                item[0],
+            ),
+        )
 
     def _wire_editor(self, prop_name: str, editor: PropertyWidget) -> None:
         if isinstance(editor, NumberPropertyWidget):
@@ -427,32 +583,87 @@ class PropertiesPanel(QWidget):
             editor.get_browse_button().clicked.connect(
                 lambda _checked=False, p=prop_name, w=editor: self.browse_file(p, w)
             )
+        elif isinstance(editor, NodePropertyChoiceWidget):
+            editor.combo.currentIndexChanged.connect(
+                lambda _i, p=prop_name, w=editor: self.update_property(p, w.get_value())
+            )
+        elif isinstance(editor, TextPropertyWidget):
+            editor.line_edit.editingFinished.connect(
+                lambda p=prop_name, w=editor: self.update_property(p, w.get_value())
+            )
+        elif isinstance(editor, ColorPropertyWidget):
+            editor.color_changed.connect(
+                lambda rgb, p=prop_name: self.update_property(p, rgb)
+            )
 
     def _create_property_widget(
         self,
         prop: NodeProperty,
         prop_name: str,
+        node_id: str,
     ) -> PropertyWidget | None:
-        _ = prop_name
-        if prop.input_type == NodePropertyInputType.File:
+        node = self.project.nodes.get(node_id)
+        if prop.input_type == NodePropertyInputType.NodePropertyChoice:
+            reference_slot = PROPERTY_LINK_SOURCE_SLOT
+            if isinstance(node, PropertyDriveNode):
+                reference_slot = PROPERTY_DRIVE_TARGET_SLOT
+            elif not isinstance(node, PropertyLinkNode):
+                return None
+            return NodePropertyChoiceWidget(
+                prop,
+                self.project,
+                node_id,
+                reference_slot,
+            )
+        if (
+            prop_name == PROPERTY_LINK_PROPERTY_KEY
+            and isinstance(node, PropertyLinkNode)
+        ):
+            return NodePropertyChoiceWidget(
+                prop,
+                self.project,
+                node_id,
+                PROPERTY_LINK_SOURCE_SLOT,
+            )
+        if (
+            prop_name == PROPERTY_DRIVE_PROPERTY_KEY
+            and isinstance(node, PropertyDriveNode)
+        ):
+            return NodePropertyChoiceWidget(
+                prop,
+                self.project,
+                node_id,
+                PROPERTY_DRIVE_TARGET_SLOT,
+            )
+        if prop.input_type in (
+            NodePropertyInputType.File,
+            NodePropertyInputType.ImageFile,
+        ):
             return FilePropertyWidget(prop)
+        if prop.input_type == NodePropertyInputType.Text:
+            return TextPropertyWidget(prop)
         if prop.input_type == NodePropertyInputType.Slider:
             return SliderPropertyWidget(prop)
         if prop.input_type == NodePropertyInputType.Number:
             return NumberPropertyWidget(prop)
         if prop.input_type == NodePropertyInputType.Checkbox:
             return CheckboxPropertyWidget(prop)
+        if prop.input_type == NodePropertyInputType.Color:
+            return ColorPropertyWidget(prop)
         if prop.input_type == NodePropertyInputType.VideoFrameErrorMethod:
             return EnumPropertyWidget(prop, VideoFrameErrorMethod)
         if prop.input_type == NodePropertyInputType.CustomChoice:
-            if prop.value is None:
+            if not isinstance(prop.value, Enum):
                 return None
             return EnumPropertyWidget(prop, type(prop.value))
         return None
 
     def update_property(self, prop_name: str, value: Any) -> None:
         """Write a property value through history (coalesces rapid edits)."""
-        if self.current_node_id is None or self.current_node_id not in self.project.nodes:
+        if (
+            self.current_node_id is None
+            or self.current_node_id not in self.project.nodes
+        ):
             return
         node = self.project.nodes[self.current_node_id]
         prop = node.get_property(prop_name)
@@ -470,10 +681,25 @@ class PropertiesPanel(QWidget):
                 except ValueError:
                     pass
 
+        if prop.input_type == NodePropertyInputType.Color:
+            value = coerce_color_rgb(value)
+
+        node_id = self.current_node_id
+        curve = node.animated_properties.get(prop_name)
+        if curve is not None and not curve.is_empty:
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                return
+            frame = self.project.current_frame
+            if not self.history.push(
+                SetKeyframeCommand(node_id, prop_name, frame, float(value))
+            ):
+                return
+            self._refresh_keyframe_button(node, prop_name)
+            return
+
         if prop.value == value:
             return
 
-        node_id = self.current_node_id
         if not self.history.push(
             SetPropertyCommand(node_id, prop_name, value, old_value=prop.value)
         ):
@@ -485,9 +711,10 @@ class PropertiesPanel(QWidget):
     def _start_media_probe(self, path: str, node_id: str) -> None:
         if not path:
             return
+        self.shutdown()
         self._probe_generation += 1
         generation = self._probe_generation
-        thread = MediaProbeThread(path)
+        thread = MediaProbeThread(path, parent=self)
         thread.probed.connect(
             lambda fps, dur, w, h, gen=generation, nid=node_id: self._on_probe_ok(
                 gen, nid, fps, dur, w, h
@@ -513,7 +740,9 @@ class PropertiesPanel(QWidget):
         if generation != self._probe_generation:
             return
         node = self.project.nodes.get(node_id)
-        sync_prop = node.get_property("auto_sync_timeline") if node is not None else None
+        sync_prop = (
+            node.get_property("auto_sync_timeline") if node is not None else None
+        )
         should_sync = sync_prop is None or bool(sync_prop.value)
         if should_sync:
             # sync_timeline_from_media clears cache and emits FrameChanged.
@@ -531,13 +760,26 @@ class PropertiesPanel(QWidget):
         _ = message
         self.project.invalidate_cache(node_id)
 
+    def shutdown(self) -> None:
+        """Stop any in-flight media probe before application exit."""
+        thread: MediaProbeThread | None = self._probe_thread
+        self._probe_thread = None
+        if thread is None:
+            return
+        thread.requestInterruption()
+        if not thread.wait(1000):
+            thread.terminate()
+            thread.wait(500)
+
     def browse_file(self, prop_name: str, widget: FilePropertyWidget) -> None:
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select a video file",
-            "",
-            "Video Files (*.mp4 *.avi *.mov *.mkv);;All Files (*)",
+        is_image = widget.prop.input_type == NodePropertyInputType.ImageFile
+        caption = "Select an image file" if is_image else "Select a video file"
+        file_filter = (
+            "Image Files (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp);;All Files (*)"
+            if is_image
+            else "Video Files (*.mp4 *.avi *.mov *.mkv);;All Files (*)"
         )
+        file_path, _ = QFileDialog.getOpenFileName(self, caption, "", file_filter)
         if file_path:
             widget.set_value(file_path)
             self.update_property(prop_name, file_path)

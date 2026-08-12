@@ -1,5 +1,7 @@
 """Shared QSS theme definitions for the application UI."""
 
+from config.property_style import build_properties_style
+
 DARK_THEME = """
     QMainWindow {
         background-color: #1e1e1e;
@@ -547,163 +549,407 @@ TIMELINE_STYLE = """
     }
 """
 
-PROPERTIES_STYLE = """
-    PropertiesPanel {
-        background-color: #1a1a1a;
+PROPERTIES_STYLE = build_properties_style()
+
+KEYFRAMES_PANEL_STYLE = """
+    QWidget#KeyframesPanelWidget {
+        background-color: #18181c;
     }
-    QScrollArea#PropertiesScroll {
-        border: none;
-        background-color: #1a1a1a;
-    }
-    QWidget#PropertiesContent {
-        background-color: #1a1a1a;
-    }
-    QLabel#PropertiesNodeTitle {
-        color: #f0f0f0;
+    QLabel#KeyframesHeader {
+        color: #e8e8ec;
         font-size: 12px;
-        font-weight: 700;
-        padding: 2px 0 4px 0;
+        font-weight: 600;
     }
-    QFrame#PropertiesDivider {
-        background-color: #2e2e2e;
-        max-height: 1px;
-        min-height: 1px;
-        border: none;
+    QWidget#KeyframesToolbar {
+        background-color: #141418;
+        border: 1px solid #2a2a32;
+        border-radius: 4px;
+        padding: 2px;
     }
-    QLabel#PropertiesEmptyLabel {
-        color: #666666;
-        font-style: italic;
+    QComboBox#KeyframesPropertyCombo {
+        background-color: #222228;
+        color: #e0e0e8;
+        border: 1px solid #34343c;
+        border-radius: 4px;
+        padding: 2px 6px;
+        min-height: 22px;
         font-size: 11px;
     }
-    QWidget#PropertyRow {
+    QComboBox#KeyframesPropertyCombo::drop-down {
+        border: none;
+        width: 16px;
+    }
+    QPushButton#KeyframesActionButton {
+        background-color: #222228;
+        color: #d8d8e0;
+        border: 1px solid #34343c;
+        border-radius: 4px;
+        padding: 2px 10px;
+        min-height: 22px;
+        font-size: 11px;
+    }
+    QPushButton#KeyframesActionButton:hover {
+        background-color: #2a2a34;
+        border-color: #45454f;
+    }
+    QPushButton#KeyframesActionButton:disabled {
+        color: #666670;
+        border-color: #2a2a30;
+    }
+    QFrame#KeyframesDivider {
+        color: #2a2a32;
+    }
+    QScrollArea#KeyframesScroll {
         background-color: transparent;
         border: none;
     }
-    QLabel#PropertyRowLabel {
-        color: #9a9a9a;
-        font-size: 10px;
-        font-weight: 600;
-        padding: 0px;
+    QWidget#KeyframesContent {
+        background-color: transparent;
     }
-    /* Inset / recessed field look — depth comes from the control, not a card. */
-    QDoubleSpinBox#PropertySpin,
-    QSpinBox#PropertySpin,
-    QLineEdit#PropertyField,
-    QComboBox#PropertyCombo {
-        background-color: #121212;
-        color: #ececec;
-        border: 1px solid #2c2c2c;
-        border-top: 1px solid #050505;
-        border-left: 1px solid #080808;
-        border-right: 1px solid #303030;
-        border-bottom: 1px solid #383838;
+    QLabel#KeyframesEmptyState,
+    QLabel#KeyframesHintLabel,
+    QLabel#KeyframesEmptyLabel {
+        color: #888890;
+        font-size: 11px;
+    }
+    QLabel#KeyframePropertyLabel {
+        color: #c8c8d0;
+        font-size: 11px;
+        font-weight: 600;
+    }
+    QPushButton#KeyframeFrameChip {
+        background-color: #222228;
+        color: #ffbe3c;
+        border: 1px solid #8a7030;
         border-radius: 3px;
-        padding: 3px 7px;
-        min-height: 24px;
+        padding: 0 8px;
+        font-size: 10px;
+        min-width: 28px;
+    }
+    QPushButton#KeyframeFrameChip:hover {
+        background-color: #2c2c36;
+        border-color: #ffbe3c;
+    }
+    QPushButton#KeyframeFrameChip[current="true"] {
+        background-color: #ffbe3c;
+        color: #141418;
+        border-color: #ffd878;
+        font-weight: 600;
+    }
+    QPushButton#KeyframeMiniButton {
+        background-color: #222228;
+        color: #ffbe3c;
+        border: 1px solid #34343c;
+        border-radius: 3px;
+        font-size: 12px;
+        font-weight: 600;
+    }
+    QPushButton#KeyframeMiniButton:hover {
+        border-color: #ffbe3c;
+    }
+"""
+
+LOG_VIEWER_STYLE = """
+    QWidget#LogViewerWidget {
+        background-color: #121216;
+    }
+    QWidget#LogViewerToolbar {
+        background-color: #18181c;
+        border-bottom: 1px solid #2a2a32;
+    }
+    QPlainTextEdit#LogViewerTerminal {
+        background-color: #0c0c10;
+        color: #c8c8d0;
+        border: none;
+        padding: 6px 8px;
+        font-family: Consolas, "Cascadia Mono", monospace;
         font-size: 11px;
         selection-background-color: #2b6ea8;
     }
-    QDoubleSpinBox#PropertySpin:focus,
-    QSpinBox#PropertySpin:focus,
-    QLineEdit#PropertyField:focus,
-    QComboBox#PropertyCombo:focus {
-        background-color: #161616;
-        border: 1px solid #2b6ea8;
+    QCheckBox#LogViewerAutoScroll {
+        color: #b0b0b8;
+        font-size: 11px;
+        spacing: 5px;
     }
-    QDoubleSpinBox#PropertySpin::up-button,
-    QDoubleSpinBox#PropertySpin::down-button,
-    QSpinBox#PropertySpin::up-button,
-    QSpinBox#PropertySpin::down-button {
-        background-color: #1a1a1a;
-        border: none;
-        width: 14px;
-    }
-    QComboBox#PropertyCombo::drop-down {
-        border: none;
-        width: 16px;
-    }
-    QComboBox#PropertyCombo QAbstractItemView {
-        background-color: #1a1a1a;
-        color: #e8e8e8;
-        border: 1px solid #333333;
-        selection-background-color: #2b6ea8;
-        outline: none;
-    }
-    QPushButton#PropertyBrowseButton {
-        background-color: #2a2a2a;
-        color: #d8d8d8;
-        border: 1px solid #3a3a3a;
-        border-radius: 3px;
-        min-width: 28px;
-        max-width: 28px;
-        min-height: 26px;
-        font-weight: 700;
-        font-size: 12px;
-    }
-    QPushButton#PropertyBrowseButton:hover {
-        background-color: #333333;
-        border-color: #4a4a4a;
-        color: #ffffff;
-    }
-    QPushButton#PropertyBrowseButton:pressed {
-        background-color: #1c1c1c;
-        border-top: 1px solid #0a0a0a;
-        border-left: 1px solid #0a0a0a;
-    }
-    QSlider#PropertySlider::groove:horizontal {
-        background-color: #101010;
-        border-top: 1px solid #050505;
-        border-left: 1px solid #080808;
-        border-right: 1px solid #2a2a2a;
-        border-bottom: 1px solid #303030;
-        height: 5px;
+    QCheckBox#LogViewerAutoScroll::indicator {
+        width: 13px;
+        height: 13px;
         border-radius: 2px;
-    }
-    QSlider#PropertySlider::sub-page:horizontal {
-        background-color: #2b6ea8;
-        border-radius: 2px;
-    }
-    QSlider#PropertySlider::handle:horizontal {
-        background-color: #cfcfcf;
-        border: 1px solid #0a0a0a;
-        width: 11px;
-        margin: -4px 0;
-        border-radius: 5px;
-    }
-    QSlider#PropertySlider::handle:horizontal:hover {
-        background-color: #ffffff;
-    }
-    QCheckBox#PropertyCheck {
-        color: #d0d0d0;
-        font-size: 12px;
-        spacing: 8px;
-        min-height: 26px;
-    }
-    QCheckBox#PropertyCheck::indicator {
-        width: 16px;
-        height: 16px;
-        border-radius: 3px;
         border: 1px solid #3a3a3a;
         background-color: #141414;
     }
-    QCheckBox#PropertyCheck::indicator:hover {
-        border-color: #4a4a4a;
-        background-color: #1a1a1a;
-    }
-    QCheckBox#PropertyCheck::indicator:checked {
+    QCheckBox#LogViewerAutoScroll::indicator:checked {
         background-color: #2b6ea8;
         border-color: #3d7eb8;
     }
-    QLabel#PropertySliderValue {
-        color: #9ecfff;
-        font-size: 10px;
+    QPushButton#LogViewerClearButton {
+        background-color: #222228;
+        color: #d8d8e0;
+        border: 1px solid #34343c;
+        border-radius: 4px;
+        padding: 2px 10px;
+        min-height: 20px;
+        max-height: 22px;
+        font-size: 11px;
+    }
+    QPushButton#LogViewerClearButton:hover {
+        background-color: #2a2a32;
+        border-color: #45454f;
+    }
+    QPushButton#LogViewerClearButton:pressed {
+        background-color: #1a1a20;
+    }
+"""
+
+TOOLBAR_STYLE = """
+    QToolBar#PinBar {
+        background-color: #252525;
+        border: none;
+        border-bottom: 1px solid #3a3a3a;
+        spacing: 2px;
+        padding: 3px 8px;
+    }
+    QToolBar#PinBar::separator {
+        background-color: #3a3a3a;
+        width: 1px;
+        margin: 4px 6px;
+    }
+    QToolBar#PinBar QToolButton {
+        background-color: transparent;
+        border: 1px solid transparent;
+        border-radius: 4px;
+        padding: 4px 6px;
+        margin: 0px 1px;
+        color: #d8d8d8;
+    }
+    QToolBar#PinBar QToolButton:hover {
+        background-color: #333333;
+        border-color: #444444;
+    }
+    QToolBar#PinBar QToolButton:pressed {
+        background-color: #0078d4;
+        border-color: #0078d4;
+    }
+    QToolBar#PinBar QToolButton:disabled {
+        color: #666666;
+    }
+"""
+
+PIN_BAR_DIALOG_STYLE = """
+    QDialog#PinBarDialog {
+        background-color: #1a1a1e;
+        color: #e6e6e6;
+    }
+    QLabel#PinBarDialogTitle {
+        color: #f0f0f4;
+        font-size: 16px;
         font-weight: 600;
-        min-width: 34px;
-        padding: 2px 4px;
-        background-color: #121212;
-        border: 1px solid #2c2c2c;
-        border-top: 1px solid #050505;
-        border-left: 1px solid #080808;
+    }
+    QLabel#PinBarDialogSubtitle {
+        color: #9a9aa4;
+        font-size: 12px;
+        padding-bottom: 4px;
+    }
+    QScrollArea#PinBarScroll {
+        background: transparent;
+        border: none;
+    }
+    QWidget#PinBarContent {
+        background: transparent;
+    }
+    QLabel#PinBarCategory {
+        color: #8ab4d8;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        padding: 4px 2px 2px 2px;
+    }
+    QCheckBox#PinBarCheckbox {
+        color: #e6e6ec;
+        font-size: 12px;
+        padding: 5px 8px;
+        background-color: #222228;
+        border: 1px solid #2e2e36;
+        border-radius: 5px;
+    }
+    QCheckBox#PinBarCheckbox:hover {
+        border-color: #444450;
+    }
+"""
+
+STATUS_BAR_STYLE = """
+    QStatusBar {
+        background-color: #007acc;
+        color: #ffffff;
+        font-size: 11px;
+        border-top: 1px solid #005a9e;
+    }
+    QStatusBar::item {
+        border: none;
+    }
+    QLabel#StatusProjectInfo {
+        color: #e8f4ff;
+        font-size: 11px;
+        padding-left: 4px;
+    }
+    QLabel#StatusPlayhead {
+        color: #ffffff;
+        font-size: 11px;
+        font-weight: 600;
+        padding: 0px 8px;
+    }
+    QLabel#StatusCacheInfo {
+        color: #c8e4ff;
+        font-size: 11px;
+        padding-right: 8px;
+    }
+    QLabel#StatusSeparator {
+        color: #66b3ff;
+        padding: 0px 4px;
+    }
+"""
+
+ABOUT_DIALOG_STYLE = """
+    QDialog#AboutDialog {
+        background-color: #1a1a1e;
+        color: #e6e6e6;
+    }
+    QLabel#AboutTitle {
+        color: #f0f0f4;
+        font-size: 20px;
+        font-weight: 600;
+    }
+    QLabel#AboutVersion {
+        color: #8ab4d8;
+        font-size: 12px;
+    }
+    QLabel#AboutBody {
+        color: #b0b0b8;
+        font-size: 12px;
+        line-height: 1.4;
+    }
+"""
+
+PROJECT_SETTINGS_STYLE = """
+    QDialog#ProjectSettingsDialog {
+        background-color: #1a1a1e;
+        color: #e6e6e6;
+    }
+    QLabel#ProjectSettingsTitle {
+        color: #f0f0f4;
+        font-size: 16px;
+        font-weight: 600;
+    }
+    QGroupBox {
+        color: #c8c8d0;
+        border: 1px solid #34343c;
+        border-radius: 6px;
+        margin-top: 8px;
+        padding-top: 12px;
+        font-size: 11px;
+        font-weight: 600;
+    }
+    QGroupBox::title {
+        subcontrol-origin: margin;
+        left: 10px;
+        padding: 0 4px;
+    }
+"""
+
+EXPORT_DIALOG_STYLE = """
+    QDialog#ExportDialog {
+        background-color: #1a1a1e;
+        color: #e6e6e6;
+    }
+    QLabel#ExportDialogTitle {
+        color: #f0f0f4;
+        font-size: 16px;
+        font-weight: 600;
+    }
+    QLabel#ExportStatusLabel {
+        color: #b8b8c0;
+    }
+    QProgressBar#ExportProgress {
+        background-color: #141418;
+        border: 1px solid #34343c;
+        border-radius: 4px;
+        text-align: center;
+        color: #d0d0d8;
+        min-height: 18px;
+    }
+    QProgressBar#ExportProgress::chunk {
+        background-color: #0078d4;
         border-radius: 3px;
+    }
+"""
+
+# Shares the export dialog's visual language (dark surface, same progress
+# bar look) for the tracking progress dialog's own object names.
+TRACKING_DIALOG_STYLE = """
+    QDialog#TrackingProgressDialog {
+        background-color: #1a1a1e;
+        color: #e6e6e6;
+    }
+    QLabel#ExportDialogTitle {
+        color: #f0f0f4;
+        font-size: 16px;
+        font-weight: 600;
+    }
+    QLabel#ExportStatusLabel {
+        color: #b8b8c0;
+    }
+    QProgressBar#ExportProgress {
+        background-color: #141418;
+        border: 1px solid #34343c;
+        border-radius: 4px;
+        text-align: center;
+        color: #d0d0d8;
+        min-height: 18px;
+    }
+    QProgressBar#ExportProgress::chunk {
+        background-color: #0078d4;
+        border-radius: 3px;
+    }
+"""
+
+MEDIA_POOL_STYLE = """
+    QWidget#MediaPoolWidget {
+        background-color: #1a1a1a;
+        color: #e0e0e0;
+    }
+    QListWidget#MediaPoolList {
+        background-color: #141414;
+        border: 1px solid #2a2a2a;
+        border-radius: 4px;
+        outline: none;
+        font-size: 12px;
+    }
+    QListWidget#MediaPoolList::item {
+        padding: 6px 8px;
+        border-bottom: 1px solid #222222;
+    }
+    QListWidget#MediaPoolList::item:selected {
+        background-color: #0078d4;
+        color: #ffffff;
+    }
+    QListWidget#MediaPoolList::item:hover:!selected {
+        background-color: #252528;
+    }
+    QLabel#MediaPoolEmpty {
+        color: #777777;
+        font-size: 11px;
+        padding: 8px;
+    }
+    QPushButton#MediaPoolRefreshButton {
+        background-color: #222228;
+        color: #d8d8e0;
+        border: 1px solid #34343c;
+        border-radius: 4px;
+        padding: 2px 10px;
+        min-height: 20px;
+        font-size: 11px;
+    }
+    QPushButton#MediaPoolRefreshButton:hover {
+        background-color: #2a2a32;
     }
 """

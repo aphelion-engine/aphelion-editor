@@ -32,7 +32,10 @@ def populate_add_node_menu(menu: QMenu, on_add: AddNodeCallback) -> None:
             if info is None:
                 continue
             action = category_menu.addAction(
-                make_dot_icon(info.color, size=MENU_ICON_SIZE_PX),
+                make_dot_icon(
+                    global_node_registry.resolve_color(category, node_name),
+                    size=MENU_ICON_SIZE_PX,
+                ),
                 node_name,
             )
             assert action is not None

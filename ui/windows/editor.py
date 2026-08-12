@@ -8,30 +8,53 @@ from typing import Any
 from PyQt6.QtCore import QEvent, QObject, QTimer, Qt
 from PyQt6.QtGui import QAction, QCloseEvent, QIcon
 from PyQt6.QtWidgets import (
+    QApplication,
     QDockWidget,
     QFileDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
+    QToolBar,
     QWidget,
 )
 
 from app_io import APH_FILE_FILTER, AphFormatError, load_aph, save_aph
 from config.constants import AUTOSAVE_INTERVAL_MS
 from config.keybinds import KeybindStore
-from config.theme import DARK_THEME, DOCK_STYLE
+from config.theme import DARK_THEME
+from config.theme_engine import ThemeStyles, build_theme_styles
 from core.boot import RecentProjectsStore
+from core.preferences import PreferencesStore
+from core.preferences.applier import apply_preferences_to_editor
 from core.events import DOCUMENT_DIRTY_EVENTS, ObserverEvent
 from core.history import HistoryStack
+from core.history.commands import SetProjectSettingsCommand
+from core.nodes.roto_nodes import RotoNode
+from core.nodes.tracking_nodes import PlanarTrackerNode, TrackerNode
 from core.project import Project
-from ui.dialogs import ShortcutsDialog
+from ui.dialogs import (
+    AboutDialog,
+    ExportDialog,
+    PinBarDialog,
+    PreferencesDialog,
+    ProjectSettingsDialog,
+    ShortcutsDialog,
+)
 from ui.keybinds import EditorActions, status_hint_line
 from ui.node_graph import NodeGraphView
 from ui.node_graph import operations as node_ops
 from ui.timeline import TimelineWidget
-from ui.widgets import PropertiesPanel, ViewportWidget
+from ui.widgets import (
+    EditorStatusBar,
+    KeyframesPanelWidget,
+    LogViewerWidget,
+    MediaPoolWidget,
+    PropertiesPanel,
+    ViewportWidget,
+)
 from ui.windows.layouts import EditorDocks, LayoutMode, apply_layout
 from ui.windows.menubar import build_menu_bar
+from ui.windows.toolbar import build_pin_bar, resolve_pinned_actions, sync_pin_bar
 from utils.logging_setup import get_logger
 from utils.paths import resource_path
 
@@ -50,15 +73,22 @@ class Editor(QMainWindow):
         recent_projects: RecentProjectsStore | None = None,
     ) -> None:
         super().__init__()
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self.setGeometry(position[0], position[1], size[0], size[1])
 
         icon_path = str(resource_path("icon.ico").resolve())
         self.setWindowIcon(QIcon(icon_path))
 
-        self.apply_dark_theme()
+        self.preferences_store = PreferencesStore()
+        self.preferences_store.load()
         self.project = project
         self.history = HistoryStack(project)
         self.keybinds = KeybindStore()
+        self.preferences_store.apply_keybinds(self.keybinds)
+        self.preferences_store.apply_node_colors()
+        self.theme_styles: ThemeStyles = build_theme_styles(
+            self.preferences_store.preferences.theme.resolved_tokens()
+        )
         self.recent_projects: RecentProjectsStore = (
             recent_projects or RecentProjectsStore()
         )
@@ -68,13 +98,16 @@ class Editor(QMainWindow):
         self.redo_action: QAction | None = None
         self.actions: EditorActions
         self.docks: EditorDocks
+        self.pin_bar: QToolBar
         self._key_hint_label: QLabel | None = None
+        self._status_bar: EditorStatusBar | None = None
         self._is_dirty: bool = False
         self._suspend_dirty: bool = False
         self._autosave_timer: QTimer = QTimer(self)
         self._autosave_timer.setInterval(AUTOSAVE_INTERVAL_MS)
         self._autosave_timer.timeout.connect(self._autosave_tick)
         self.setup_ui()
+        apply_preferences_to_editor(self, self.preferences_store.preferences)
         self.history.subscribe(self._on_history_changed)
         self.project.subscribe(self._on_project_dirty_event)
         self._sync_history_actions()
@@ -92,31 +125,55 @@ class Editor(QMainWindow):
         self.setCentralWidget(central)
         central.hide()
 
-        self.viewport = ViewportWidget(self.project)
+        self.viewport = ViewportWidget(self.project, self.history)
         self.timeline = TimelineWidget(self.project, self.keybinds)
         self.node_graph = NodeGraphView(self.project, self.history, self.keybinds)
         self.properties = PropertiesPanel(self.project, self.history)
+        self.keyframes = KeyframesPanelWidget(self.project, self.history)
+        self.log_viewer = LogViewerWidget()
+        self.media_pool = MediaPoolWidget(self.project)
 
         viewport_dock = self.create_dock("Viewport", self.viewport)
         timeline_dock = self.create_dock("Timeline", self.timeline)
         node_graph_dock = self.create_dock("Node Graph", self.node_graph)
         properties_dock = self.create_dock("Properties", self.properties)
+        keyframes_dock = self.create_dock("Keyframes", self.keyframes)
+        logs_dock = self.create_dock("Logs", self.log_viewer)
+        media_pool_dock = self.create_dock("Media Pool", self.media_pool)
+        logs_dock.setVisible(False)
+        keyframes_dock.setVisible(False)
+        media_pool_dock.setVisible(True)
 
         self.docks = EditorDocks(
             viewport=viewport_dock,
             node_graph=node_graph_dock,
             timeline=timeline_dock,
             properties=properties_dock,
+            keyframes=keyframes_dock,
+            logs=logs_dock,
+            media_pool=media_pool_dock,
         )
 
         self.timeline.playback_changed.connect(self.viewport.set_playback_active)
         self.node_graph.scene.selectionChanged.connect(self.on_graph_selection_changed)
+        self.media_pool.media_selected.connect(self._focus_media_node)
 
         apply_layout(self, self.docks, LayoutMode.DEFAULT)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, logs_dock)
+        self.tabifyDockWidget(timeline_dock, logs_dock)
+        self.tabifyDockWidget(properties_dock, media_pool_dock)
+        self.tabifyDockWidget(properties_dock, keyframes_dock)
+        properties_dock.raise_()
 
         self.actions = EditorActions(self, self.keybinds)
         self.actions.build()
+        self.pin_bar = build_pin_bar(self)
+        sync_pin_bar(self)
+        self.pin_bar.toggleViewAction().toggled.connect(
+            self._persist_pin_bar_visibility
+        )
         build_menu_bar(self)
+        self._status_bar = EditorStatusBar(self)
         self._setup_status_key_hints()
 
     def _setup_status_key_hints(self) -> None:
@@ -156,7 +213,7 @@ class Editor(QMainWindow):
         dock = QDockWidget(title, self)
         dock.setObjectName(f"Dock_{title.replace(' ', '')}")
         dock.setWidget(widget)
-        dock.setStyleSheet(DOCK_STYLE)
+        dock.setStyleSheet(self.theme_styles.dock)
         dock.setFeatures(
             QDockWidget.DockWidgetFeature.DockWidgetClosable
             | QDockWidget.DockWidgetFeature.DockWidgetMovable
@@ -171,15 +228,21 @@ class Editor(QMainWindow):
         return dock
 
     def on_graph_selection_changed(self) -> None:
-        """Sync properties panel (and active viewer) with graph selection."""
+        """Sync properties panel, active viewer, and viewport edit target with selection."""
         selected_items = self.node_graph.scene.selectedItems()
         if not selected_items:
+            self.viewport.set_edit_target(None)
             return
         item = selected_items[0]
         if not hasattr(item, "node_id"):
             return
         self.properties.set_node(item.node_id)
         node = self.project.nodes[item.node_id]
+        # Roto and Tracker/Planar Tracker each get their own interactive
+        # viewport overlay; ViewportWidget.set_edit_target fans this out to
+        # both and each one ignores node types that aren't its own.
+        editable = isinstance(node, (RotoNode, TrackerNode, PlanarTrackerNode))
+        self.viewport.set_edit_target(item.node_id if editable else None)
         if node.node_type == "Viewer":
             self.project.set_active_viewer(item.node_id)
             status = self.statusBar()
@@ -214,6 +277,170 @@ class Editor(QMainWindow):
         status = self.statusBar()
         if status is not None and node_id is not None:
             status.showMessage(f"Added node: {slot.target.node_type}", 2500)
+
+    def _focus_media_node(self, node_id: str) -> None:
+        """Select a media source in the graph and properties panel."""
+        item = self.node_graph.node_items.get(node_id)
+        if item is not None:
+            self.node_graph.scene.clearSelection()
+            item.setSelected(True)
+            self.node_graph.centerOn(item)
+        self.properties.set_node(node_id)
+        self.keyframes.set_node(node_id)
+        self.node_graph.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def show_about(self) -> None:
+        """Open the about dialog."""
+        dialog = AboutDialog(parent=self)
+        dialog.exec()
+
+    def show_project_settings(self) -> None:
+        """Open project settings and apply accepted changes through history."""
+        dialog = ProjectSettingsDialog(self.project, parent=self)
+        if dialog.exec() != ProjectSettingsDialog.DialogCode.Accepted:
+            return
+        settings = dialog.settings
+        if settings is None:
+            return
+        self.history.push(SetProjectSettingsCommand(settings))
+        self._update_window_title()
+        if self._status_bar is not None:
+            self._status_bar.refresh_all()
+        status = self.statusBar()
+        if status is not None:
+            status.showMessage("Project settings updated", 2500)
+
+    def export_sequence(self) -> None:
+        """Export the active viewer using the current in/out work range.
+
+        The dialog owns its own ``ExportWorker`` and stays open with a live
+        progress bar for the whole job; this method only reacts to the
+        final outcome.
+        """
+        self.timeline.pause_playback()
+        self.viewport.set_playback_active(False)
+        controller = self.timeline.controller
+        dialog = ExportDialog(
+            self.project,
+            in_point=controller.in_point,
+            out_point=controller.out_point,
+            parent=self,
+        )
+        try:
+            if dialog.exec() != ExportDialog.DialogCode.Accepted:
+                return
+            status = self.statusBar()
+            if status is not None and dialog.exported_path is not None:
+                status.showMessage(
+                    f"Export complete: {dialog.exported_path.name}",
+                    5000,
+                )
+        finally:
+            self.viewport.request_update()
+
+    def clear_frame_cache(self) -> None:
+        """Drop cached preview frames and refresh status metrics."""
+        self.project.clear_cache()
+        if self._status_bar is not None:
+            self._status_bar.refresh_all()
+        self.viewport.request_update()
+        status = self.statusBar()
+        if status is not None:
+            status.showMessage("Frame cache cleared", 2000)
+
+    def open_recent_project(self, path: str) -> None:
+        """Open a project from the recent-projects list."""
+        if not self._prompt_save_before_leave():
+            return
+        try:
+            project = load_aph(path)
+        except AphFormatError as exc:
+            QMessageBox.critical(self, "Open Project", str(exc))
+            self.recent_projects.remove(path)
+            return
+        self._replace_project(project)
+        self._remember_current_project()
+        status = self.statusBar()
+        if status is not None:
+            status.showMessage(f"Opened {Path(path).name}", 3000)
+
+    def show_preferences(self) -> None:
+        """Open the preferences dialog and apply accepted changes."""
+        dialog = PreferencesDialog(
+            self.preferences_store.preferences,
+            self.keybinds,
+            parent=self,
+        )
+        dialog.applied.connect(
+            lambda: self._apply_preferences_dialog(dialog, persist=False)
+        )
+        if dialog.exec() != PreferencesDialog.DialogCode.Accepted:
+            return
+        self._apply_preferences_dialog(dialog, persist=True)
+
+    def _apply_preferences_dialog(
+        self,
+        dialog: PreferencesDialog,
+        *,
+        persist: bool,
+    ) -> None:
+        """Apply preferences edited in ``dialog`` to the live editor."""
+        self.preferences_store.preferences = dialog.preferences
+        self.preferences_store.capture_keybinds(dialog.keybinds)
+        self.preferences_store.apply_keybinds(self.keybinds)
+        self.actions.reapply_shortcuts()
+        self.actions.refresh_node_create_actions()
+        build_menu_bar(self)
+        apply_preferences_to_editor(self, self.preferences_store.preferences)
+        if persist:
+            self.preferences_store.save()
+
+    def set_pin_bar_visible(self, visible: bool) -> None:
+        """Show or hide the pin bar (persistence handled by the toggle signal)."""
+        self.pin_bar.setVisible(visible)
+
+    def _persist_pin_bar_visibility(self, visible: bool) -> None:
+        """Save pin bar visibility whenever it changes, from any source."""
+        self.preferences_store.preferences.editor.show_pin_bar = visible
+        self.preferences_store.save()
+
+    def customize_pin_bar(self) -> None:
+        """Open the pin bar picker and persist the resulting selection."""
+        dialog = PinBarDialog(
+            self.keybinds,
+            resolve_pinned_actions(self),
+            parent=self,
+        )
+        if dialog.exec() != PinBarDialog.DialogCode.Accepted:
+            return
+        selected = dialog.selected_actions()
+        self.preferences_store.preferences.pinned_actions = [
+            action.value for action in selected
+        ]
+        self.preferences_store.save()
+        sync_pin_bar(self)
+        status = self.statusBar()
+        if status is not None:
+            status.showMessage(f"Pin bar updated ({len(selected)} action(s))", 2500)
+
+    def refresh_node_colors(self) -> None:
+        """Refresh accent colors on all graph node items."""
+        from PyQt6.QtGui import QColor
+
+        from core.nodes.registry import global_node_registry
+
+        for node_id, item in self.node_graph.node_items.items():
+            node = self.project.nodes.get(node_id)
+            if node is None:
+                continue
+            node.node_color = global_node_registry.resolve_color(
+                node.node_category,
+                node.node_type,
+            )
+            r, g, b = node.node_color
+            item.accent_color = QColor(r, g, b)
+            item.update()
+        self.node_graph.refresh_theme()
 
     def show_keyboard_shortcuts(self) -> None:
         """Open the keyboard shortcuts reference dialog."""
@@ -266,11 +493,15 @@ class Editor(QMainWindow):
         self.timeline.set_project(project)
         self.node_graph.set_project(project, self.history)
         self.properties.set_project(project, self.history)
+        self.keyframes.set_project(project, self.history)
+        self.media_pool.set_project(project)
         self.history.subscribe(self._on_history_changed)
         self.project.subscribe(self._on_project_dirty_event)
         self._sync_history_actions()
         self._suspend_dirty = False
         self._mark_clean()
+        if self._status_bar is not None:
+            self._status_bar.attach_to_project()
         previous.close()
 
     def new_project(self) -> None:
@@ -406,17 +637,31 @@ class Editor(QMainWindow):
             return True
         return self.save_project()
 
+    def _shutdown(self) -> None:
+        """Stop timers, playback, and background workers before exit."""
+        self._autosave_timer.stop()
+        self.timeline.pause_playback()
+        if self._status_bar is not None:
+            self._status_bar.shutdown()
+        self.viewport.shutdown()
+        self.properties.shutdown()
+        self.log_viewer.shutdown()
+        self.media_pool.shutdown()
+        self.project.unsubscribe(self._on_project_dirty_event)
+        self.project.close()
+
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         """Prompt to save unsaved changes, then release project resources."""
         if not self._prompt_save_before_leave():
             _LOG.info("Close cancelled (unsaved changes retained)")
             event.ignore()
             return
+        self._shutdown()
         _LOG.info("Closing editor for project '%s'", self.project.name)
-        self._autosave_timer.stop()
-        self.project.unsubscribe(self._on_project_dirty_event)
-        self.project.close()
         super().closeEvent(event)
+        app: QApplication | None = QApplication.instance()
+        if isinstance(app, QApplication):
+            app.quit()
 
     def _remember_current_project(self) -> None:
         """Push the active project path onto the recent-projects list."""
@@ -500,7 +745,7 @@ class Editor(QMainWindow):
 
     def show_all_panels(self) -> None:
         """Ensure every dock is visible and docked."""
-        for dock in self.docks.all():
+        for dock in (*self.docks.all(), *self.docks.optional()):
             dock.show()
             dock.setFloating(False)
         status = self.statusBar()
@@ -510,6 +755,18 @@ class Editor(QMainWindow):
     def toggle_panel(self, dock: QDockWidget) -> None:
         """Show or hide a dock panel."""
         dock.setVisible(not dock.isVisible())
+
+    def toggle_keyframes_panel(self) -> None:
+        """Show or hide the keyframes dock."""
+        self.toggle_panel(self.docks.keyframes)
+        if self.docks.keyframes.isVisible():
+            self.docks.keyframes.raise_()
+
+    def toggle_logs_panel(self) -> None:
+        """Show or hide the log viewer dock."""
+        self.toggle_panel(self.docks.logs)
+        if self.docks.logs.isVisible():
+            self.docks.logs.raise_()
 
     def toggle_fullscreen(self) -> None:
         """Toggle window fullscreen mode."""

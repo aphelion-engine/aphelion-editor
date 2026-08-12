@@ -13,13 +13,8 @@ from PyQt6.QtWidgets import (
 )
 
 from core.events import Connection
-from ui.node_graph.constants import (
-    COLOR_WIRE,
-    COLOR_WIRE_ACTIVE,
-    COLOR_WIRE_PREVIEW,
-    WIRE_CURVE_OFFSET_PX,
-    WIRE_WIDTH_PX,
-)
+from ui.node_graph.constants import WIRE_CURVE_OFFSET_PX, WIRE_WIDTH_PX
+from ui.node_graph.theme_state import current_graph_palette
 
 if TYPE_CHECKING:
     from ui.node_graph.view import NodeGraphView
@@ -48,7 +43,7 @@ class ConnectionItem(QGraphicsPathItem):
         self.graph_view = graph_view
         self.setZValue(0.0)
         self.setFlag(self.GraphicsItemFlag.ItemIsSelectable, True)
-        self.setPen(QPen(COLOR_WIRE, WIRE_WIDTH_PX))
+        self.setPen(QPen(current_graph_palette().wire, WIRE_WIDTH_PX))
         self.setBrush(QBrush(Qt.BrushStyle.NoBrush))
         self.update_path()
 
@@ -85,7 +80,8 @@ class ConnectionItem(QGraphicsPathItem):
         if painter is None:
             return
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        color = COLOR_WIRE_ACTIVE if self.isSelected() else COLOR_WIRE
+        palette = current_graph_palette()
+        color = palette.wire_active if self.isSelected() else palette.wire
         painter.setPen(
             QPen(
                 color,
@@ -126,7 +122,7 @@ class PreviewWireItem(QGraphicsPathItem):
         style = Qt.PenStyle.SolidLine if self._snapped else Qt.PenStyle.DashLine
         self.setPen(
             QPen(
-                COLOR_WIRE_PREVIEW,
+                current_graph_palette().wire_preview,
                 WIRE_WIDTH_PX + (0.6 if self._snapped else 0.0),
                 style,
                 Qt.PenCapStyle.RoundCap,

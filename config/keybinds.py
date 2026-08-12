@@ -12,6 +12,11 @@ class KeyAction(Enum):
     NEW_PROJECT = "new_project"
     OPEN_PROJECT = "open_project"
     SAVE_PROJECT = "save_project"
+    SAVE_PROJECT_AS = "save_project_as"
+    PROJECT_SETTINGS = "project_settings"
+    EXPORT_SEQUENCE = "export_sequence"
+    CLEAR_CACHE = "clear_cache"
+    TOGGLE_LOGS = "toggle_logs"
     EXIT = "exit"
 
     UNDO = "undo"
@@ -25,6 +30,7 @@ class KeyAction(Enum):
     SEARCH_NODE = "search_node"
     FIT_GRAPH = "fit_graph"
     FIT_GRAPH_ALT = "fit_graph_alt"
+    ORGANIZE_GRAPH = "organize_graph"
 
     TOGGLE_FULLSCREEN = "toggle_fullscreen"
     FOCUS_VIEWPORT = "focus_viewport"
@@ -44,6 +50,7 @@ class KeyAction(Enum):
     MARK_OUT = "mark_out"
 
     SHOW_SHORTCUTS = "show_shortcuts"
+    OPEN_PREFERENCES = "open_preferences"
 
 
 @dataclass(frozen=True)
@@ -132,6 +139,27 @@ DEFAULT_KEYBINDS: tuple[KeybindSpec, ...] = (
     KeybindSpec(KeyAction.NEW_PROJECT, "New Project", "File", "Ctrl+N", "Create a new project"),
     KeybindSpec(KeyAction.OPEN_PROJECT, "Open Project", "File", "Ctrl+O", "Open an existing project"),
     KeybindSpec(KeyAction.SAVE_PROJECT, "Save Project", "File", "Ctrl+S", "Save the current project"),
+    KeybindSpec(
+        KeyAction.SAVE_PROJECT_AS,
+        "Save Project As…",
+        "File",
+        "Ctrl+Shift+S",
+        "Save the project under a new name",
+    ),
+    KeybindSpec(
+        KeyAction.PROJECT_SETTINGS,
+        "Project Settings…",
+        "File",
+        "Ctrl+Shift+,",
+        "Edit timeline resolution, frame rate, and duration",
+    ),
+    KeybindSpec(
+        KeyAction.EXPORT_SEQUENCE,
+        "Export…",
+        "File",
+        "Ctrl+E",
+        "Export the active viewer to video or image sequence",
+    ),
     KeybindSpec(KeyAction.EXIT, "Exit", "File", "Ctrl+Q", "Quit Aphelion"),
     KeybindSpec(KeyAction.UNDO, "Undo", "Edit", "Ctrl+Z", "Undo the last document change"),
     KeybindSpec(KeyAction.REDO, "Redo", "Edit", "Ctrl+Shift+Z", "Redo the last undone change"),
@@ -140,6 +168,13 @@ DEFAULT_KEYBINDS: tuple[KeybindSpec, ...] = (
     KeybindSpec(KeyAction.SELECT_ALL, "Select All", "Edit", "Ctrl+A", "Select all nodes"),
     KeybindSpec(KeyAction.DUPLICATE, "Duplicate", "Edit", "Ctrl+D", "Duplicate the selection"),
     KeybindSpec(KeyAction.DELETE, "Delete", "Edit", "Delete", "Delete the selection"),
+    KeybindSpec(
+        KeyAction.CLEAR_CACHE,
+        "Clear Frame Cache",
+        "Edit",
+        "Ctrl+Shift+K",
+        "Drop cached preview frames to reclaim memory",
+    ),
     KeybindSpec(
         KeyAction.SEARCH_NODE,
         "Search Nodes",
@@ -156,6 +191,13 @@ DEFAULT_KEYBINDS: tuple[KeybindSpec, ...] = (
         "Frame all nodes",
     ),
     KeybindSpec(
+        KeyAction.ORGANIZE_GRAPH,
+        "Organize Graph",
+        "Graph",
+        "Ctrl+Shift+O",
+        "Auto-layout nodes by data flow",
+    ),
+    KeybindSpec(
         KeyAction.TOGGLE_FULLSCREEN,
         "Toggle Fullscreen",
         "View",
@@ -166,6 +208,13 @@ DEFAULT_KEYBINDS: tuple[KeybindSpec, ...] = (
     KeybindSpec(KeyAction.FOCUS_GRAPH, "Focus Node Graph", "View", "Ctrl+2"),
     KeybindSpec(KeyAction.FOCUS_TIMELINE, "Focus Timeline", "View", "Ctrl+3"),
     KeybindSpec(KeyAction.FOCUS_PROPERTIES, "Focus Properties", "View", "Ctrl+4"),
+    KeybindSpec(
+        KeyAction.TOGGLE_LOGS,
+        "Toggle Logs Panel",
+        "Window",
+        "Ctrl+Shift+L",
+        "Show or hide the log viewer panel",
+    ),
     KeybindSpec(
         KeyAction.RESET_LAYOUT,
         "Reset Layout",
@@ -193,6 +242,13 @@ DEFAULT_KEYBINDS: tuple[KeybindSpec, ...] = (
         "Help",
         "Ctrl+/",
         "Show all keybindings",
+    ),
+    KeybindSpec(
+        KeyAction.OPEN_PREFERENCES,
+        "Preferences",
+        "Edit",
+        "Ctrl+,",
+        "Open editor preferences",
     ),
 )
 

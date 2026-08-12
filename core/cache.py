@@ -62,6 +62,30 @@ class FrameCache:
             self._sizes.clear()
             self._current_bytes = 0
 
+    def set_max_mb(self, max_mb: int) -> None:
+        """Resize the memory budget at runtime, evicting oldest entries if needed.
+
+        Parameters:
+            max_mb: New cache budget in megabytes; values below 1 MB are clamped.
+
+        Side effects:
+            May evict least-recently-used entries when shrinking the budget.
+        """
+        with self._lock:
+            self._max_bytes = max(1, int(max_mb)) * 1024 * 1024
+            while self._current_bytes > self._max_bytes and self._entries:
+                oldest_key, _ = self._entries.popitem(last=False)
+                self._current_bytes -= self._sizes.pop(oldest_key)
+
     @property
     def size_mb(self) -> float:
         return self._current_bytes / (1024 * 1024)
+
+    @property
+    def max_mb(self) -> float:
+        return self._max_bytes / (1024 * 1024)
+
+    @property
+    def entry_count(self) -> int:
+        with self._lock:
+            return len(self._entries)

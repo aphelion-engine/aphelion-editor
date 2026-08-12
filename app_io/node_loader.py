@@ -2,16 +2,14 @@
 
 from typing import ClassVar
 
-from core.nodes import Node, VideoInputNode, ViewerNode, global_node_registry
+from core.nodes import Node, global_node_registry
+from core.nodes.catalog import BUILTIN_NODE_TYPES
 
 
 class NodeLoader:
     """Bootstraps default node classes into ``global_node_registry``."""
 
-    default_nodes: ClassVar[list[type[Node]]] = [
-        VideoInputNode,
-        ViewerNode,
-    ]
+    default_nodes: ClassVar[tuple[type[Node], ...]] = BUILTIN_NODE_TYPES
 
     @staticmethod
     def load_defaults() -> None:
