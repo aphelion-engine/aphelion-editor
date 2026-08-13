@@ -4867,3 +4867,57 @@ TypeError: VideoInputNode.prepare_evaluation() got an unexpected keyword argumen
 2026-08-11 20:16:15 | INFO     | aphelion.editor | Closing editor for project 'Untitled Project'
 2026-08-11 20:16:16 | INFO     | aphelion.session | Editor destroyed — quitting application
 2026-08-11 20:16:18 | INFO     | aphelion.runtime | Event loop exited with code 0
+2026-08-12 23:02:54 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-08-12 23:02:54 | INFO     | aphelion | Log file: C:\Users\jwaechter0153\Downloads\aphelion\logs\aphelion.log
+2026-08-12 23:02:55 | INFO     | aphelion.runtime | Runtime ready — starting session
+2026-08-12 23:02:55 | INFO     | aphelion.session | Session start → project launcher
+2026-08-12 23:02:55 | INFO     | aphelion.runtime | Entering Qt event loop
+2026-08-12 23:02:56 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(403, 139, 560, 480))
+2026-08-12 23:02:58 | INFO     | aphelion.session | Project chosen (mode=open, path=C:\Users\jwaechter0153\Downloads\Untitled Project.aph)
+2026-08-12 23:02:58 | INFO     | aphelion.session | Opening bootloader
+2026-08-12 23:03:00 | INFO     | aphelion.boot.driver | Running boot stage 1/5: Runtime
+2026-08-12 23:03:00 | INFO     | aphelion.boot.driver | [Runtime] Boot request accepted (open project)
+2026-08-12 23:03:00 | INFO     | aphelion.boot.driver | Running boot stage 2/5: Node registry
+2026-08-12 23:03:00 | INFO     | aphelion.boot.driver | [Node registry] Registered 77 built-in node type(s)
+2026-08-12 23:03:00 | INFO     | aphelion.boot.driver | Running boot stage 3/5: Project document
+2026-08-12 23:03:00 | INFO     | aphelion.boot.driver | [Project document] Loaded project 'Untitled Project'
+2026-08-12 23:03:00 | INFO     | aphelion.boot.driver | Running boot stage 4/5: Graph validation
+2026-08-12 23:03:00 | INFO     | aphelion.boot.driver | [Graph validation] Validated project graph
+2026-08-12 23:03:00 | INFO     | aphelion.boot.driver | Running boot stage 5/5: Media sources
+2026-08-12 23:03:01 | INFO     | aphelion.boot.driver | [Media sources] Probed media sources (1 ok, 0 unavailable)
+2026-08-12 23:03:01 | INFO     | aphelion.session | Constructing editor for project 'Untitled Project'
+2026-08-12 23:03:02 | INFO     | aphelion.session | Editor shown for 'Untitled Project'
+2026-08-12 23:05:56 | INFO     | aphelion.editor | Closing editor for project 'Untitled Project'
+2026-08-12 23:05:56 | INFO     | aphelion.session | Editor destroyed — quitting application
+2026-08-12 23:05:56 | INFO     | aphelion.runtime | Event loop exited with code 0
+2026-08-12 23:06:44 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-08-12 23:06:44 | INFO     | aphelion | Log file: C:\Users\jwaechter0153\Downloads\aphelion\logs\aphelion.log
+2026-08-12 23:06:44 | INFO     | aphelion.runtime | Runtime ready — starting session
+2026-08-12 23:06:44 | INFO     | aphelion.session | Session start → project launcher
+2026-08-12 23:06:44 | INFO     | aphelion.runtime | Entering Qt event loop
+2026-08-12 23:06:45 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(403, 139, 560, 480))
+2026-08-12 23:06:47 | INFO     | aphelion.session | Project chosen (mode=open, path=C:\Users\jwaechter0153\Downloads\Untitled Project.aph)
+2026-08-12 23:06:47 | INFO     | aphelion.session | Opening bootloader
+2026-08-12 23:06:47 | INFO     | aphelion.boot.driver | Running boot stage 1/5: Runtime
+2026-08-12 23:06:47 | INFO     | aphelion.boot.driver | [Runtime] Boot request accepted (open project)
+2026-08-12 23:06:47 | INFO     | aphelion.boot.driver | Running boot stage 2/5: Node registry
+2026-08-12 23:06:47 | INFO     | aphelion.boot.driver | [Node registry] Registered 77 built-in node type(s)
+2026-08-12 23:06:47 | INFO     | aphelion.boot.driver | Running boot stage 3/5: Project document
+2026-08-12 23:06:47 | INFO     | aphelion.boot.driver | [Project document] Loaded project 'Untitled Project'
+2026-08-12 23:06:48 | INFO     | aphelion.boot.driver | Running boot stage 4/5: Graph validation
+2026-08-12 23:06:48 | INFO     | aphelion.boot.driver | [Graph validation] Validated project graph
+2026-08-12 23:06:48 | INFO     | aphelion.boot.driver | Running boot stage 5/5: Media sources
+2026-08-12 23:06:48 | INFO     | aphelion.boot.driver | [Media sources] Probed media sources (1 ok, 0 unavailable)
+2026-08-12 23:06:48 | INFO     | aphelion.session | Constructing editor for project 'Untitled Project'
+2026-08-12 23:06:49 | INFO     | aphelion.session | Editor shown for 'Untitled Project'
+2026-08-12 23:10:47 | INFO     | aphelion.editor | Closing editor for project 'Untitled Project'
+2026-08-12 23:10:47 | INFO     | aphelion.session | Editor destroyed — quitting application
+2026-08-12 23:10:48 | INFO     | aphelion.runtime | Event loop exited with code 0
+2026-08-13 01:24:09 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-08-13 01:24:09 | INFO     | aphelion | Log file: C:\Users\jwaechter0153\Downloads\aphelion\logs\aphelion.log
+2026-08-13 01:24:10 | INFO     | aphelion.runtime | Runtime ready — starting session
+2026-08-13 01:24:10 | INFO     | aphelion.session | Session start → project launcher
+2026-08-13 01:24:10 | INFO     | aphelion.runtime | Entering Qt event loop
+2026-08-13 01:24:11 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(403, 139, 560, 480))
+2026-08-13 01:24:12 | INFO     | aphelion.session | Launcher closed without a project — quitting
+2026-08-13 01:24:12 | INFO     | aphelion.runtime | Event loop exited with code 0

@@ -9,6 +9,7 @@ from typing import Any
 
 from app_io.aph_format import AphFormatError, load_aph
 from app_io.node_loader import NodeLoader
+from app_io.plugin_loader import PluginLoader
 from core.boot.request import BootMode, BootRequest
 from core.nodes.video_input import VideoInputNode
 from core.project import Project
@@ -40,6 +41,7 @@ class EditorBootDriver:
         self._stages: list[tuple[str, Callable[[], BootStageResult]]] = [
             ("Runtime", self._stage_runtime),
             ("Node registry", self._stage_register_nodes),
+            ("Plugins", self._stage_load_plugins),
             ("Project document", self._stage_load_project),
             ("Graph validation", self._stage_validate_graph),
             ("Media sources", self._stage_probe_media),
@@ -106,6 +108,10 @@ class EditorBootDriver:
             self._nodes_registered = True
         count = len(NodeLoader.default_nodes)
         return BootStageResult(True, f"Registered {count} built-in node type(s)")
+
+    def _stage_load_plugins(self) -> BootStageResult:
+        count = PluginLoader.load_installed()
+        return BootStageResult(True, f"Registered {count} plugin node type(s)")
 
     def _stage_load_project(self) -> BootStageResult:
         if self._request.mode is BootMode.NEW:

@@ -6,7 +6,8 @@ import sys
 from pathlib import Path
 from typing import Final
 
-_PROJECT_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
+_SRC_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
+_PROJECT_ROOT: Final[Path] = _SRC_ROOT.parent
 _RESOURCES_DIR_NAME: Final[str] = "resources"
 
 

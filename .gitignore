@@ -1,6 +1,13 @@
 *.pyc
+*.egg-info/
 .venv/
 build/
 dist/
 __pycache__/
 node_modules/
+samples/
+filetree.txt
+userdata/
+resources/
+logs/
+.ruff_cache/

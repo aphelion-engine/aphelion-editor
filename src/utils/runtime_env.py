@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import subprocess 
 import os
 
+def run_process(command: str) -> int:
+    return subprocess.check_call(command, shell=True)
 
 def prepare_process_environment() -> None:
     """Quiet noisy native media loggers (OpenCV / FFmpeg).

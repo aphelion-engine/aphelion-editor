@@ -4,10 +4,16 @@ from __future__ import annotations
 
 import sys
 
+from srcpath import DIST_DIR, ensure_src_on_path
+
+ensure_src_on_path()
+
 from utils.runtime_env import prepare_process_environment
 
 # Must run before OpenCV / FFmpeg-backed imports pull in native loggers.
 prepare_process_environment()
+
+import argparse
 
 from config.constants import APP_VERSION  # noqa: E402
 from ui.windows.runtime import AphelionRuntime  # noqa: E402
@@ -41,10 +47,42 @@ def run(argv: list[str] | None = None) -> int:
 
 
 def main() -> int:
-    """CLI entry used by ``python main.py`` and packaged launchers."""
+    """Parse CLI flags and either freeze a standalone build or launch the editor.
+
+    Returns:
+        Process exit code.
+    """
+    parser = argparse.ArgumentParser(
+        description="Aphelion Editor - A modern, lightweight video editor for the modern age."
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"Aphelion Editor {APP_VERSION}",
+    )
+    parser.add_argument(
+        "--build",
+        action="store_true",
+        help="Build the application as a standalone executable.",
+    )
+    parser.add_argument(
+        "--build-dir",
+        type=str,
+        default=str(DIST_DIR),
+        help="Directory for the frozen executable tree (cx_Freeze build_exe).",
+    )
+
+    args = parser.parse_args()
+
+    if args.build:
+        from build import build_standalone
+
+        build_standalone(build_dir=args.build_dir)
+        return 0
+
     try:
         return run()
-    except Exception:
+    except Exception:  # noqa: BLE001
         get_logger("main").exception("Fatal error during application bootstrap")
         return 1
 
