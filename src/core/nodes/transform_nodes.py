@@ -318,6 +318,7 @@ class CropNode(FrameNode):
         """Register frame sockets and crop controls."""
         self.add_input("frame", NodeSocketType.Frame)
         self.add_output("frame", NodeSocketType.Frame)
+        
         for priority, key, label in (
             (10, "left", "Left"),
             (11, "right", "Right"),

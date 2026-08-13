@@ -1,0 +1,3 @@
+search-path = ["src", "."]
+project-includes = ["src", "tests", "main.py", "build.py", "freeze_config.py", "srcpath.py"]
+project-excludes = [".venv", "build", "dist"]

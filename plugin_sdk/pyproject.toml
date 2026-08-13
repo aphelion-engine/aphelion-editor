@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aphelion-plugin-sdk"
+version = "0.1.0"
+description = "Public SDK for building custom node plugins for the Aphelion video editor."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+dependencies = [
+    "numpy>=1.26.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["aphelion_sdk*"]
+
+[tool.setuptools.package-data]
+aphelion_sdk = ["py.typed"]
+
+[tool.mypy]
+strict = true
+python_version = "3.11"

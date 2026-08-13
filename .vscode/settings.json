@@ -8,6 +8,14 @@
     "cursorpyright.analysis.useLibraryCodeForTypes": true,
     "cursorpyright.analysis.diagnosticMode": "openFilesOnly",
     "cursorpyright.analysis.disableWorkspaceSymbol": true,
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}",
+        "${workspaceFolder}/src"
+    ],
+    "cursorpyright.analysis.extraPaths": [
+        "${workspaceFolder}",
+        "${workspaceFolder}/src"
+    ],
     "cursorpyright.analysis.exclude": [
         "**/.venv",
         "**/__pycache__",

@@ -1,0 +1,17 @@
+{
+  "include": [
+    "src",
+    "tests",
+    "main.py",
+    "build.py",
+    "freeze_config.py",
+    "srcpath.py"
+  ],
+  "extraPaths": [".", "src"],
+  "exclude": [
+    ".venv",
+    "build",
+    "dist",
+    "plugin_sdk"
+  ]
+}
