@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from config.constants import USERDATA_DIR_NAME
 from config.keybinds import KeyAction, KeybindStore
 from core.nodes.registry import global_node_registry
 from core.preferences.models import AppPreferences
@@ -18,7 +19,7 @@ class PreferencesStore:
     """JSON-backed preference document under ``userdata/``."""
 
     def __init__(self, *, path: Path | None = None) -> None:
-        self._path: Path = path or app_data_path("userdata", PREFERENCES_FILENAME)
+        self._path: Path = path or app_data_path(USERDATA_DIR_NAME, PREFERENCES_FILENAME)
         self.preferences: AppPreferences = AppPreferences.defaults()
 
     @property

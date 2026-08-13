@@ -4,6 +4,10 @@ APP_NAME: str = "Aphelion"
 APP_ORGANIZATION: str = "Aphelion"
 APP_VERSION: str = "0.1.0"
 
+# Drop-in plugin folders: bundled ``plugins/`` and writable ``userdata/plugins/``.
+USERDATA_DIR_NAME: str = "userdata"
+PLUGINS_DIR_NAME: str = "plugins"
+
 DEFAULT_FPS: int = 30
 DEFAULT_WIDTH: int = 1920
 DEFAULT_HEIGHT: int = 1080
