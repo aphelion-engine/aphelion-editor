@@ -6,15 +6,14 @@ import sys
 from pathlib import Path
 from typing import Final
 
-from srcpath import BUILD_BASE_DIR, DIST_DIR, ensure_src_on_path
-
-ensure_src_on_path()
-
 from cx_Freeze import Executable, setup
 
 from freeze_config import APP_NAME, DESCRIPTION, VERSION, create_exe_build_options
 from utils.paths import ensure_directory, resource_path
 
+_REPO_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
+BUILD_BASE_DIR: Final[Path] = _REPO_ROOT / "build"
+DIST_DIR: Final[Path] = _REPO_ROOT / "dist"
 _DEFAULT_ENTRY_SCRIPT: Final[str] = "main.py"
 _DEFAULT_TARGET_NAME: Final[str] = "AphelionEditor"
 _GUI_BASE: Final[str] = "gui"

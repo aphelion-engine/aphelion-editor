@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aphelion-editor"
+version = "0.1.0"
+description = "Aphelion Editor — a modern, node-based video editor."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "LicenseRef-Proprietary"
+authors = [{ name = "youthx" }]
+keywords = ["video", "editor", "compositor", "nodes", "aphelion"]
+dependencies = [
+    "PyQt6>=6.6.0",
+    "numpy>=1.26.0",
+    "opencv-python-headless>=4.8.0",
+    "imageio>=2.34.0",
+    "imageio-ffmpeg>=0.4.9",
+    "aphelion-plugin-sdk @ file:../aphelion-sdk",
+]
+
+[project.urls]
+Homepage = "https://github.com/youthx/aphelion-editor"
+Repository = "https://github.com/youthx/aphelion-editor"
+
+[project.optional-dependencies]
+freeze = ["cx_Freeze>=8.6.4"]
+dev = [
+    "pytest>=8.0.0",
+    "mypy>=1.8.0",
+    "build>=1.2.0",
+]
+
+[project.scripts]
+aphelion = "aphelion_cli:main"
+
+[tool.setuptools]
+py-modules = ["aphelion_cli", "freeze_app", "freeze_config"]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+exclude = ["tests*"]

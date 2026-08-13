@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from config.constants import USERDATA_DIR_NAME
 from utils.paths import app_data_path, ensure_directory
 
 RECENT_PROJECTS_FILENAME: str = "recent_projects.json"
@@ -37,7 +38,7 @@ class RecentProjectsStore:
         path: Path | None = None,
         limit: int = DEFAULT_RECENT_LIMIT,
     ) -> None:
-        self._path: Path = path or app_data_path("userdata", RECENT_PROJECTS_FILENAME)
+        self._path: Path = path or app_data_path(USERDATA_DIR_NAME, RECENT_PROJECTS_FILENAME)
         self._limit: int = max(1, limit)
 
     def list_entries(self) -> list[RecentProjectEntry]:
