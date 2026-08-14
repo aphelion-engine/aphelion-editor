@@ -44,13 +44,15 @@ from core.preferences.models import (
     PerformanceSettings,
     ThemeSettings,
 )
+from ui.dialogs.plugin_preferences_tab import PluginPreferencesPage
 from ui.widgets.key_capture import KeyCaptureEdit
 
 
 class PreferencesDialog(QDialog):
-    """Modal preferences editor for settings, keybinds, themes, and node colors."""
+    """Modal preferences editor for settings, plugins, keybinds, themes, and node colors."""
 
     applied = pyqtSignal()
+    plugins_reloaded = pyqtSignal(int)
 
     def __init__(
         self,
@@ -66,6 +68,8 @@ class PreferencesDialog(QDialog):
         self._node_color_widgets: dict[str, QPushButton] = {}
         self._key_fields: dict[KeyAction, KeyCaptureEdit] = {}
         self._slot_fields: dict[str, KeyCaptureEdit] = {}
+        self._plugin_page = PluginPreferencesPage(self._working.plugins)
+        self._plugin_page.plugins_reloaded.connect(self.plugins_reloaded.emit)
 
         self.setObjectName("PreferencesDialog")
         self.setWindowTitle("Preferences")
@@ -85,6 +89,7 @@ class PreferencesDialog(QDialog):
         tabs.setObjectName("PreferencesTabs")
         tabs.addTab(self._build_general_tab(), "General")
         tabs.addTab(self._build_performance_tab(), "Performance")
+        tabs.addTab(self._plugin_page, "Plugins")
         tabs.addTab(self._build_keybinds_tab(), "Keybinds")
         tabs.addTab(self._build_theme_tab(), "Appearance")
         tabs.addTab(self._build_node_colors_tab(), "Node Colors")
@@ -111,6 +116,11 @@ class PreferencesDialog(QDialog):
     def keybinds(self) -> KeybindStore:
         """Return the draft keybind store edited in the dialog."""
         return self._draft_keybinds
+
+    @property
+    def plugins_were_reloaded(self) -> bool:
+        """Return whether the user reloaded plugins during this session."""
+        return self._plugin_page.did_reload
 
     def _apply_dialog_style(self) -> None:
         styles = build_theme_styles(self._theme_tokens)
@@ -604,6 +614,7 @@ class PreferencesDialog(QDialog):
                 active_theme_id=theme_id,
                 custom_tokens=None,
             )
+        self._working.plugins = self._plugin_page.collect_settings()
 
     def _on_apply_clicked(self) -> None:
         self._collect_preferences()

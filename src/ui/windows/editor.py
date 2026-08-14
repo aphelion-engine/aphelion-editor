@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
 )
 
 from app_io import APH_FILE_FILTER, AphFormatError, load_aph, save_aph
+from app_io.plugin_loader import PluginLoader, plugin_registry_key
 from config.constants import AUTOSAVE_INTERVAL_MS
 from config.keybinds import KeybindStore
 from config.theme import DARK_THEME
@@ -40,6 +41,7 @@ from ui.dialogs import (
     ProjectSettingsDialog,
     ShortcutsDialog,
 )
+from ui.dialogs.plugin_dialog import open_attached_dialog
 from ui.keybinds import EditorActions, status_hint_line
 from ui.node_graph import NodeGraphView
 from ui.node_graph import operations as node_ops
@@ -54,7 +56,10 @@ from ui.widgets import (
 )
 from ui.windows.layouts import EditorDocks, LayoutMode, apply_layout
 from ui.windows.menubar import build_menu_bar
+from ui.windows.plugin_panels import mount_plugin_panels
 from ui.windows.toolbar import build_pin_bar, resolve_pinned_actions, sync_pin_bar
+from aphelion_sdk.widgets.host import WidgetContext
+from ui.widgets.plugin_host import EditorWidgetHost
 from utils.logging_setup import get_logger
 from utils.paths import resource_path
 
@@ -98,6 +103,7 @@ class Editor(QMainWindow):
         self.redo_action: QAction | None = None
         self.actions: EditorActions
         self.docks: EditorDocks
+        self.plugin_docks: list[QDockWidget] = []
         self.pin_bar: QToolBar
         self._key_hint_label: QLabel | None = None
         self._status_bar: EditorStatusBar | None = None
@@ -155,6 +161,7 @@ class Editor(QMainWindow):
         )
 
         self.timeline.playback_changed.connect(self.viewport.set_playback_active)
+        # pyrefly: ignore [missing-attribute]
         self.node_graph.scene.selectionChanged.connect(self.on_graph_selection_changed)
         self.media_pool.media_selected.connect(self._focus_media_node)
 
@@ -165,10 +172,19 @@ class Editor(QMainWindow):
         self.tabifyDockWidget(properties_dock, keyframes_dock)
         properties_dock.raise_()
 
+        self.properties.set_widget_host_factory(
+            lambda ctx: EditorWidgetHost(self, ctx)
+        )
+        self.properties.custom_editor_requested.connect(
+            self._on_custom_property_editor
+        )
+        mount_plugin_panels(self)
+
         self.actions = EditorActions(self, self.keybinds)
         self.actions.build()
         self.pin_bar = build_pin_bar(self)
         sync_pin_bar(self)
+        # pyrefly: ignore [missing-attribute]
         self.pin_bar.toggleViewAction().toggled.connect(
             self._persist_pin_bar_visibility
         )
@@ -374,7 +390,11 @@ class Editor(QMainWindow):
         dialog.applied.connect(
             lambda: self._apply_preferences_dialog(dialog, persist=False)
         )
+        dialog.plugins_reloaded.connect(self._refresh_plugin_ui)
         if dialog.exec() != PreferencesDialog.DialogCode.Accepted:
+            if dialog.plugins_were_reloaded:
+                PluginLoader.reload(self.preferences_store.preferences.plugins)
+                self._refresh_plugin_ui()
             return
         self._apply_preferences_dialog(dialog, persist=True)
 
@@ -385,15 +405,53 @@ class Editor(QMainWindow):
         persist: bool,
     ) -> None:
         """Apply preferences edited in ``dialog`` to the live editor."""
+        previous_plugins = self.preferences_store.preferences.plugins
         self.preferences_store.preferences = dialog.preferences
         self.preferences_store.capture_keybinds(dialog.keybinds)
         self.preferences_store.apply_keybinds(self.keybinds)
         self.actions.reapply_shortcuts()
-        self.actions.refresh_node_create_actions()
-        build_menu_bar(self)
+        if previous_plugins != dialog.preferences.plugins:
+            PluginLoader.reload(dialog.preferences.plugins)
+        self._refresh_plugin_ui()
         apply_preferences_to_editor(self, self.preferences_store.preferences)
         if persist:
             self.preferences_store.save()
+
+    def _refresh_plugin_ui(self, _count: int = 0) -> None:
+        """Rebuild menus and plugin-attached docks after plugins change."""
+        mount_plugin_panels(self)
+        self.actions.refresh_node_create_actions()
+        build_menu_bar(self)
+
+    def open_plugin_dialog(
+        self,
+        widget_id: str,
+        context: WidgetContext | None = None,
+    ) -> bool:
+        """Open a dialog widget attached to the plugin in ``context``."""
+        bound = context or WidgetContext(project_name=self.project.name)
+        host = EditorWidgetHost(self, bound)
+        return open_attached_dialog(self, widget_id, host)
+
+    def _on_custom_property_editor(
+        self,
+        node_id: str,
+        prop_name: str,
+        widget_id: str,
+    ) -> None:
+        """Open the parent plugin's dialog for a custom inspector property."""
+        node = self.project.nodes.get(node_id)
+        if node is None:
+            return
+        self.open_plugin_dialog(
+            widget_id,
+            context=WidgetContext(
+                plugin_key=plugin_registry_key(type(node)),
+                node_id=node_id,
+                property_key=prop_name,
+                project_name=self.project.name,
+            ),
+        )
 
     def set_pin_bar_visible(self, visible: bool) -> None:
         """Show or hide the pin bar (persistence handled by the toggle signal)."""
@@ -745,7 +803,7 @@ class Editor(QMainWindow):
 
     def show_all_panels(self) -> None:
         """Ensure every dock is visible and docked."""
-        for dock in (*self.docks.all(), *self.docks.optional()):
+        for dock in (*self.docks.all(), *self.docks.optional(), *self.plugin_docks):
             dock.show()
             dock.setFloating(False)
         status = self.statusBar()

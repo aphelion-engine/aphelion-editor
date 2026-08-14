@@ -152,6 +152,27 @@ def color_property(
     )
 
 
+def custom_property(
+    value: object,
+    *,
+    widget_id: str,
+    priority: int,
+    group: str,
+    label: str,
+    description: str,
+) -> NodeProperty:
+    """Create a custom inspector property bound to a dialog plugin id."""
+    return NodeProperty(
+        input_type=NodePropertyInputType.Custom,
+        value=value,
+        priority=priority,
+        group=group,
+        label=label,
+        description=description,
+        custom_widget_id=widget_id,
+    )
+
+
 def choice_property(
     value: Enum,
     *,

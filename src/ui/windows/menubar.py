@@ -7,11 +7,13 @@ from typing import TYPE_CHECKING
 from PyQt6.QtGui import QAction, QActionGroup
 from PyQt6.QtWidgets import QDockWidget, QMenu, QMenuBar
 
+from aphelion_sdk.widgets.host import WidgetContext
 from config.keybinds import KeyAction
 from config.theme import CONTEXT_MENU_STYLE, MENUBAR_STYLE
 from ui.icons import AppIcon, make_icon
 from ui.node_graph.node_menu import populate_add_node_menu
 from ui.windows.layouts import LAYOUT_LABELS, LayoutMode
+from core.widgets.registry import global_widget_registry
 
 if TYPE_CHECKING:
     from ui.windows.editor import Editor
@@ -166,7 +168,23 @@ def _build_window_menu(menubar: QMenuBar, editor: Editor) -> None:
     panels_menu = window_menu.addMenu("Panels")
     assert panels_menu is not None
     _style_menu(panels_menu)
+    _populate_panels_menu(panels_menu, editor)
 
+    window_menu.addSeparator()
+    _build_plugin_windows_menu(window_menu, editor)
+
+    window_menu.addSeparator()
+    _build_pin_bar_entries(window_menu, editor)
+
+    window_menu.addSeparator()
+    reset_window = window_menu.addAction("Reset Layout")
+    assert reset_window is not None
+    reset_window.setStatusTip(editor.actions.store.spec(KeyAction.RESET_LAYOUT).description)
+    reset_window.triggered.connect(editor.reset_layout)
+
+
+def _populate_panels_menu(panels_menu: QMenu, editor: Editor) -> None:
+    """Add built-in and plugin-attached dock toggles."""
     panel_entries: tuple[tuple[str, QDockWidget], ...] = (
         ("Viewport", editor.docks.viewport),
         ("Node Graph", editor.docks.node_graph),
@@ -177,27 +195,57 @@ def _build_window_menu(menubar: QMenuBar, editor: Editor) -> None:
         ("Logs", editor.docks.logs),
     )
     for label, dock in panel_entries:
-        action = QAction(label, editor)
-        action.setCheckable(True)
-        action.setChecked(dock.isVisible())
-        dock.visibilityChanged.connect(action.setChecked)
-        action.triggered.connect(
-            lambda checked=False, d=dock: d.setVisible(bool(checked))
-        )
-        panels_menu.addAction(action)
-
+        _add_dock_toggle(panels_menu, editor, label, dock)
+    if editor.plugin_docks:
+        panels_menu.addSeparator()
+        for dock in editor.plugin_docks:
+            title: str = dock.windowTitle() or "Plugin"
+            _add_dock_toggle(panels_menu, editor, title, dock)
     panels_menu.addSeparator()
     _add_action(panels_menu, editor, KeyAction.SHOW_ALL_PANELS)
     _add_action(panels_menu, editor, KeyAction.TOGGLE_LOGS)
 
-    window_menu.addSeparator()
-    _build_pin_bar_entries(window_menu, editor)
 
-    window_menu.addSeparator()
-    reset_window = window_menu.addAction("Reset Layout")
-    assert reset_window is not None
-    reset_window.setStatusTip(editor.actions.store.spec(KeyAction.RESET_LAYOUT).description)
-    reset_window.triggered.connect(editor.reset_layout)
+def _add_dock_toggle(
+    menu: QMenu,
+    editor: Editor,
+    label: str,
+    dock: QDockWidget,
+) -> None:
+    """Add a checkable visibility action for ``dock``."""
+    action = QAction(label, editor)
+    action.setCheckable(True)
+    action.setChecked(dock.isVisible())
+    dock.visibilityChanged.connect(action.setChecked)
+    action.triggered.connect(
+        lambda checked=False, d=dock: d.setVisible(bool(checked))
+    )
+    menu.addAction(action)
+
+
+def _build_plugin_windows_menu(window_menu: QMenu, editor: Editor) -> None:
+    """Add popups attached to loaded plugins, labeled with the parent plugin."""
+    dialogs = global_widget_registry.dialogs(menu_only=True)
+    if not dialogs:
+        return
+    plugin_menu = window_menu.addMenu("Plugin Windows")
+    assert plugin_menu is not None
+    _style_menu(plugin_menu)
+    for registration in dialogs:
+        label: str = f"{registration.plugin_name} — {registration.title}"
+        action = QAction(label, editor)
+        action.triggered.connect(
+            lambda _checked=False, key=registration.plugin_key, wid=registration.widget_id: (
+                editor.open_plugin_dialog(
+                    wid,
+                    context=WidgetContext(
+                        plugin_key=key,
+                        project_name=editor.project.name,
+                    ),
+                )
+            )
+        )
+        plugin_menu.addAction(action)
 
 
 def _build_render_menu(menubar: QMenuBar, editor: Editor) -> None:

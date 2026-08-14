@@ -809,6 +809,46 @@ STATUS_BAR_STYLE = """
     }
 """
 
+PLUGIN_SURFACE_STYLE = """
+    QWidget#PluginSurface {
+        background-color: transparent;
+        color: #e6e6e6;
+    }
+    QLabel#PluginSurfaceLabel {
+        color: #c8c8d0;
+        font-size: 12px;
+    }
+    QPushButton#PluginSurfaceButton {
+        background-color: #2a2a32;
+        color: #e6e6e6;
+        border: 1px solid #3a3a44;
+        border-radius: 4px;
+        padding: 4px 10px;
+        min-height: 24px;
+    }
+    QPushButton#PluginSurfaceButton:hover {
+        background-color: #3a3a44;
+    }
+    QLineEdit#PluginSurfaceText {
+        background-color: #1a1a1e;
+        color: #e6e6e6;
+        border: 1px solid #3a3a44;
+        border-radius: 4px;
+        padding: 4px 8px;
+        min-height: 24px;
+    }
+    QFrame#PluginSurfaceDivider {
+        color: #3a3a44;
+    }
+"""
+
+PLUGIN_DIALOG_STYLE = """
+    QDialog#PluginPopupDialog {
+        background-color: #1a1a1e;
+        color: #e6e6e6;
+    }
+"""
+
 ABOUT_DIALOG_STYLE = """
     QDialog#AboutDialog {
         background-color: #1a1a1e;

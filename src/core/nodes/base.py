@@ -81,6 +81,8 @@ class NodePropertyInputType(IntEnum):
     # Distinct from ``File`` only so the Properties panel's browse dialog
     # can show an image-specific filter instead of the video one.
     ImageFile = auto()
+    Custom = auto()
+
 
 
 # RGB color property values are ``tuple[int, int, int]`` in 0–255.
@@ -107,6 +109,8 @@ class NodeProperty:
     label: str | None = None
     description: str = ""
     suffix: str = ""
+    # DialogWidget id on the parent plugin, used when ``input_type`` is Custom.
+    custom_widget_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         from core.serialization import encode_value
@@ -121,6 +125,7 @@ class NodeProperty:
             "label": self.label,
             "description": self.description,
             "suffix": self.suffix,
+            "custom_widget_id": self.custom_widget_id,
         }
 
 

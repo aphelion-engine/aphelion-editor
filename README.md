@@ -17,7 +17,7 @@ Version **0.1.0**. Requires **Python 3.11+**.
 - **Timeline and keyframes** — playback, in/out marks, and animated node properties. Default project is 1920×1080 at 30 fps, 10 seconds.
 - **Projects** — `.aph` JSON documents with autosave (every 30 seconds once a path exists).
 - **Export** — MP4 video or PNG image sequence from the active Viewer, on a background worker.
-- **Plugins** — third-party nodes via the [Aphelion Plugin SDK](../aphelion-sdk/README.md), discovered in-process or through the `aphelion.plugins` entry-point group.
+- **Plugins** — third-party nodes via the [Aphelion Plugin SDK](../aphelion-sdk/README.md), discovered in-process or through the `aphelion.plugins` entry-point group. Enable, disable, and reload them from **Preferences → Plugins**.
 
 ---
 
@@ -100,9 +100,13 @@ Standalone freeze is separate from pip wheels. Intermediates go to `build/`; the
 ```bash
 python main.py --build
 python main.py --build --build-dir path/to/output
+python main.py --build-installer
+python main.py --build-installer --build-dir path/to/output
 ```
 
 On Windows the frozen binary is `AphelionEditor.exe`. The freeze copies `resources/`, `userdata/`, `plugins/`, and `logs/` into the output tree.
+
+`--build-installer` is Windows-only. It freezes the editor and packages a Start Menu MSI (`AphelionEditor-0.1.0-win64.msi` by default) into `dist/` (or `--build-dir`). Requires the `freeze` extra (`cx_Freeze`). If both `--build` and `--build-installer` are passed, the installer path is used.
 
 ---
 
@@ -147,6 +151,8 @@ Plugins are discovered at boot from:
 1. `plugins/*.py` (bundled) and `userdata/plugins/*.py` (user)
 2. The `aphelion.plugins` entry-point group on installed packages
 3. Classes decorated with `@aphelion_sdk.register_plugin`
+
+**Preferences → Plugins** lists discovered plugins, lets you enable or disable them, toggle bundled/user/entry-point loading, open the plugin folders, and **Reload plugins** without restarting. Disabled plugins stay discovered but are omitted from Add Node. Reload applies to newly created nodes; reopen the project to refresh existing plugin nodes on the graph.
 
 See [`../aphelion-sdk/README.md`](../aphelion-sdk/README.md) and `../aphelion-sdk/examples/grayscale_effect.py`.
 
