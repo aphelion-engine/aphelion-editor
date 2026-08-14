@@ -50,7 +50,12 @@ class PropertyWidget(QWidget):
         """Replace the current editor value."""
         raise NotImplementedError
 
+class CustomPropertyWidget(PropertyWidget):
+    """Custom property widget."""
 
+    def __init__(self, prop: NodeProperty, parent: QWidget | None = None) -> None:
+        ...
+        
 class NumberPropertyWidget(PropertyWidget):
     """Integer or floating-point spin box."""
 
@@ -337,6 +342,43 @@ class CheckboxPropertyWidget(PropertyWidget):
         self.checkbox.blockSignals(True)
         self.checkbox.setChecked(bool(value))
         self.checkbox.blockSignals(False)
+
+
+class CustomPropertyWidget(PropertyWidget):
+    """Edit button that opens a dialog widget on the parent plugin."""
+
+    edit_requested = pyqtSignal()
+
+    def __init__(self, prop: NodeProperty, parent: QWidget | None = None) -> None:
+        """Build a summary label and Edit action."""
+        super().__init__(prop, parent)
+        self._summary: QLabel = QLabel(_custom_summary(prop.value))
+        self._summary.setObjectName("PropertyCustomSummary")
+        self._button: QPushButton = QPushButton("Edit…")
+        self._button.setObjectName("PropertyCustomButton")
+        self._button.setFixedHeight(CONTROL_HEIGHT_PX)
+        self._button.clicked.connect(self.edit_requested.emit)
+        self._row.addWidget(self._summary, 1)
+        self._row.addWidget(self._button)
+
+    def get_value(self) -> Any:
+        """Return the stored property value."""
+        return self.prop.value
+
+    def set_value(self, value: Any) -> None:
+        """Refresh the summary from ``value``."""
+        self.prop.value = value
+        self._summary.setText(_custom_summary(value))
+
+
+def _custom_summary(value: Any) -> str:
+    """Return a compact inspector summary for a custom property value."""
+    if value is None or value == "":
+        return "—"
+    text: str = str(value)
+    if len(text) > 32:
+        return text[:31] + "…"
+    return text
 
 
 class ColorSwatch(QWidget):

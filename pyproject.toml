@@ -36,7 +36,7 @@ dev = [
 aphelion = "aphelion_cli:main"
 
 [tool.setuptools]
-py-modules = ["aphelion_cli", "freeze_app", "freeze_config"]
+py-modules = ["aphelion_cli", "freeze_app", "freeze_config", "installer_build"]
 include-package-data = true
 
 [tool.setuptools.packages.find]

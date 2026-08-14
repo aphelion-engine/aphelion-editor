@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from enum import Enum
+from collections.abc import Callable
 from typing import Any
 
 from PyQt6.QtCore import QObject, Qt, QThread, pyqtSignal
@@ -45,6 +46,8 @@ from core.nodes.property_link import (
     PROPERTY_LINK_SOURCE_SLOT,
     node_reference_id,
 )
+from aphelion_sdk.widgets.host import WidgetContext, WidgetHost, WidgetView
+from app_io.plugin_loader import plugin_registry_key
 from core.project import Project
 from render.tracking_worker import (
     PlanarTrackingWorker,
@@ -55,6 +58,7 @@ from render.video_decoder import probe_video
 from ui.widgets.property_editors import (
     CheckboxPropertyWidget,
     ColorPropertyWidget,
+    CustomPropertyWidget,
     EnumPropertyWidget,
     FilePropertyWidget,
     KeyframeButtonWidget,
@@ -106,6 +110,8 @@ class MediaProbeThread(QThread):
 class PropertiesPanel(QWidget):
     """Edit selected node properties without stacking previous UI."""
 
+    custom_editor_requested = pyqtSignal(str, str, str)
+
     def __init__(self, project: Project, history: HistoryStack) -> None:
         super().__init__()
         self.setObjectName("PropertiesPanel")
@@ -118,6 +124,7 @@ class PropertiesPanel(QWidget):
         self.keyframe_buttons: dict[str, KeyframeButtonWidget] = {}
         self._probe_thread: MediaProbeThread | None = None
         self._probe_generation: int = 0
+        self._widget_host_factory: Callable[[WidgetContext], WidgetHost] | None = None
 
         root: QVBoxLayout = QVBoxLayout(self)
         root.setContentsMargins(5, 5, 5, 5)
@@ -138,6 +145,13 @@ class PropertiesPanel(QWidget):
 
         self.project.subscribe(self.on_project_changed)
         self._show_empty_state("Select a node")
+
+    def set_widget_host_factory(
+        self,
+        factory: Callable[[WidgetContext], WidgetHost],
+    ) -> None:
+        """Inject the editor host used for plugin-attached inspector widgets."""
+        self._widget_host_factory = factory
 
     def set_project(self, project: Project, history: HistoryStack) -> None:
         """Retarget the panel at a newly loaded project / history stack."""
@@ -307,7 +321,8 @@ class PropertiesPanel(QWidget):
         layout: QVBoxLayout = self._replace_content()
         self._add_node_header(layout, node)
         has_properties: bool = self._add_property_rows(layout, node)
-        if not has_properties:
+        has_plugin_ui: bool = self._add_plugin_property_panel(layout, node)
+        if not has_properties and not has_plugin_ui:
             empty: QLabel = QLabel("No properties")
             empty.setObjectName("PropertiesEmptyLabel")
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -367,6 +382,32 @@ class PropertiesPanel(QWidget):
             )
             layout.addWidget(row)
         return has_properties
+
+    def _add_plugin_property_panel(self, layout: QVBoxLayout, node: Node) -> bool:
+        """Embed a plugin-attached inspector section when the node provides one."""
+        if self._widget_host_factory is None or self.current_node_id is None:
+            return False
+        host = self._widget_host_factory(
+            WidgetContext(
+                plugin_key=plugin_registry_key(type(node)),
+                node_id=self.current_node_id,
+                project_name=self.project.name,
+            )
+        )
+        native = _realize_property_qt_widget(node, host, self)
+        if native is None:
+            builder = getattr(node, "build_property_panel", None)
+            if builder is None:
+                return False
+            view: WidgetView | None = _safe_build_property_panel(builder, host)
+            native = _native_plugin_widget(view)
+        if native is None:
+            return False
+        section: QLabel = QLabel("PLUGIN")
+        section.setObjectName("PropertySectionLabel")
+        layout.addWidget(section)
+        layout.addWidget(native)
+        return True
 
     def _build_keyframe_button(
         self,
@@ -595,6 +636,10 @@ class PropertiesPanel(QWidget):
             editor.color_changed.connect(
                 lambda rgb, p=prop_name: self.update_property(p, rgb)
             )
+        elif isinstance(editor, CustomPropertyWidget):
+            editor.edit_requested.connect(
+                lambda p=prop_name: self._emit_custom_editor(p)
+            )
 
     def _create_property_widget(
         self,
@@ -656,7 +701,25 @@ class PropertiesPanel(QWidget):
             if not isinstance(prop.value, Enum):
                 return None
             return EnumPropertyWidget(prop, type(prop.value))
+        if prop.input_type == NodePropertyInputType.Custom:
+            return CustomPropertyWidget(prop)
         return None
+
+    def _emit_custom_editor(self, prop_name: str) -> None:
+        """Ask the editor to open the dialog widget attached to this plugin."""
+        if self.current_node_id is None:
+            return
+        node = self.project.nodes.get(self.current_node_id)
+        if node is None:
+            return
+        prop = node.get_property(prop_name)
+        if prop is None or not prop.custom_widget_id:
+            return
+        self.custom_editor_requested.emit(
+            self.current_node_id,
+            prop_name,
+            prop.custom_widget_id,
+        )
 
     def update_property(self, prop_name: str, value: Any) -> None:
         """Write a property value through history (coalesces rapid edits)."""
@@ -783,3 +846,45 @@ class PropertiesPanel(QWidget):
         if file_path:
             widget.set_value(file_path)
             self.update_property(prop_name, file_path)
+
+
+def _safe_build_property_panel(
+    builder: Callable[[WidgetHost], WidgetView | None],
+    host: WidgetHost,
+) -> WidgetView | None:
+    """Call ``builder`` and swallow construction errors."""
+    try:
+        return builder(host)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _realize_property_qt_widget(
+    node: Node,
+    host: WidgetHost,
+    parent: QWidget,
+) -> QWidget | None:
+    """Return ``build_property_qt_widget`` when it yields a QWidget."""
+    builder = getattr(node, "build_property_qt_widget", None)
+    if not callable(builder):
+        return None
+    try:
+        built = builder(parent, host)
+    except Exception:  # noqa: BLE001
+        return None
+    if isinstance(built, QWidget):
+        return built
+    return None
+
+
+def _native_plugin_widget(view: WidgetView | None) -> QWidget | None:
+    """Return the Qt widget for a plugin inspector view."""
+    if view is None:
+        return None
+    getter = getattr(view, "native_widget", None)
+    if not callable(getter):
+        return None
+    widget = getter()
+    if isinstance(widget, QWidget):
+        return widget
+    return None

@@ -60,12 +60,48 @@ class NodeRegistry:
         description: str = "",
         color: tuple[int, int, int] = (100, 100, 100),
     ) -> None:
+        """Register a creatable node type, replacing any existing same key.
+
+        Parameters:
+            node_class: Concrete ``Node`` subclass to construct.
+            category: Menu group shown in Add Node.
+            name: Display name and type id within ``category``.
+            description: Tooltip / search text.
+            color: Default header RGB.
+
+        Side effects:
+            Mutates the in-memory registry.
+        """
         key = f"{category}.{name}"
         self._nodes[key] = NodeInfo(node_class, category, name, description, color)
         if category not in self._categories:
             self._categories[category] = []
         if name not in self._categories[category]:
             self._categories[category].append(name)
+
+    def unregister(self, category: str, name: str) -> bool:
+        """Remove a registered node type.
+
+        Parameters:
+            category: Menu group the type was registered under.
+            name: Display name / type id within ``category``.
+
+        Returns:
+            ``True`` when a type was removed; ``False`` if it was not registered.
+
+        Side effects:
+            Drops the type from lookup tables. Existing node instances are unchanged.
+        """
+        key = f"{category}.{name}"
+        if key not in self._nodes:
+            return False
+        del self._nodes[key]
+        names = self._categories.get(category, [])
+        if name in names:
+            names.remove(name)
+        if not names:
+            self._categories.pop(category, None)
+        return True
 
     def get_categories(self) -> list[str]:
         return list(self._categories.keys())

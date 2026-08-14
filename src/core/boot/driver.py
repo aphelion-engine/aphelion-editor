@@ -12,6 +12,8 @@ from app_io.node_loader import NodeLoader
 from app_io.plugin_loader import PluginLoader
 from core.boot.request import BootMode, BootRequest
 from core.nodes.video_input import VideoInputNode
+from core.preferences.models import PluginSettings
+from core.preferences.store import PreferencesStore
 from core.project import Project
 from utils.logging_setup import get_logger
 
@@ -110,7 +112,8 @@ class EditorBootDriver:
         return BootStageResult(True, f"Registered {count} built-in node type(s)")
 
     def _stage_load_plugins(self) -> BootStageResult:
-        count = PluginLoader.load_installed()
+        settings = _load_plugin_settings()
+        count = PluginLoader.load_installed(settings)
         return BootStageResult(True, f"Registered {count} plugin node type(s)")
 
     def _stage_load_project(self) -> BootStageResult:
@@ -162,3 +165,10 @@ class EditorBootDriver:
             True,
             f"Probed media sources ({probed} ok, {missing} unavailable)",
         )
+
+
+def _load_plugin_settings() -> PluginSettings:
+    """Load persisted plugin discovery flags, falling back to defaults."""
+    store = PreferencesStore()
+    store.load()
+    return store.preferences.plugins

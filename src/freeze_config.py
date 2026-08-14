@@ -48,6 +48,15 @@ DEFAULT_EXCLUDES: Final[list[str]] = [
     "tests",
 ]
 
+# Stable upgrade GUID so newer MSIs replace older Aphelion Editor installs.
+MSI_UPGRADE_CODE: Final[str] = "{412A43A8-9158-59E0-9642-D4918B488D95}"
+MSI_SHORTCUT_DIR: Final[str] = "Aphelion"
+MSI_OUTPUT_STEM: Final[str] = "AphelionEditor"
+MSI_OUTPUT_NAME: Final[str] = f"{MSI_OUTPUT_STEM}-{VERSION}-win64.msi"
+MSI_INITIAL_TARGET_DIR: Final[str] = (
+    r"[ProgramFiles64Folder]\Aphelion\Aphelion Editor"
+)
+
 
 def _module_finder_path() -> list[str]:
     """Return import paths for the freezer: ``src/`` and ``aphelion-sdk/`` first.
@@ -93,4 +102,46 @@ def create_exe_build_options(
         "include_files": include_files if include_files is not None else list(INCLUDE_FILES),
         "optimize": optimize_level,
         "path": _module_finder_path(),
+    }
+
+
+def create_msi_options(
+    *,
+    dist_dir: Path,
+    install_icon: Path,
+) -> dict[str, object]:
+    """Return cx_Freeze ``bdist_msi`` options for a Windows installer.
+
+    Parameters:
+        dist_dir: Directory that receives the ``.msi`` file.
+        install_icon: Icon shown in Apps & Features during install.
+
+    Returns:
+        Mapping suitable for ``setup(options={"bdist_msi": ...})``.
+
+    Side effects:
+        None.
+    """
+    return {
+        "upgrade_code": MSI_UPGRADE_CODE,
+        "add_to_path": False,
+        "all_users": True,
+        "initial_target_dir": MSI_INITIAL_TARGET_DIR,
+        "install_icon": str(install_icon),
+        "dist_dir": str(dist_dir),
+        "product_name": APP_NAME,
+        "product_version": VERSION,
+        "output_name": MSI_OUTPUT_NAME,
+        "launch_on_finish": True,
+        "summary_data": {
+            "author": "youthx",
+            "comments": DESCRIPTION,
+            "keywords": "video,editor,aphelion",
+        },
+        "data": {
+            "Directory": [
+                ("ProgramMenuFolder", "TARGETDIR", "."),
+                (MSI_SHORTCUT_DIR, "ProgramMenuFolder", "APHLI~1|Aphelion"),
+            ],
+        },
     }

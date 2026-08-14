@@ -24,6 +24,9 @@ def create_executable(
     entry: str = _DEFAULT_ENTRY_SCRIPT,
     target_name: str = _DEFAULT_TARGET_NAME,
     base: str = _GUI_BASE,
+    *,
+    shortcut_name: str | None = None,
+    shortcut_dir: str | None = None,
 ) -> Executable:
     """Build a cx_Freeze executable descriptor for the GUI editor.
 
@@ -31,6 +34,8 @@ def create_executable(
         entry: Python script used as the frozen process entry point.
         target_name: Output executable stem. cx_Freeze appends ``.exe`` on Windows.
         base: cx_Freeze bootstrap. ``gui`` replaces the removed ``Win32GUI`` name.
+        shortcut_name: Optional Start Menu shortcut label (MSI builds).
+        shortcut_dir: Optional Start Menu folder id matching the MSI Directory table.
 
     Returns:
         Configured ``Executable`` ready to pass to ``setup``.
@@ -42,11 +47,20 @@ def create_executable(
         None.
     """
     icon_path: Path = resource_path(_ICON_NAME)
+    if shortcut_name is None or shortcut_dir is None:
+        return Executable(
+            script=entry,
+            target_name=target_name,
+            base=base,
+            icon=str(icon_path),
+        )
     return Executable(
         script=entry,
         target_name=target_name,
         base=base,
         icon=str(icon_path),
+        shortcut_name=shortcut_name,
+        shortcut_dir=shortcut_dir,
     )
 
 

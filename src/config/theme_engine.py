@@ -296,6 +296,11 @@ def _preferences_style(t: ThemeTokens) -> str:
         color: {t.text_muted};
         font-size: 11px;
     }}
+    QLabel#PreferencesPath,
+    QLabel#PreferencesStatus {{
+        color: {t.text_secondary};
+        font-size: 11px;
+    }}
     QLineEdit#KeyCaptureField,
     QSpinBox#PreferencesSpin,
     QComboBox#PreferencesCombo,

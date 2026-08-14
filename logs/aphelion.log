@@ -4972,3 +4972,11 @@ TypeError: VideoInputNode.prepare_evaluation() got an unexpected keyword argumen
 2026-08-13 16:37:56 | INFO     | aphelion.editor | Closing editor for project 'Untitled Project'
 2026-08-13 16:37:56 | INFO     | aphelion.session | Editor destroyed — quitting application
 2026-08-13 16:37:56 | INFO     | aphelion.runtime | Event loop exited with code 0
+2026-08-13 19:10:17 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-08-13 19:10:17 | INFO     | aphelion | Log file: C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\logs\aphelion.log
+2026-08-13 19:10:17 | INFO     | aphelion.runtime | Runtime ready — starting session
+2026-08-13 19:10:17 | INFO     | aphelion.session | Session start → project launcher
+2026-08-13 19:10:17 | INFO     | aphelion.runtime | Entering Qt event loop
+2026-08-13 19:10:17 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(488, 207, 560, 480))
+2026-08-13 19:10:19 | INFO     | aphelion.session | Launcher closed without a project — quitting
+2026-08-13 19:10:19 | INFO     | aphelion.runtime | Event loop exited with code 0

@@ -173,6 +173,72 @@ def _clamp(value: int, minimum: int, maximum: int) -> int:
     return max(minimum, min(maximum, value))
 
 
+def _as_dict(raw: object) -> dict[str, Any]:
+    """Return ``raw`` when it is a dict, otherwise an empty dict."""
+    return raw if isinstance(raw, dict) else {}
+
+
+def _as_str_list(raw: object, default: list[str]) -> list[str]:
+    """Return ``raw`` as a string list, or a copy of ``default``."""
+    if not isinstance(raw, list):
+        return list(default)
+    return [str(item) for item in raw]
+
+
+def _str_str_map(raw: object) -> dict[str, str]:
+    """Return a string-to-string mapping copied from ``raw``."""
+    if not isinstance(raw, dict):
+        return {}
+    return {str(key): str(value) for key, value in raw.items()}
+
+
+def _dict_list(raw: object) -> list[dict[str, Any]]:
+    """Return dict items from a JSON list, skipping other values."""
+    if not isinstance(raw, list):
+        return []
+    return [item for item in raw if isinstance(item, dict)]
+
+
+def _node_colors_from_raw(raw: object) -> dict[str, list[int]]:
+    """Parse persisted node-color overrides ``{key: [r, g, b]}``."""
+    colors: dict[str, list[int]] = {}
+    if not isinstance(raw, dict):
+        return colors
+    for key, value in raw.items():
+        if isinstance(value, list):
+            colors[str(key)] = [int(channel) for channel in value[:3]]
+    return colors
+
+
+@dataclass
+class PluginSettings:
+    """How third-party plugins are discovered, enabled, and reloaded."""
+
+    load_bundled: bool = True
+    load_user: bool = True
+    load_entry_points: bool = True
+    disabled_plugin_keys: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize plugin preferences to JSON-compatible data."""
+        return {
+            "load_bundled": self.load_bundled,
+            "load_user": self.load_user,
+            "load_entry_points": self.load_entry_points,
+            "disabled_plugin_keys": list(self.disabled_plugin_keys),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> PluginSettings:
+        """Deserialize plugin preferences from JSON-compatible data."""
+        return cls(
+            load_bundled=bool(data.get("load_bundled", True)),
+            load_user=bool(data.get("load_user", True)),
+            load_entry_points=bool(data.get("load_entry_points", True)),
+            disabled_plugin_keys=_as_str_list(data.get("disabled_plugin_keys"), []),
+        )
+
+
 @dataclass
 class AppPreferences:
     """Root persisted preference document."""
@@ -181,6 +247,7 @@ class AppPreferences:
     editor: EditorSettings = field(default_factory=EditorSettings)
     theme: ThemeSettings = field(default_factory=ThemeSettings)
     performance: PerformanceSettings = field(default_factory=PerformanceSettings)
+    plugins: PluginSettings = field(default_factory=PluginSettings)
     node_colors: dict[str, list[int]] = field(default_factory=dict)
     keybinds: dict[str, str] = field(default_factory=dict)
     node_create_slots: list[dict[str, Any]] = field(default_factory=list)
@@ -194,6 +261,7 @@ class AppPreferences:
             "editor": self.editor.to_dict(),
             "theme": self.theme.to_dict(),
             "performance": self.performance.to_dict(),
+            "plugins": self.plugins.to_dict(),
             "node_colors": self.node_colors,
             "keybinds": self.keybinds,
             "node_create_slots": self.node_create_slots,
@@ -202,42 +270,21 @@ class AppPreferences:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AppPreferences:
-        editor_raw = data.get("editor", {})
-        theme_raw = data.get("theme", {})
-        performance_raw = data.get("performance", {})
-        node_colors_raw = data.get("node_colors", {})
-        keybinds_raw = data.get("keybinds", {})
-        slots_raw = data.get("node_create_slots", [])
-        pinned_raw = data.get("pinned_actions", list(DEFAULT_PINNED_ACTIONS))
-        node_colors: dict[str, list[int]] = {}
-        if isinstance(node_colors_raw, dict):
-            for key, value in node_colors_raw.items():
-                if isinstance(value, list):
-                    node_colors[str(key)] = [int(v) for v in value[:3]]
-        keybinds: dict[str, str] = {}
-        if isinstance(keybinds_raw, dict):
-            keybinds = {str(k): str(v) for k, v in keybinds_raw.items()}
-        slots: list[dict[str, Any]] = []
-        if isinstance(slots_raw, list):
-            slots = [item for item in slots_raw if isinstance(item, dict)]
-        pinned_actions: list[str] = []
-        if isinstance(pinned_raw, list):
-            pinned_actions = [str(item) for item in pinned_raw]
+        """Deserialize a preference document from JSON-compatible data."""
         return cls(
             version=int(data.get("version", 1)),
-            editor=EditorSettings.from_dict(
-                editor_raw if isinstance(editor_raw, dict) else {}
-            ),
-            theme=ThemeSettings.from_dict(
-                theme_raw if isinstance(theme_raw, dict) else {}
-            ),
+            editor=EditorSettings.from_dict(_as_dict(data.get("editor"))),
+            theme=ThemeSettings.from_dict(_as_dict(data.get("theme"))),
             performance=PerformanceSettings.from_dict(
-                performance_raw if isinstance(performance_raw, dict) else {}
+                _as_dict(data.get("performance"))
             ),
-            node_colors=node_colors,
-            keybinds=keybinds,
-            node_create_slots=slots,
-            pinned_actions=pinned_actions,
+            plugins=PluginSettings.from_dict(_as_dict(data.get("plugins"))),
+            node_colors=_node_colors_from_raw(data.get("node_colors")),
+            keybinds=_str_str_map(data.get("keybinds")),
+            node_create_slots=_dict_list(data.get("node_create_slots")),
+            pinned_actions=_as_str_list(
+                data.get("pinned_actions"), list(DEFAULT_PINNED_ACTIONS)
+            ),
         )
 
     @classmethod
