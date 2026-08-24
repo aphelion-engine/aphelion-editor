@@ -12,12 +12,15 @@ from freeze_app import BUILD_BASE_DIR, DIST_DIR, create_executable
 from freeze_config import (
     APP_NAME,
     DESCRIPTION,
+    INCLUDE_FILES,
     MSI_OUTPUT_NAME,
     MSI_SHORTCUT_DIR,
     VERSION,
     create_exe_build_options,
     create_msi_options,
 )
+from installer_patch import InstallerUiError, enhance_installer_ui
+from sdk_release import EDITOR_RELEASES_DIR, ensure_sdk_release, installer_include_files
 from utils.paths import ensure_directory, resource_path
 
 _WINDOWS_PLATFORM: Final[str] = "win32"
@@ -42,7 +45,7 @@ def _require_windows() -> None:
 
 def _msi_output_dir(build_dir: str | None) -> Path:
     """Return the directory that should receive the ``.msi`` file."""
-    requested: str = str(DIST_DIR) if build_dir is None else build_dir
+    requested: str = str(EDITOR_RELEASES_DIR) if build_dir is None else build_dir
     return ensure_directory(Path(requested))
 
 
@@ -50,7 +53,7 @@ def build_installer(build_dir: str | None = None) -> Path:
     """Freeze Aphelion and package it as a Windows MSI.
 
     Freeze intermediates stay under ``build/``. The installer file is written
-    to ``build_dir`` (default ``dist/``).
+    to ``build_dir`` (default ``releases/``).
 
     Parameters:
         build_dir: Directory that receives the ``.msi``. Defaults to ``dist/``.
@@ -86,7 +89,8 @@ def _run_bdist_msi(base_dir: Path, msi_dir: Path) -> Path:
         Path to the ``.msi`` after setup completes.
 
     Raises:
-        InstallerBuildError: If the expected ``.msi`` file was not written.
+        InstallerBuildError: If the expected ``.msi`` file was not written, or
+            the installer UI patch fails.
 
     Side effects:
         Runs cx_Freeze ``setup`` and restores ``sys.argv`` afterwards.
@@ -109,7 +113,12 @@ def _run_bdist_msi(base_dir: Path, msi_dir: Path) -> Path:
         )
     finally:
         sys.argv = original_argv
-    return _require_msi_file(msi_dir)
+    msi_path: Path = _require_msi_file(msi_dir)
+    try:
+        enhance_installer_ui(msi_path)
+    except InstallerUiError as exc:
+        raise InstallerBuildError(str(exc)) from exc
+    return msi_path
 
 
 def _require_msi_file(msi_dir: Path) -> Path:
@@ -139,7 +148,10 @@ def _require_msi_file(msi_dir: Path) -> Path:
 
 def _msi_setup_options(base_dir: Path, msi_dir: Path) -> dict[str, object]:
     """Return cx_Freeze ``setup(options=...)`` for an MSI build."""
-    build_options: dict[str, object] = create_exe_build_options()
+    extras: list[tuple[str, str]] = installer_include_files(ensure_sdk_release())
+    build_options: dict[str, object] = create_exe_build_options(
+        include_files=[*INCLUDE_FILES, *extras],
+    )
     build_options["include_msvcr"] = True
     return {
         "build": {"build_base": str(base_dir)},

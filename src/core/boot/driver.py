@@ -98,6 +98,9 @@ class EditorBootDriver:
     def _stage_runtime(self) -> BootStageResult:
         mode = "new project" if self._request.mode is BootMode.NEW else "open project"
         target = self._request.path or "(untitled)"
+        from utils.host_publish import publish_editor_host
+
+        publish_editor_host()
         return BootStageResult(
             True,
             f"Boot request accepted ({mode})",

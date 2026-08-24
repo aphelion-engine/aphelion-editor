@@ -21,8 +21,13 @@ _RUNTIME: AphelionRuntime | None = None
 
 
 def _default_dist_dir() -> str:
-    """Return the source-tree ``dist/`` path used by packaging flags."""
+    """Return the source-tree ``dist/`` path used by ``--build``."""
     return str(Path(__file__).resolve().parent.parent / "dist")
+
+
+def _default_installer_dir() -> str:
+    """Return ``releases/`` for MSI output."""
+    return str(Path(__file__).resolve().parent.parent / "releases")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -44,7 +49,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--build-dir",
         type=str,
-        default=_default_dist_dir(),
+        default=None,
         help="Output directory for --build (frozen tree) or --build-installer (MSI).",
     )
     return parser
@@ -89,12 +94,14 @@ def _dispatch_packaging(args: argparse.Namespace) -> int:
     if args.build_installer:
         from installer_build import build_installer
 
-        msi_path = build_installer(build_dir=args.build_dir)
+        dest = args.build_dir or _default_installer_dir()
+        msi_path = build_installer(build_dir=dest)
         print(f"Wrote installer: {msi_path}")
         return 0
     from freeze_app import build_standalone
 
-    build_standalone(build_dir=args.build_dir)
+    dest = args.build_dir or _default_dist_dir()
+    build_standalone(build_dir=dest)
     return 0
 
 
