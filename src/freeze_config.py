@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from typing import Final
 
+from installer_ui import msi_table_data
+
 SRC_ROOT: Final[Path] = Path(__file__).resolve().parent
 PLUGIN_SDK_ROOT: Final[Path] = SRC_ROOT.parent.parent / "aphelion-sdk"
 
@@ -52,10 +54,12 @@ DEFAULT_EXCLUDES: Final[list[str]] = [
 MSI_UPGRADE_CODE: Final[str] = "{412A43A8-9158-59E0-9642-D4918B488D95}"
 MSI_SHORTCUT_DIR: Final[str] = "Aphelion"
 MSI_OUTPUT_STEM: Final[str] = "AphelionEditor"
-MSI_OUTPUT_NAME: Final[str] = f"{MSI_OUTPUT_STEM}-{VERSION}-win64.msi"
-MSI_INITIAL_TARGET_DIR: Final[str] = (
-    r"[ProgramFiles64Folder]\Aphelion\Aphelion Editor"
+MSI_OUTPUT_NAME: Final[str] = f"{MSI_OUTPUT_STEM}Setup-{VERSION}-win64.msi"
+MSI_USER_TARGET_DIR: Final[str] = r"[LocalAppDataFolder]Aphelion\Aphelion Editor"
+MSI_MACHINE_TARGET_DIR: Final[str] = (
+    r"[ProgramFiles64Folder]Aphelion\Aphelion Editor"
 )
+MSI_INITIAL_TARGET_DIR: Final[str] = MSI_USER_TARGET_DIR
 
 
 def _module_finder_path() -> list[str]:
@@ -125,7 +129,7 @@ def create_msi_options(
     return {
         "upgrade_code": MSI_UPGRADE_CODE,
         "add_to_path": False,
-        "all_users": True,
+        "all_users": False,
         "initial_target_dir": MSI_INITIAL_TARGET_DIR,
         "install_icon": str(install_icon),
         "dist_dir": str(dist_dir),
@@ -138,10 +142,10 @@ def create_msi_options(
             "comments": DESCRIPTION,
             "keywords": "video,editor,aphelion",
         },
-        "data": {
-            "Directory": [
-                ("ProgramMenuFolder", "TARGETDIR", "."),
-                (MSI_SHORTCUT_DIR, "ProgramMenuFolder", "APHLI~1|Aphelion"),
-            ],
-        },
+        "data": msi_table_data(
+            product_name=APP_NAME,
+            start_menu_dir=MSI_SHORTCUT_DIR,
+            user_target_dir=MSI_USER_TARGET_DIR,
+            machine_target_dir=MSI_MACHINE_TARGET_DIR,
+        ),
     }

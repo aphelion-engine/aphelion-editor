@@ -17,7 +17,7 @@ dependencies = [
     "opencv-python-headless>=4.8.0",
     "imageio>=2.34.0",
     "imageio-ffmpeg>=0.4.9",
-    "aphelion-plugin-sdk @ file:../aphelion-sdk",
+    "aphelion-sdk @ file:../aphelion-sdk",
 ]
 
 [project.urls]
@@ -36,7 +36,7 @@ dev = [
 aphelion = "aphelion_cli:main"
 
 [tool.setuptools]
-py-modules = ["aphelion_cli", "freeze_app", "freeze_config", "installer_build"]
+py-modules = ["aphelion_cli", "freeze_app", "freeze_config", "installer_build", "installer_ui", "installer_patch", "sdk_release"]
 include-package-data = true
 
 [tool.setuptools.packages.find]

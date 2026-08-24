@@ -192,6 +192,27 @@ def test_msi_upgrade_code_is_guid() -> None:
     assert MSI_OUTPUT_NAME.endswith(".msi")
 
 
+def test_msi_options_include_installer_choices() -> None:
+    """The MSI wizard must offer scope, PATH, and desktop choices."""
+    from pathlib import Path
+
+    from freeze_config import create_msi_options
+
+    options = create_msi_options(dist_dir=Path("dist"), install_icon=Path("icon.ico"))
+    data = options["data"]
+    assert isinstance(data, dict)
+    assert options["add_to_path"] is False
+    assert options["all_users"] is False
+    dialogs = {row[0] for row in data["Dialog"]}
+    assert "OptionsDlg" in dialogs
+    properties = {row[0] for row in data["Property"]}
+    assert properties >= {"INSTALLSCOPE", "ADDTOPATH", "INSTALLDESKTOP"}
+    radio_values = {row[2] for row in data["RadioButton"]}
+    assert radio_values == {"PerUser", "PerMachine"}
+    directories = {row[0] for row in data["Directory"]}
+    assert "DesktopFolder" in directories
+
+
 def test_plugin_widget_is_not_a_plugin() -> None:
     """Dialog and panel widgets must not be Plugin subclasses."""
 
