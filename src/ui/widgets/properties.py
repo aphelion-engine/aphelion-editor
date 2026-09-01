@@ -60,6 +60,7 @@ from ui.widgets.property_editors import (
     ColorPropertyWidget,
     CustomPropertyWidget,
     EnumPropertyWidget,
+    EqCurvePropertyWidget,
     FilePropertyWidget,
     KeyframeButtonWidget,
     NodePropertyChoiceWidget,
@@ -379,6 +380,7 @@ class PropertiesPanel(QWidget):
                 editor,
                 prop.description,
                 keyframe_button=keyframe_button,
+                full_width=isinstance(editor, EqCurvePropertyWidget),
             )
             layout.addWidget(row)
         return has_properties
@@ -636,6 +638,10 @@ class PropertiesPanel(QWidget):
             editor.color_changed.connect(
                 lambda rgb, p=prop_name: self.update_property(p, rgb)
             )
+        elif isinstance(editor, EqCurvePropertyWidget):
+            editor.value_changed.connect(
+                lambda value, p=prop_name: self.update_property(p, value)
+            )
         elif isinstance(editor, CustomPropertyWidget):
             editor.edit_requested.connect(
                 lambda p=prop_name: self._emit_custom_editor(p)
@@ -701,6 +707,8 @@ class PropertiesPanel(QWidget):
             if not isinstance(prop.value, Enum):
                 return None
             return EnumPropertyWidget(prop, type(prop.value))
+        if prop_name == "eq_curve":
+            return EqCurvePropertyWidget(prop)
         if prop.input_type == NodePropertyInputType.Custom:
             return CustomPropertyWidget(prop)
         return None

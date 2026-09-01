@@ -8,6 +8,7 @@ from typing import TypeVar
 
 import numpy as np
 
+from core.audio import AudioData, FrameWithAudio
 from core.nodes.base import (
     NEUTRAL_COLOR_RGB,
     ColorRgb,
@@ -28,10 +29,26 @@ _MODULATION_INPUT_PREFIX: str = "in_"
 class FrameNode(Node):
     """Node with typed frame/property access helpers."""
 
-    def input_frame(self, slot: str = "frame") -> np.ndarray | None:
-        """Return a connected ndarray frame or ``None``."""
+    def input_frame_with_audio(self, slot: str = "frame") -> FrameWithAudio | None:
+        """Return a connected FrameWithAudio payload or ``None``."""
         value: object | None = self.get_input_value(slot)
+        return value if isinstance(value, FrameWithAudio) else None
+
+    def input_frame(self, slot: str = "frame") -> np.ndarray | None:
+        """Return a connected ndarray frame or the frame inside ``FrameWithAudio``."""
+        value: object | None = self.get_input_value(slot)
+        if isinstance(value, FrameWithAudio):
+            return value.frame
         return value if isinstance(value, np.ndarray) else None
+
+    def input_audio(self, slot: str = "audio") -> AudioData | None:
+        """Return a connected audio payload or audio carried by a frame input."""
+        value: object | None = self.get_input_value(slot)
+        if isinstance(value, AudioData):
+            return value
+        if isinstance(value, FrameWithAudio):
+            return value.audio
+        return None
 
     def input_number(self, slot: str, default: float = 0.0) -> float:
         """Return a connected Number-socket scalar, or ``default``."""
@@ -165,18 +182,22 @@ class FrameEffectNode(FrameNode):
         )
         self.setup_effect_properties()
 
-    def evaluate(self, frame_num: int) -> np.ndarray:
-        """Evaluate the effect and blend it with the source."""
-        source: np.ndarray | None = self.input_frame()
+    def evaluate(self, frame_num: int) -> np.ndarray | FrameWithAudio:
+        """Evaluate the effect and blend it with the source, preserving audio."""
+        source_payload: FrameWithAudio | None = self.input_frame_with_audio()
+        source: np.ndarray | None = source_payload.frame if source_payload is not None else self.input_frame()
         if source is None:
             return self.blank_frame()
         if not self.bool_value("enabled", True):
-            return source
+            return source_payload if source_payload is not None else source
         mix: float = self.float_value("mix", 100.0) / 100.0
         if mix <= 0.0:
-            return source
+            return source_payload if source_payload is not None else source
         effected: np.ndarray = self.process_frame(source, frame_num)
-        return mix_frames(source, effected, mix)
+        mixed = mix_frames(source, effected, mix)
+        if source_payload is not None:
+            return FrameWithAudio(frame=mixed, audio=source_payload.audio)
+        return mixed
 
     @abstractmethod
     def setup_effect_properties(self) -> None:

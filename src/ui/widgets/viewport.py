@@ -15,7 +15,7 @@ from core.events import ObserverEvent
 from core.nodes.base import FRAME_DTYPE
 from core.preferences.models import PerformanceSettings
 from core.project import Project
-from core.nodes import VideoInputNode
+
 from effects.frame_ops import to_display_u8
 from render.audio_playback import get_audio_engine
 from render.frame_evaluator import FrameEvaluationWorker
@@ -52,6 +52,7 @@ class ViewportWidget(QWidget):
         self._last_display_time: float | None = None
         self._audio_engine = get_audio_engine()
         self._queued_audio_until_frame: int | None = None
+        self._audio_prefetch_frames: int = 4
 
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
@@ -367,55 +368,37 @@ class ViewportWidget(QWidget):
         )
 
     def _feed_smoother_preview_audio(self, frame_num: int, fallback_audio: AudioData) -> None:
-        """Queue non-overlapping forward audio chunks during playback."""
-        next_frame_to_queue = frame_num
+        """Queue contiguous processed viewer audio ahead of the playhead.
+
+        Uses the already-evaluated audio for the displayed frame, then fills a
+        short forward window by reusing cached viewer evaluations when possible.
+        This keeps preview audio routed through the graph while reducing gaps
+        when the viewport drops visual frames during playback.
+        """
+        start_frame = frame_num
         if self._queued_audio_until_frame is not None:
-            next_frame_to_queue = max(frame_num, self._queued_audio_until_frame)
-        if next_frame_to_queue > frame_num + 4:
-            return
-
-        chunk_frames = 10
-        source_audio = None
+            start_frame = max(start_frame, self._queued_audio_until_frame)
+        end_frame = max(frame_num + 1, frame_num + self._audio_prefetch_frames)
         viewer_id = self.project.active_viewer
-        if viewer_id is not None:
-            for connection in self.project.connections:
-                if connection.input_node_id != viewer_id or connection.input_slot != "frame":
-                    continue
-                source_node = self.project.nodes.get(connection.output_node_id)
-                if isinstance(source_node, VideoInputNode):
-                    try:
-                        source_audio = source_node.preview_audio_chunk(next_frame_to_queue, duration_frames=chunk_frames)
-                    except Exception:
-                        source_audio = None
-                    break
-
-        if source_audio is not None:
-            self._audio_engine.feed_audio(source_audio)
-            self._queued_audio_until_frame = next_frame_to_queue + chunk_frames
+        if not viewer_id:
             return
 
-        if self._queued_audio_until_frame is None or self._queued_audio_until_frame <= frame_num:
-            self._audio_engine.feed_audio(fallback_audio)
-            self._queued_audio_until_frame = frame_num + 1
+        for queued_frame in range(start_frame, end_frame):
+            audio_to_feed: AudioData | None = None
+            if queued_frame == frame_num:
+                audio_to_feed = fallback_audio
+            else:
+                result = self.project.evaluate_node(viewer_id, queued_frame)
+                if isinstance(result, FrameWithAudio):
+                    audio_to_feed = result.audio
+            if audio_to_feed is None:
+                continue
+            self._audio_engine.feed_audio(audio_to_feed)
+        self._queued_audio_until_frame = end_frame
 
     def _prime_audio_playback(self) -> None:
-        """Queue an initial forward audio chunk as soon as playback starts."""
-        viewer_id = self.project.active_viewer
-        if viewer_id is None:
-            return
-        for connection in self.project.connections:
-            if connection.input_node_id != viewer_id or connection.input_slot != "frame":
-                continue
-            source_node = self.project.nodes.get(connection.output_node_id)
-            if not isinstance(source_node, VideoInputNode):
-                continue
-            try:
-                audio = source_node.preview_audio_chunk(self.project.current_frame, duration_frames=12)
-            except Exception:
-                return
-            self._queued_audio_until_frame = self.project.current_frame + 12
-            self._audio_engine.feed_audio(audio)
-            return
+        """Reset audio queue state when playback begins."""
+        self._queued_audio_until_frame = None
 
     def set_playback_active(self, active: bool) -> None:
         """Hint the worker to prefetch; timeline alone drives frame changes."""

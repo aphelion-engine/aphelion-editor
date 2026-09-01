@@ -83,7 +83,9 @@ def sockets_compatible(
     """Return whether an output may connect to an input socket."""
     if input_type == NodeSocketType.Node:
         return True
-    return output_type == input_type
+    if output_type == input_type:
+        return True
+    return False
 
 
 def is_property_link_source_connection(connection: Connection) -> bool:

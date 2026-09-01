@@ -11,8 +11,12 @@ import numpy as np
 from PyQt6.QtWidgets import QApplication
 
 from core.nodes import ViewerNode
+from core.nodes.audio_nodes import AudioEqNode
 from core.project import Project
+from core.history import HistoryStack
 from ui.widgets.viewport import ViewportWidget
+from ui.widgets.properties import PropertiesPanel
+from ui.widgets.property_editors import EqCurvePropertyWidget
 
 
 def _application() -> QApplication:
@@ -78,6 +82,24 @@ class ViewportResultPolicyTests(unittest.TestCase):
         self.assertIsNotNone(frame)
         assert frame is not None
         return int(frame[0, 0, 0])
+
+
+class PropertyEditorTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = _application()
+
+    def test_eq_curve_widget_is_created_for_audio_eq(self) -> None:
+        project = Project(name="eq-ui")
+        history = HistoryStack(project)
+        node_id = project.add_node(AudioEqNode(), "eq")
+        panel = PropertiesPanel(project, history)
+        try:
+            panel.set_node(node_id)
+            editor = panel.property_widgets.get("eq_curve")
+            self.assertIsInstance(editor, EqCurvePropertyWidget)
+        finally:
+            panel.close()
 
 
 if __name__ == "__main__":

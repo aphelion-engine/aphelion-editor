@@ -205,14 +205,14 @@ class VideoInputNode(Node):
             "audio_volume",
             NodeProperty(
                 input_type=NodePropertyInputType.Slider,
-                value=1.0,
-                slider_min_value=0.0,
-                slider_max_value=2.0,
+                value=100,
+                slider_min_value=0,
+                slider_max_value=200,
                 priority=71,
                 group="Audio",
                 label="Volume",
                 description="Audio volume multiplier.",
-                suffix="×",
+                suffix="%",
             ),
         )
         self.set_property(
@@ -465,10 +465,9 @@ class VideoInputNode(Node):
             )
 
         # Apply volume
-        volume = self._float_prop("audio_volume", 1.0)
-        if volume != 1.0:
+        volume = self._float_prop("audio_volume", 100.0) / 100.0
+        if abs(volume - 1.0) >= 0.001:
             samples = audio.samples * volume
-            # Clamp to prevent clipping
             samples = np.clip(samples, -1.0, 1.0)
         else:
             samples = audio.samples

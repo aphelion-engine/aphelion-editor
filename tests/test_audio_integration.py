@@ -4,6 +4,10 @@ import numpy as np
 import pytest
 
 from core.audio import AudioData, FrameWithAudio
+from core.project import Project
+from core.nodes.audio_nodes import AudioAttachNode, AudioEqNode, AudioExtractNode, AudioGainNode, AudioReverbNode
+from core.nodes.base import Node, NodeSocketType
+from core.nodes.viewer import ViewerNode
 
 
 def test_audio_data_creation():
@@ -110,6 +114,131 @@ def test_frame_with_audio_properties():
     frame_with_audio = FrameWithAudio(frame=frame, audio=audio)
     assert frame_with_audio.audio_sample_rate == 44100
     assert frame_with_audio.audio_channels == 1
+
+
+def _constant_frame_with_audio_node(frame: np.ndarray, audio: AudioData):
+    class ConstantFrameAudioNode(Node):
+        node_type = "Constant Frame Audio Test Source"
+
+        def _setup_sockets(self) -> None:
+            self.add_output("frame", NodeSocketType.Frame)
+
+        def evaluate(self, frame_num: int):
+            del frame_num
+            return FrameWithAudio(frame=frame, audio=audio)
+
+    return ConstantFrameAudioNode()
+
+
+def test_audio_effect_nodes_are_audio_only():
+    gain = AudioGainNode()
+    eq = AudioEqNode()
+    assert set(gain.outputs) == {"audio"}
+    assert set(eq.outputs) == {"audio"}
+
+
+def test_extract_effect_attach_graph_changes_audio():
+    frame = np.ones((16, 16, 3), dtype=np.float32) * 0.5
+    samples = np.linspace(-0.5, 0.5, 4096, dtype=np.float32)
+    audio = AudioData(samples=samples, sample_rate=48000)
+
+    project = Project("audio-extract")
+    source_id = project.add_node(_constant_frame_with_audio_node(frame, audio), "source")
+    extract_id = project.add_node(AudioExtractNode(), "extract")
+    fx_id = project.add_node(AudioEqNode(), "eq")
+    attach_id = project.add_node(AudioAttachNode(), "attach")
+    viewer_id = project.add_node(ViewerNode(), "viewer")
+
+    project.nodes[fx_id].set_property("preset", 9)
+    project.nodes[fx_id].set_property("low_gain", 12)
+    project.nodes[fx_id].set_property("mid_gain", -12)
+    project.nodes[fx_id].set_property("high_gain", 12)
+
+    assert project.connect_nodes(source_id, "frame", extract_id, "frame")
+    assert project.connect_nodes(extract_id, "audio", fx_id, "audio")
+    assert project.connect_nodes(extract_id, "frame", attach_id, "frame")
+    assert project.connect_nodes(fx_id, "audio", attach_id, "audio")
+    assert project.connect_nodes(attach_id, "frame", viewer_id, "frame")
+
+    result = project.evaluate_node(viewer_id, 0)
+    assert isinstance(result, FrameWithAudio)
+    assert result.audio is not None
+    assert np.allclose(result.frame, frame)
+    assert not np.allclose(result.audio.samples, samples)
+
+
+def test_custom_eq_bands_change_audio():
+    frame = np.ones((16, 16, 3), dtype=np.float32) * 0.5
+    samples = np.zeros(4096, dtype=np.float32)
+    samples[256:512] = 0.5
+    audio = AudioData(samples=samples, sample_rate=48000)
+
+    project = Project("audio-custom-eq")
+    source_id = project.add_node(_constant_frame_with_audio_node(frame, audio), "source")
+    extract_id = project.add_node(AudioExtractNode(), "extract")
+    fx_id = project.add_node(AudioEqNode(), "eq")
+    attach_id = project.add_node(AudioAttachNode(), "attach")
+    viewer_id = project.add_node(ViewerNode(), "viewer")
+
+    project.nodes[fx_id].set_property("preset", 9)
+    project.nodes[fx_id].set_property(
+        "eq_curve",
+        {
+            "bands": [
+                {"freq": 120.0, "gain": 12.0, "q": 0.8},
+                {"freq": 3000.0, "gain": -10.0, "q": 1.5},
+                {"freq": 9000.0, "gain": 8.0, "q": 1.0},
+            ],
+            "low": 12.0,
+            "mid": -10.0,
+            "high": 8.0,
+        },
+    )
+
+    assert project.connect_nodes(source_id, "frame", extract_id, "frame")
+    assert project.connect_nodes(extract_id, "audio", fx_id, "audio")
+    assert project.connect_nodes(extract_id, "frame", attach_id, "frame")
+    assert project.connect_nodes(fx_id, "audio", attach_id, "audio")
+    assert project.connect_nodes(attach_id, "frame", viewer_id, "frame")
+
+    result = project.evaluate_node(viewer_id, 0)
+    assert isinstance(result, FrameWithAudio)
+    assert result.audio is not None
+    assert not np.allclose(result.audio.samples, samples)
+
+
+
+def test_extract_reverb_attach_graph_changes_audio():
+    frame = np.ones((16, 16, 3), dtype=np.float32) * 0.25
+    impulse = np.zeros(4096, dtype=np.float32)
+    impulse[0] = 1.0
+    audio = AudioData(samples=impulse, sample_rate=48000)
+
+    project = Project("audio-reverb")
+    source_id = project.add_node(_constant_frame_with_audio_node(frame, audio), "source")
+    extract_id = project.add_node(AudioExtractNode(), "extract")
+    fx_id = project.add_node(AudioReverbNode(), "reverb")
+    attach_id = project.add_node(AudioAttachNode(), "attach")
+    viewer_id = project.add_node(ViewerNode(), "viewer")
+
+    project.nodes[fx_id].set_property("decay", 90)
+    project.nodes[fx_id].set_property("pre_delay_ms", 1.0)
+    project.nodes[fx_id].set_property("reflections", 6)
+    project.nodes[fx_id].set_property("dry", 0)
+    project.nodes[fx_id].set_property("wet", 150)
+
+    assert project.connect_nodes(source_id, "frame", extract_id, "frame")
+    assert project.connect_nodes(extract_id, "audio", fx_id, "audio")
+    assert project.connect_nodes(extract_id, "frame", attach_id, "frame")
+    assert project.connect_nodes(fx_id, "audio", attach_id, "audio")
+    assert project.connect_nodes(attach_id, "frame", viewer_id, "frame")
+
+    result = project.evaluate_node(viewer_id, 0)
+    assert isinstance(result, FrameWithAudio)
+    assert result.audio is not None
+    assert np.allclose(result.frame, frame)
+    assert not np.allclose(result.audio.samples, impulse)
+    assert np.count_nonzero(np.abs(result.audio.samples[1:]) > 1e-5) > 0
 
 
 if __name__ == "__main__":

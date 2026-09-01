@@ -32,6 +32,7 @@ from PyQt6.QtWidgets import (
 from config.theme import EXPORT_DIALOG_STYLE
 from core.project import Project
 from render.export_worker import ExportFormat, ExportRequest, ExportWorker
+from render.video_writer import ExportQuality
 
 
 class ExportDialog(QDialog):
@@ -100,7 +101,18 @@ class ExportDialog(QDialog):
         self._full_resolution.setToolTip(
             "Bypasses the Viewer's interactive Proxy Width for this export."
         )
-        output_form.addRow("Quality", self._full_resolution)
+        output_form.addRow("Resolution", self._full_resolution)
+
+        self._export_quality = QComboBox()
+        self._export_quality.addItem("Draft (fastest)", ExportQuality.DRAFT)
+        self._export_quality.addItem("Fast", ExportQuality.FAST)
+        self._export_quality.addItem("Balanced", ExportQuality.BALANCED)
+        self._export_quality.addItem("High Quality", ExportQuality.HIGH_QUALITY)
+        self._export_quality.setCurrentIndex(1)
+        self._export_quality.setToolTip(
+            "Draft is fastest. Higher quality presets encode slower but compress better."
+        )
+        output_form.addRow("Speed / Quality", self._export_quality)
         root.addWidget(output)
 
         self._status_label = QLabel()
@@ -167,7 +179,7 @@ class ExportDialog(QDialog):
 
     def _set_form_enabled(self, enabled: bool) -> None:
         """Lock the format/path/fps/quality inputs while a job is running."""
-        for widget in (self._format, self._path, self._fps, self._full_resolution):
+        for widget in (self._format, self._path, self._fps, self._full_resolution, self._export_quality):
             widget.setEnabled(enabled)
 
     def _start_export(self) -> None:
@@ -204,6 +216,7 @@ class ExportDialog(QDialog):
             export_audio_enabled=True if audio_prefs is None else bool(audio_prefs.export_audio_enabled),
             export_sample_rate=48000 if audio_prefs is None else int(audio_prefs.export_sample_rate),
             export_channels=2 if audio_prefs is None else int(audio_prefs.export_channels),
+            export_quality=self._export_quality.currentData(),
         )
 
         self._cancel_requested = False
