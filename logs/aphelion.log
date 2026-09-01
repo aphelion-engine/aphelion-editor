@@ -5454,3 +5454,188 @@ UnboundLocalError: cannot access local variable 'json' where it is not associate
 2026-09-01 14:54:12 | INFO     | aphelion.editor | Closing editor for project 'test project'
 2026-09-01 14:54:12 | INFO     | aphelion.session | Editor destroyed — quitting application
 2026-09-01 14:54:12 | INFO     | aphelion.runtime | Event loop exited with code 0
+2026-09-01 14:55:36 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-09-01 14:55:36 | INFO     | aphelion | Log file: C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\logs\aphelion.log
+2026-09-01 14:55:37 | INFO     | aphelion.runtime | Runtime ready — starting session
+2026-09-01 14:55:37 | INFO     | aphelion.session | Session start → project launcher
+2026-09-01 14:55:37 | INFO     | aphelion.runtime | Entering Qt event loop
+2026-09-01 14:55:38 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(680, 291, 560, 480))
+2026-09-01 14:55:39 | INFO     | aphelion.session | Project chosen (mode=open, path=C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\test project.aph)
+2026-09-01 14:55:39 | INFO     | aphelion.session | Opening bootloader
+2026-09-01 14:55:40 | INFO     | aphelion.boot.driver | Running boot stage 1/6: Runtime
+2026-09-01 14:55:40 | INFO     | aphelion.boot.driver | [Runtime] Boot request accepted (open project)
+2026-09-01 14:55:40 | INFO     | aphelion.boot.driver | Running boot stage 2/6: Node registry
+2026-09-01 14:55:40 | INFO     | aphelion.boot.driver | [Node registry] Registered 77 built-in node type(s)
+2026-09-01 14:55:40 | INFO     | aphelion.boot.driver | Running boot stage 3/6: Plugins
+2026-09-01 14:55:40 | INFO     | aphelion.boot.driver | [Plugins] Registered 0 plugin node type(s)
+2026-09-01 14:55:40 | INFO     | aphelion.boot.driver | Running boot stage 4/6: Project document
+2026-09-01 14:55:40 | INFO     | aphelion.boot.driver | [Project document] Loaded project 'test project'
+2026-09-01 14:55:40 | INFO     | aphelion.boot.driver | Running boot stage 5/6: Graph validation
+2026-09-01 14:55:40 | INFO     | aphelion.boot.driver | [Graph validation] Validated project graph
+2026-09-01 14:55:40 | INFO     | aphelion.boot.driver | Running boot stage 6/6: Media sources
+2026-09-01 14:55:40 | ERROR    | aphelion.nodes | Node Video Input (Video Input) error: cannot access local variable 'json' where it is not associated with a value
+Traceback (most recent call last):
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\render\audio_decoder.py", line 68, in open
+    result = subprocess.run(
+        cmd,
+    ...<2 lines>...
+        timeout=10
+    )
+  File "C:\Python314\Lib\subprocess.py", line 555, in run
+    with Popen(*popenargs, **kwargs) as process:
+         ~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python314\Lib\subprocess.py", line 1039, in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                        pass_fds, cwd, env,
+                        ^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+                        gid, gids, uid, umask,
+                        ^^^^^^^^^^^^^^^^^^^^^^
+                        start_new_session, process_group)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python314\Lib\subprocess.py", line 1553, in _execute_child
+    hp, ht, pid, tid = _winapi.CreateProcess(executable, args,
+                       ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+                             # no special security
+                             ^^^^^^^^^^^^^^^^^^^^^
+    ...<4 lines>...
+                             cwd,
+                             ^^^^
+                             startupinfo)
+                             ^^^^^^^^^^^^
+FileNotFoundError: [WinError 2] The system cannot find the file specified
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\core\nodes\video_input.py", line 309, in probe_media
+    info = self._ensure_open()
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\core\nodes\video_input.py", line 304, in _ensure_open
+    return self._decoder.open(path)
+           ~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\render\video_decoder.py", line 180, in open
+    self._audio_info = self._audio_decoder.open(path)
+                       ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\render\audio_decoder.py", line 131, in open
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError, ValueError) as e:
+                                       ^^^^
+UnboundLocalError: cannot access local variable 'json' where it is not associated with a value
+2026-09-01 14:55:40 | INFO     | aphelion.boot.driver | [Media sources] Probed media sources (0 ok, 1 unavailable)
+2026-09-01 14:55:40 | INFO     | aphelion.session | Constructing editor for project 'test project'
+2026-09-01 14:55:42 | INFO     | aphelion.session | Editor shown for 'test project'
+2026-09-01 14:56:12 | INFO     | aphelion.editor | Closing editor for project 'test project'
+2026-09-01 14:56:12 | INFO     | aphelion.session | Editor destroyed — quitting application
+2026-09-01 14:56:12 | INFO     | aphelion.runtime | Event loop exited with code 0
+2026-09-01 14:56:27 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-09-01 14:56:27 | INFO     | aphelion | Log file: C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\logs\aphelion.log
+2026-09-01 14:56:27 | INFO     | aphelion.runtime | Runtime ready — starting session
+2026-09-01 14:56:27 | INFO     | aphelion.session | Session start → project launcher
+2026-09-01 14:56:27 | INFO     | aphelion.runtime | Entering Qt event loop
+2026-09-01 14:56:28 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(680, 291, 560, 480))
+2026-09-01 14:56:30 | INFO     | aphelion.session | Project chosen (mode=open, path=C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\test project.aph)
+2026-09-01 14:56:30 | INFO     | aphelion.session | Opening bootloader
+2026-09-01 14:56:30 | INFO     | aphelion.boot.driver | Running boot stage 1/6: Runtime
+2026-09-01 14:56:30 | INFO     | aphelion.boot.driver | [Runtime] Boot request accepted (open project)
+2026-09-01 14:56:30 | INFO     | aphelion.boot.driver | Running boot stage 2/6: Node registry
+2026-09-01 14:56:30 | INFO     | aphelion.boot.driver | [Node registry] Registered 77 built-in node type(s)
+2026-09-01 14:56:30 | INFO     | aphelion.boot.driver | Running boot stage 3/6: Plugins
+2026-09-01 14:56:30 | INFO     | aphelion.boot.driver | [Plugins] Registered 0 plugin node type(s)
+2026-09-01 14:56:31 | INFO     | aphelion.boot.driver | Running boot stage 4/6: Project document
+2026-09-01 14:56:31 | INFO     | aphelion.boot.driver | [Project document] Loaded project 'test project'
+2026-09-01 14:56:31 | INFO     | aphelion.boot.driver | Running boot stage 5/6: Graph validation
+2026-09-01 14:56:31 | INFO     | aphelion.boot.driver | [Graph validation] Validated project graph
+2026-09-01 14:56:31 | INFO     | aphelion.boot.driver | Running boot stage 6/6: Media sources
+2026-09-01 14:56:31 | ERROR    | aphelion.nodes | Node Video Input (Video Input) error: [WinError 2] The system cannot find the file specified
+Traceback (most recent call last):
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\core\nodes\video_input.py", line 309, in probe_media
+    info = self._ensure_open()
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\core\nodes\video_input.py", line 304, in _ensure_open
+    return self._decoder.open(path)
+           ~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\render\video_decoder.py", line 180, in open
+    self._audio_info = self._audio_decoder.open(path)
+                       ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\render\audio_decoder.py", line 69, in open
+    result = subprocess.run(
+        cmd,
+    ...<2 lines>...
+        timeout=10
+    )
+  File "C:\Python314\Lib\subprocess.py", line 555, in run
+    with Popen(*popenargs, **kwargs) as process:
+         ~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python314\Lib\subprocess.py", line 1039, in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                        pass_fds, cwd, env,
+                        ^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+                        gid, gids, uid, umask,
+                        ^^^^^^^^^^^^^^^^^^^^^^
+                        start_new_session, process_group)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python314\Lib\subprocess.py", line 1553, in _execute_child
+    hp, ht, pid, tid = _winapi.CreateProcess(executable, args,
+                       ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+                             # no special security
+                             ^^^^^^^^^^^^^^^^^^^^^
+    ...<4 lines>...
+                             cwd,
+                             ^^^^
+                             startupinfo)
+                             ^^^^^^^^^^^^
+FileNotFoundError: [WinError 2] The system cannot find the file specified
+2026-09-01 14:56:31 | INFO     | aphelion.boot.driver | [Media sources] Probed media sources (0 ok, 1 unavailable)
+2026-09-01 14:56:31 | INFO     | aphelion.session | Constructing editor for project 'test project'
+2026-09-01 14:56:31 | INFO     | aphelion.session | Editor shown for 'test project'
+2026-09-01 14:57:16 | INFO     | aphelion.editor | Closing editor for project 'test project'
+2026-09-01 14:57:16 | INFO     | aphelion.session | Editor destroyed — quitting application
+2026-09-01 14:57:16 | INFO     | aphelion.runtime | Event loop exited with code 0
+2026-09-01 15:01:24 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-09-01 15:01:24 | INFO     | aphelion | Log file: C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\logs\aphelion.log
+2026-09-01 15:01:24 | INFO     | aphelion.runtime | Runtime ready — starting session
+2026-09-01 15:01:24 | INFO     | aphelion.session | Session start → project launcher
+2026-09-01 15:01:24 | INFO     | aphelion.runtime | Entering Qt event loop
+2026-09-01 15:01:25 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(680, 291, 560, 480))
+2026-09-01 15:01:27 | INFO     | aphelion.session | Project chosen (mode=open, path=C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\test project.aph)
+2026-09-01 15:01:27 | INFO     | aphelion.session | Opening bootloader
+2026-09-01 15:01:27 | INFO     | aphelion.boot.driver | Running boot stage 1/6: Runtime
+2026-09-01 15:01:27 | INFO     | aphelion.boot.driver | [Runtime] Boot request accepted (open project)
+2026-09-01 15:01:27 | INFO     | aphelion.boot.driver | Running boot stage 2/6: Node registry
+2026-09-01 15:01:27 | INFO     | aphelion.boot.driver | [Node registry] Registered 77 built-in node type(s)
+2026-09-01 15:01:27 | INFO     | aphelion.boot.driver | Running boot stage 3/6: Plugins
+2026-09-01 15:01:27 | INFO     | aphelion.boot.driver | [Plugins] Registered 0 plugin node type(s)
+2026-09-01 15:01:27 | INFO     | aphelion.boot.driver | Running boot stage 4/6: Project document
+2026-09-01 15:01:27 | INFO     | aphelion.boot.driver | [Project document] Loaded project 'test project'
+2026-09-01 15:01:27 | INFO     | aphelion.boot.driver | Running boot stage 5/6: Graph validation
+2026-09-01 15:01:27 | INFO     | aphelion.boot.driver | [Graph validation] Validated project graph
+2026-09-01 15:01:27 | INFO     | aphelion.boot.driver | Running boot stage 6/6: Media sources
+2026-09-01 15:01:27 | INFO     | aphelion.boot.driver | [Media sources] Probed media sources (1 ok, 0 unavailable)
+2026-09-01 15:01:27 | INFO     | aphelion.session | Constructing editor for project 'test project'
+2026-09-01 15:01:28 | INFO     | aphelion.session | Editor shown for 'test project'
+2026-09-01 15:02:17 | INFO     | aphelion.editor | Closing editor for project 'test project'
+2026-09-01 15:02:17 | INFO     | aphelion.session | Editor destroyed — quitting application
+2026-09-01 15:02:17 | INFO     | aphelion.runtime | Event loop exited with code 0
+2026-09-01 15:06:51 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-09-01 15:06:51 | INFO     | aphelion | Log file: C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\logs\aphelion.log
+2026-09-01 15:06:51 | INFO     | aphelion.runtime | Runtime ready — starting session
+2026-09-01 15:06:51 | INFO     | aphelion.session | Session start → project launcher
+2026-09-01 15:06:51 | INFO     | aphelion.runtime | Entering Qt event loop
+2026-09-01 15:06:52 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(680, 291, 560, 480))
+2026-09-01 15:06:53 | INFO     | aphelion.session | Project chosen (mode=open, path=C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\test project.aph)
+2026-09-01 15:06:53 | INFO     | aphelion.session | Opening bootloader
+2026-09-01 15:06:54 | INFO     | aphelion.boot.driver | Running boot stage 1/6: Runtime
+2026-09-01 15:06:54 | INFO     | aphelion.boot.driver | [Runtime] Boot request accepted (open project)
+2026-09-01 15:06:54 | INFO     | aphelion.boot.driver | Running boot stage 2/6: Node registry
+2026-09-01 15:06:54 | INFO     | aphelion.boot.driver | [Node registry] Registered 77 built-in node type(s)
+2026-09-01 15:06:54 | INFO     | aphelion.boot.driver | Running boot stage 3/6: Plugins
+2026-09-01 15:06:54 | INFO     | aphelion.boot.driver | [Plugins] Registered 0 plugin node type(s)
+2026-09-01 15:06:54 | INFO     | aphelion.boot.driver | Running boot stage 4/6: Project document
+2026-09-01 15:06:54 | INFO     | aphelion.boot.driver | [Project document] Loaded project 'test project'
+2026-09-01 15:06:54 | INFO     | aphelion.boot.driver | Running boot stage 5/6: Graph validation
+2026-09-01 15:06:54 | INFO     | aphelion.boot.driver | [Graph validation] Validated project graph
+2026-09-01 15:06:54 | INFO     | aphelion.boot.driver | Running boot stage 6/6: Media sources
+2026-09-01 15:06:54 | INFO     | aphelion.boot.driver | [Media sources] Probed media sources (1 ok, 0 unavailable)
+2026-09-01 15:06:54 | INFO     | aphelion.session | Constructing editor for project 'test project'
+2026-09-01 15:06:55 | INFO     | aphelion.session | Editor shown for 'test project'

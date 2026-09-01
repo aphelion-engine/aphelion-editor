@@ -22,6 +22,18 @@
     "drop_frames_during_playback": true,
     "show_performance_overlay": false
   },
+  "audio": {
+    "audio_enabled": true,
+    "master_volume": 1.0,
+    "default_device_index": -1,
+    "buffer_size": 10
+  },
+  "plugins": {
+    "load_bundled": true,
+    "load_user": true,
+    "load_entry_points": true,
+    "disabled_plugin_keys": []
+  },
   "node_colors": {},
   "keybinds": {
     "new_project": "Ctrl+N",

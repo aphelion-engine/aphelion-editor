@@ -21,6 +21,7 @@ from types import TracebackType
 
 import cv2
 import imageio
+import imageio_ffmpeg
 import numpy as np
 
 from core.audio import AudioData
@@ -165,7 +166,7 @@ class Mp4VideoWriter:
 
             # Use FFmpeg to mux audio
             cmd = [
-                "ffmpeg",
+                imageio_ffmpeg.get_ffmpeg_exe(),
                 "-y",  # Overwrite output file
                 "-i", str(self._output_path),  # Video input
                 "-i", temp_audio_path,  # Audio input
