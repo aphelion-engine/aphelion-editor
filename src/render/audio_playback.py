@@ -110,17 +110,27 @@ class AudioPlaybackEngine:
             self._stop_event.clear()
             self._playback_thread = threading.Thread(target=self._playback_loop, daemon=True)
             self._playback_thread.start()
+            _LOG.info("Audio playback engine started")
 
     def stop(self) -> None:
         """Stop audio playback."""
+        thread = None
         with self._lock:
             if not self._playing:
+                self._buffer.clear()
                 return
             self._playing = False
             self._stop_event.set()
-            if self._playback_thread:
-                self._playback_thread.join(timeout=1.0)
-                self._playback_thread = None
+            thread = self._playback_thread
+            self._playback_thread = None
+            self._buffer.clear()
+        if thread is not None:
+            thread.join(timeout=1.0)
+        _LOG.info("Audio playback engine stopped")
+
+    def clear_buffer(self) -> None:
+        """Drop any queued preview audio chunks."""
+        with self._lock:
             self._buffer.clear()
 
     def pause(self) -> None:
@@ -247,8 +257,15 @@ class AudioPlaybackEngine:
                             dtype="float32",
                             device=device_index,
                             blocksize=0,
+                            latency="high",
                         )
                         stream.start()
+                        _LOG.info(
+                            "Opened audio output stream device=%s rate=%s channels=%s",
+                            device_index if device_index is not None else "default",
+                            sample_rate,
+                            channels,
+                        )
                         with self._lock:
                             self._stream = stream
 

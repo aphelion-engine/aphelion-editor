@@ -5,16 +5,28 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import tempfile
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from pathlib import Path
 
+import imageio_ffmpeg
 import numpy as np
 
 from core.audio import AudioData
+from utils.logging_setup import get_logger
 
-if TYPE_CHECKING:
-    pass
+_LOG = get_logger("audio.decode")
+
+
+def _resolve_ffprobe_exe(ffmpeg_exe: str) -> str | None:
+    """Return a usable ffprobe path near the bundled ffmpeg, if present."""
+    ffmpeg_path = Path(ffmpeg_exe)
+    sibling = ffmpeg_path.with_name(ffmpeg_path.name.replace("ffmpeg", "ffprobe", 1))
+    if sibling.is_file():
+        return str(sibling)
+    generic = ffmpeg_path.with_name("ffprobe.exe" if os.name == "nt" else "ffprobe")
+    if generic.is_file():
+        return str(generic)
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,7 +51,7 @@ class AudioDecoder:
     def __init__(self) -> None:
         self._path: str | None = None
         self._audio_info: AudioInfo | None = None
-        self._temp_audio_file: str | None = None
+        self._decoded_samples: np.ndarray | None = None
 
     @property
     def path(self) -> str | None:
@@ -57,100 +69,104 @@ class AudioDecoder:
         self._close()
 
         try:
-            # Check if FFmpeg is available
-            try:
-                subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=5)
-            except (FileNotFoundError, subprocess.TimeoutExpired):
-                # FFmpeg not available, fall back to no audio
-                self._path = path
-                self._audio_info = AudioInfo(
-                    sample_rate=48000,
-                    num_channels=2,
-                    duration_sec=0.0,
-                    has_audio=False
+            ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+            ffprobe_exe = _resolve_ffprobe_exe(ffmpeg_exe)
+
+            sample_rate = 48000
+            num_channels = 2
+            duration = 0.0
+
+            if ffprobe_exe is not None:
+                probe_cmd = [
+                    ffprobe_exe,
+                    "-v", "error",
+                    "-select_streams", "a:0",
+                    "-show_entries", "stream=sample_rate,channels,duration",
+                    "-of", "json",
+                    path,
+                ]
+                probe_result = subprocess.run(
+                    probe_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
                 )
-                return self._audio_info
+                if probe_result.returncode == 0:
+                    probe_data = json.loads(probe_result.stdout)
+                    if probe_data.get("streams"):
+                        stream = probe_data["streams"][0]
+                        sample_rate = int(stream.get("sample_rate", 48000))
+                        num_channels = int(stream.get("channels", 2))
+                        duration = float(stream.get("duration", 0.0) or 0.0)
 
-            # Use FFmpeg to probe audio information
-            cmd = [
-                "ffmpeg",
-                "-i", path,
-                "-hide_banner",
-                "-loglevel", "error",
-                "-f", "null",
-                "-"
-            ]
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
+            else:
+                _LOG.info("No ffprobe binary found next to bundled ffmpeg; using decode-only audio detection")
 
-            # Extract audio info using ffprobe
-            probe_cmd = [
-                "ffprobe",
+            decode_cmd = [
+                ffmpeg_exe,
                 "-v", "error",
-                "-select_streams", "a",
-                "-show_entries", "stream=sample_rate,channels,duration",
-                "-of", "json",
-                path
+                "-i", path,
+                "-vn",
+                "-map", "0:a:0",
+                "-ac", str(num_channels),
+                "-ar", str(sample_rate),
+                "-acodec", "pcm_f32le",
+                "-f", "f32le",
+                "-",
             ]
-            probe_result = subprocess.run(
-                probe_cmd,
+            decode_result = subprocess.run(
+                decode_cmd,
                 capture_output=True,
-                text=True,
-                timeout=10
+                timeout=120,
             )
-
-            if probe_result.returncode != 0:
-                # No audio stream
+            if decode_result.returncode != 0 or not decode_result.stdout:
                 self._path = path
                 self._audio_info = AudioInfo(
-                    sample_rate=48000,
-                    num_channels=2,
-                    duration_sec=0.0,
-                    has_audio=False
+                    sample_rate=sample_rate,
+                    num_channels=num_channels,
+                    duration_sec=duration,
+                    has_audio=False,
                 )
                 return self._audio_info
 
-            probe_data = json.loads(probe_result.stdout)
+            samples = np.frombuffer(decode_result.stdout, dtype=np.float32)
+            if num_channels > 1:
+                frame_count = samples.size // num_channels
+                samples = samples[: frame_count * num_channels].reshape(frame_count, num_channels)
+            self._decoded_samples = np.ascontiguousarray(samples.astype(np.float32, copy=False))
 
-            if not probe_data.get("streams"):
-                # No audio stream found
-                self._path = path
-                self._audio_info = AudioInfo(
-                    sample_rate=48000,
-                    num_channels=2,
-                    duration_sec=0.0,
-                    has_audio=False
-                )
-                return self._audio_info
-
-            stream = probe_data["streams"][0]
-            sample_rate = int(stream.get("sample_rate", 48000))
-            num_channels = int(stream.get("channels", 2))
-            duration = float(stream.get("duration", 0.0))
+            if duration <= 0.0 and sample_rate > 0:
+                duration = float(self._decoded_samples.shape[0]) / float(sample_rate)
 
             self._path = path
             self._audio_info = AudioInfo(
                 sample_rate=sample_rate,
                 num_channels=num_channels,
                 duration_sec=duration,
-                has_audio=True
+                has_audio=self._decoded_samples.size > 0,
+            )
+            _LOG.info(
+                "Decoded audio for %s: has_audio=%s sample_rate=%s channels=%s samples=%s duration=%.3fs",
+                path,
+                self._audio_info.has_audio,
+                self._audio_info.sample_rate,
+                self._audio_info.num_channels,
+                self._decoded_samples.shape[0] if self._decoded_samples.ndim > 1 else self._decoded_samples.size,
+                self._audio_info.duration_sec,
             )
 
             return self._audio_info
 
-        except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError, ValueError, FileNotFoundError) as e:
-            # Fallback: assume no audio
+        except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError, ValueError, FileNotFoundError) as exc:
+            _LOG.warning("Audio decode setup failed for %s: %s", path, exc, exc_info=exc)
             self._path = path
             self._audio_info = AudioInfo(
                 sample_rate=48000,
                 num_channels=2,
                 duration_sec=0.0,
-                has_audio=False
+                has_audio=False,
             )
+            self._decoded_samples = None
             return self._audio_info
 
     def info(self) -> AudioInfo | None:
@@ -165,12 +181,7 @@ class AudioDecoder:
         """Internal close without path check."""
         self._path = None
         self._audio_info = None
-        if self._temp_audio_file and os.path.exists(self._temp_audio_file):
-            try:
-                os.unlink(self._temp_audio_file)
-            except OSError:
-                pass
-        self._temp_audio_file = None
+        self._decoded_samples = None
 
     def extract_audio_for_frame(
         self,
@@ -188,74 +199,44 @@ class AudioDecoder:
         Returns:
             AudioData containing samples for this frame, or silence if no audio
         """
-        if not self.is_open or self._audio_info is None or not self._audio_info.has_audio:
-            # Return silence
+        if (
+            not self.is_open
+            or self._audio_info is None
+            or not self._audio_info.has_audio
+            or self._decoded_samples is None
+        ):
             return AudioData.silence(
                 duration=duration_per_frame,
                 sample_rate=self._audio_info.sample_rate if self._audio_info else 48000,
-                channels=self._audio_info.num_channels if self._audio_info else 2
+                channels=self._audio_info.num_channels if self._audio_info else 2,
             )
 
-        if self._path is None:
-            return AudioData.silence(duration=duration_per_frame)
+        sample_rate = self._audio_info.sample_rate
+        channels = self._audio_info.num_channels
+        start_index = max(0, int(round((frame_num / max(fps, 0.001)) * sample_rate)))
+        end_index = max(start_index, int(round(((frame_num / max(fps, 0.001)) + duration_per_frame) * sample_rate)))
+        sliced = self._decoded_samples[start_index:end_index]
 
-        try:
-            # Check if FFmpeg is available
-            try:
-                subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=5)
-            except (FileNotFoundError, subprocess.TimeoutExpired):
-                # FFmpeg not available, return silence
-                return AudioData.silence(
-                    duration=duration_per_frame,
-                    sample_rate=self._audio_info.sample_rate,
-                    channels=self._audio_info.num_channels
-                )
-
-            # Calculate start time for this frame
-            start_time = frame_num / fps
-
-            # Extract audio segment for this frame using FFmpeg
-            cmd = [
-                "ffmpeg",
-                "-ss", str(start_time),
-                "-i", self._path,
-                "-t", str(duration_per_frame),
-                "-vn",  # No video
-                "-acodec", "pcm_f32le",  # Float32 PCM
-                "-ar", str(self._audio_info.sample_rate),
-                "-ac", str(self._audio_info.num_channels),
-                "-f", "f32le",  # Raw float32 output
-                "-"  # Output to stdout
-            ]
-
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                timeout=30
+        expected_samples = max(1, int(round(duration_per_frame * sample_rate)))
+        if frame_num < 3:
+            _LOG.info(
+                "Audio slice frame=%s start=%s end=%s expected=%s actual=%s silent=%s",
+                frame_num,
+                start_index,
+                end_index,
+                expected_samples,
+                sliced.shape[0],
+                bool(np.max(np.abs(sliced)) < 1e-6) if sliced.size > 0 else True,
             )
 
-            if result.returncode != 0:
-                return AudioData.silence(
-                    duration=duration_per_frame,
-                    sample_rate=self._audio_info.sample_rate,
-                    channels=self._audio_info.num_channels
-                )
+        if sliced.shape[0] < expected_samples:
+            if channels > 1:
+                pad = np.zeros((expected_samples - sliced.shape[0], channels), dtype=np.float32)
+            else:
+                pad = np.zeros(expected_samples - sliced.shape[0], dtype=np.float32)
+            sliced = np.concatenate((sliced, pad), axis=0)
 
-            # Convert raw bytes to numpy array
-            samples = np.frombuffer(result.stdout, dtype=np.float32)
-
-            # Reshape for multi-channel audio
-            if self._audio_info.num_channels > 1:
-                samples = samples.reshape(-1, self._audio_info.num_channels)
-
-            return AudioData(
-                samples=samples,
-                sample_rate=self._audio_info.sample_rate
-            )
-
-        except (subprocess.TimeoutExpired, ValueError, FileNotFoundError) as e:
-            return AudioData.silence(
-                duration=duration_per_frame,
-                sample_rate=self._audio_info.sample_rate if self._audio_info else 48000,
-                channels=self._audio_info.num_channels if self._audio_info else 2
-            )
+        return AudioData(
+            samples=np.ascontiguousarray(sliced.astype(np.float32, copy=False)),
+            sample_rate=sample_rate,
+        )

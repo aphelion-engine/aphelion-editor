@@ -5639,3 +5639,550 @@ FileNotFoundError: [WinError 2] The system cannot find the file specified
 2026-09-01 15:06:54 | INFO     | aphelion.boot.driver | [Media sources] Probed media sources (1 ok, 0 unavailable)
 2026-09-01 15:06:54 | INFO     | aphelion.session | Constructing editor for project 'test project'
 2026-09-01 15:06:55 | INFO     | aphelion.session | Editor shown for 'test project'
+2026-09-01 15:10:19 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-09-01 15:10:19 | INFO     | aphelion | Log file: C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\logs\aphelion.log
+2026-09-01 15:10:19 | INFO     | aphelion.runtime | Runtime ready — starting session
+2026-09-01 15:10:19 | INFO     | aphelion.session | Session start → project launcher
+2026-09-01 15:10:19 | INFO     | aphelion.runtime | Entering Qt event loop
+2026-09-01 15:10:20 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(680, 291, 560, 480))
+2026-09-01 15:10:21 | INFO     | aphelion.session | Project chosen (mode=open, path=C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\test project.aph)
+2026-09-01 15:10:21 | INFO     | aphelion.session | Opening bootloader
+2026-09-01 15:10:21 | INFO     | aphelion.boot.driver | Running boot stage 1/6: Runtime
+2026-09-01 15:10:21 | INFO     | aphelion.boot.driver | [Runtime] Boot request accepted (open project)
+2026-09-01 15:10:21 | INFO     | aphelion.boot.driver | Running boot stage 2/6: Node registry
+2026-09-01 15:10:21 | INFO     | aphelion.boot.driver | [Node registry] Registered 77 built-in node type(s)
+2026-09-01 15:10:21 | INFO     | aphelion.boot.driver | Running boot stage 3/6: Plugins
+2026-09-01 15:10:21 | INFO     | aphelion.boot.driver | [Plugins] Registered 0 plugin node type(s)
+2026-09-01 15:10:21 | INFO     | aphelion.boot.driver | Running boot stage 4/6: Project document
+2026-09-01 15:10:21 | INFO     | aphelion.boot.driver | [Project document] Loaded project 'test project'
+2026-09-01 15:10:22 | INFO     | aphelion.boot.driver | Running boot stage 5/6: Graph validation
+2026-09-01 15:10:22 | INFO     | aphelion.boot.driver | [Graph validation] Validated project graph
+2026-09-01 15:10:22 | INFO     | aphelion.boot.driver | Running boot stage 6/6: Media sources
+2026-09-01 15:10:22 | INFO     | aphelion.boot.driver | [Media sources] Probed media sources (1 ok, 0 unavailable)
+2026-09-01 15:10:22 | INFO     | aphelion.session | Constructing editor for project 'test project'
+2026-09-01 15:10:23 | WARNING  | aphelion.audio | sounddevice is unavailable; only default audio device placeholder is exposed
+2026-09-01 15:10:23 | INFO     | aphelion.session | Editor shown for 'test project'
+2026-09-01 15:10:24 | WARNING  | aphelion.audio | sounddevice is unavailable; preview audio playback disabled
+2026-09-01 15:10:30 | WARNING  | aphelion.audio | sounddevice is unavailable; only default audio device placeholder is exposed
+2026-09-01 15:10:32 | WARNING  | aphelion.audio | sounddevice is unavailable; only default audio device placeholder is exposed
+2026-09-01 15:10:35 | WARNING  | aphelion.audio | sounddevice is unavailable; only default audio device placeholder is exposed
+2026-09-01 15:10:38 | WARNING  | aphelion.audio | sounddevice is unavailable; only default audio device placeholder is exposed
+2026-09-01 15:10:40 | WARNING  | aphelion.audio | sounddevice is unavailable; only default audio device placeholder is exposed
+2026-09-01 15:10:42 | WARNING  | aphelion.audio | sounddevice is unavailable; only default audio device placeholder is exposed
+2026-09-01 15:10:44 | WARNING  | aphelion.audio | sounddevice is unavailable; only default audio device placeholder is exposed
+2026-09-01 15:10:44 | WARNING  | aphelion.audio | sounddevice is unavailable; only default audio device placeholder is exposed
+2026-09-01 15:10:45 | WARNING  | aphelion.audio | sounddevice is unavailable; only default audio device placeholder is exposed
+2026-09-01 15:11:19 | WARNING  | aphelion.audio | sounddevice is unavailable; only default audio device placeholder is exposed
+2026-09-01 15:11:22 | WARNING  | aphelion.audio | sounddevice is unavailable; only default audio device placeholder is exposed
+2026-09-01 15:11:24 | WARNING  | aphelion.audio | sounddevice is unavailable; only default audio device placeholder is exposed
+2026-09-01 15:11:26 | WARNING  | aphelion.audio | sounddevice is unavailable; only default audio device placeholder is exposed
+2026-09-01 15:11:27 | WARNING  | aphelion.audio | sounddevice is unavailable; only default audio device placeholder is exposed
+2026-09-01 15:11:27 | WARNING  | aphelion.audio | sounddevice is unavailable; only default audio device placeholder is exposed
+2026-09-01 15:11:31 | WARNING  | aphelion.audio | sounddevice is unavailable; only default audio device placeholder is exposed
+2026-09-01 15:11:34 | WARNING  | aphelion.audio | sounddevice is unavailable; only default audio device placeholder is exposed
+2026-09-01 15:11:34 | WARNING  | aphelion.audio | sounddevice is unavailable; preview audio playback disabled
+2026-09-01 15:11:37 | INFO     | aphelion.editor | Closing editor for project 'test project'
+2026-09-01 15:11:37 | INFO     | aphelion.session | Editor destroyed — quitting application
+2026-09-01 15:11:37 | INFO     | aphelion.runtime | Event loop exited with code 0
+2026-09-01 15:12:26 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-09-01 15:12:26 | INFO     | aphelion | Log file: C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\logs\aphelion.log
+2026-09-01 15:12:26 | INFO     | aphelion.runtime | Runtime ready — starting session
+2026-09-01 15:12:26 | INFO     | aphelion.session | Session start → project launcher
+2026-09-01 15:12:26 | INFO     | aphelion.runtime | Entering Qt event loop
+2026-09-01 15:12:27 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(680, 291, 560, 480))
+2026-09-01 15:12:28 | INFO     | aphelion.session | Project chosen (mode=open, path=C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\test project.aph)
+2026-09-01 15:12:28 | INFO     | aphelion.session | Opening bootloader
+2026-09-01 15:12:28 | INFO     | aphelion.boot.driver | Running boot stage 1/6: Runtime
+2026-09-01 15:12:28 | INFO     | aphelion.boot.driver | [Runtime] Boot request accepted (open project)
+2026-09-01 15:12:28 | INFO     | aphelion.boot.driver | Running boot stage 2/6: Node registry
+2026-09-01 15:12:28 | INFO     | aphelion.boot.driver | [Node registry] Registered 77 built-in node type(s)
+2026-09-01 15:12:28 | INFO     | aphelion.boot.driver | Running boot stage 3/6: Plugins
+2026-09-01 15:12:28 | INFO     | aphelion.boot.driver | [Plugins] Registered 0 plugin node type(s)
+2026-09-01 15:12:28 | INFO     | aphelion.boot.driver | Running boot stage 4/6: Project document
+2026-09-01 15:12:28 | INFO     | aphelion.boot.driver | [Project document] Loaded project 'test project'
+2026-09-01 15:12:29 | INFO     | aphelion.boot.driver | Running boot stage 5/6: Graph validation
+2026-09-01 15:12:29 | INFO     | aphelion.boot.driver | [Graph validation] Validated project graph
+2026-09-01 15:12:29 | INFO     | aphelion.boot.driver | Running boot stage 6/6: Media sources
+2026-09-01 15:12:29 | INFO     | aphelion.boot.driver | [Media sources] Probed media sources (1 ok, 0 unavailable)
+2026-09-01 15:12:29 | INFO     | aphelion.session | Constructing editor for project 'test project'
+2026-09-01 15:12:31 | INFO     | aphelion.session | Editor shown for 'test project'
+2026-09-01 15:12:50 | INFO     | aphelion.editor | Closing editor for project 'test project'
+2026-09-01 15:12:50 | INFO     | aphelion.session | Editor destroyed — quitting application
+2026-09-01 15:12:50 | INFO     | aphelion.runtime | Event loop exited with code 0
+2026-09-01 15:14:53 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-09-01 15:14:53 | INFO     | aphelion | Log file: C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\logs\aphelion.log
+2026-09-01 15:14:53 | INFO     | aphelion.runtime | Runtime ready — starting session
+2026-09-01 15:14:53 | INFO     | aphelion.session | Session start → project launcher
+2026-09-01 15:14:53 | INFO     | aphelion.runtime | Entering Qt event loop
+2026-09-01 15:14:54 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(680, 291, 560, 480))
+2026-09-01 15:14:55 | INFO     | aphelion.session | Project chosen (mode=open, path=C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\test project.aph)
+2026-09-01 15:14:55 | INFO     | aphelion.session | Opening bootloader
+2026-09-01 15:14:55 | INFO     | aphelion.boot.driver | Running boot stage 1/6: Runtime
+2026-09-01 15:14:55 | INFO     | aphelion.boot.driver | [Runtime] Boot request accepted (open project)
+2026-09-01 15:14:55 | INFO     | aphelion.boot.driver | Running boot stage 2/6: Node registry
+2026-09-01 15:14:55 | INFO     | aphelion.boot.driver | [Node registry] Registered 77 built-in node type(s)
+2026-09-01 15:14:55 | INFO     | aphelion.boot.driver | Running boot stage 3/6: Plugins
+2026-09-01 15:14:55 | INFO     | aphelion.boot.driver | [Plugins] Registered 0 plugin node type(s)
+2026-09-01 15:14:56 | INFO     | aphelion.boot.driver | Running boot stage 4/6: Project document
+2026-09-01 15:14:56 | INFO     | aphelion.boot.driver | [Project document] Loaded project 'test project'
+2026-09-01 15:14:56 | INFO     | aphelion.boot.driver | Running boot stage 5/6: Graph validation
+2026-09-01 15:14:56 | INFO     | aphelion.boot.driver | [Graph validation] Validated project graph
+2026-09-01 15:14:56 | INFO     | aphelion.boot.driver | Running boot stage 6/6: Media sources
+2026-09-01 15:14:59 | WARNING  | aphelion.audio.decode | Audio decode setup failed for C:/Users/jackw/Videos/2026-08-20 17-27-50.mp4: [WinError 2] The system cannot find the file specified
+Traceback (most recent call last):
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\render\audio_decoder.py", line 70, in open
+    probe_result = subprocess.run(
+        probe_cmd,
+    ...<2 lines>...
+        timeout=10
+    )
+  File "C:\Python314\Lib\subprocess.py", line 555, in run
+    with Popen(*popenargs, **kwargs) as process:
+         ~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python314\Lib\subprocess.py", line 1039, in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                        pass_fds, cwd, env,
+                        ^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+                        gid, gids, uid, umask,
+                        ^^^^^^^^^^^^^^^^^^^^^^
+                        start_new_session, process_group)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python314\Lib\subprocess.py", line 1553, in _execute_child
+    hp, ht, pid, tid = _winapi.CreateProcess(executable, args,
+                       ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+                             # no special security
+                             ^^^^^^^^^^^^^^^^^^^^^
+    ...<4 lines>...
+                             cwd,
+                             ^^^^
+                             startupinfo)
+                             ^^^^^^^^^^^^
+FileNotFoundError: [WinError 2] The system cannot find the file specified
+2026-09-01 15:14:59 | INFO     | aphelion.boot.driver | [Media sources] Probed media sources (1 ok, 0 unavailable)
+2026-09-01 15:14:59 | INFO     | aphelion.session | Constructing editor for project 'test project'
+2026-09-01 15:15:00 | INFO     | aphelion.session | Editor shown for 'test project'
+2026-09-01 15:15:02 | INFO     | aphelion.editor | Closing editor for project 'test project'
+2026-09-01 15:15:02 | INFO     | aphelion.session | Editor destroyed — quitting application
+2026-09-01 15:15:02 | INFO     | aphelion.runtime | Event loop exited with code 0
+2026-09-01 15:15:16 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-09-01 15:15:16 | INFO     | aphelion | Log file: C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\logs\aphelion.log
+2026-09-01 15:15:16 | INFO     | aphelion.runtime | Runtime ready — starting session
+2026-09-01 15:15:16 | INFO     | aphelion.session | Session start → project launcher
+2026-09-01 15:15:16 | INFO     | aphelion.runtime | Entering Qt event loop
+2026-09-01 15:15:16 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(680, 291, 560, 480))
+2026-09-01 15:15:18 | INFO     | aphelion.session | Project chosen (mode=open, path=C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\test project.aph)
+2026-09-01 15:15:18 | INFO     | aphelion.session | Opening bootloader
+2026-09-01 15:15:18 | INFO     | aphelion.boot.driver | Running boot stage 1/6: Runtime
+2026-09-01 15:15:18 | INFO     | aphelion.boot.driver | [Runtime] Boot request accepted (open project)
+2026-09-01 15:15:18 | INFO     | aphelion.boot.driver | Running boot stage 2/6: Node registry
+2026-09-01 15:15:18 | INFO     | aphelion.boot.driver | [Node registry] Registered 77 built-in node type(s)
+2026-09-01 15:15:19 | INFO     | aphelion.boot.driver | Running boot stage 3/6: Plugins
+2026-09-01 15:15:19 | INFO     | aphelion.boot.driver | [Plugins] Registered 0 plugin node type(s)
+2026-09-01 15:15:19 | INFO     | aphelion.boot.driver | Running boot stage 4/6: Project document
+2026-09-01 15:15:19 | INFO     | aphelion.boot.driver | [Project document] Loaded project 'test project'
+2026-09-01 15:15:19 | INFO     | aphelion.boot.driver | Running boot stage 5/6: Graph validation
+2026-09-01 15:15:19 | INFO     | aphelion.boot.driver | [Graph validation] Validated project graph
+2026-09-01 15:15:19 | INFO     | aphelion.boot.driver | Running boot stage 6/6: Media sources
+2026-09-01 15:15:19 | WARNING  | aphelion.audio.decode | Audio decode setup failed for C:/Users/jackw/Videos/2026-08-20 17-27-50.mp4: [WinError 2] The system cannot find the file specified
+Traceback (most recent call last):
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\render\audio_decoder.py", line 70, in open
+    probe_result = subprocess.run(
+        probe_cmd,
+    ...<2 lines>...
+        timeout=10
+    )
+  File "C:\Python314\Lib\subprocess.py", line 555, in run
+    with Popen(*popenargs, **kwargs) as process:
+         ~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python314\Lib\subprocess.py", line 1039, in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                        pass_fds, cwd, env,
+                        ^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+                        gid, gids, uid, umask,
+                        ^^^^^^^^^^^^^^^^^^^^^^
+                        start_new_session, process_group)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python314\Lib\subprocess.py", line 1553, in _execute_child
+    hp, ht, pid, tid = _winapi.CreateProcess(executable, args,
+                       ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+                             # no special security
+                             ^^^^^^^^^^^^^^^^^^^^^
+    ...<4 lines>...
+                             cwd,
+                             ^^^^
+                             startupinfo)
+                             ^^^^^^^^^^^^
+FileNotFoundError: [WinError 2] The system cannot find the file specified
+2026-09-01 15:15:19 | INFO     | aphelion.boot.driver | [Media sources] Probed media sources (1 ok, 0 unavailable)
+2026-09-01 15:15:19 | INFO     | aphelion.session | Constructing editor for project 'test project'
+2026-09-01 15:15:20 | INFO     | aphelion.session | Editor shown for 'test project'
+2026-09-01 15:15:23 | INFO     | aphelion.editor | Closing editor for project 'test project'
+2026-09-01 15:15:23 | INFO     | aphelion.session | Editor destroyed — quitting application
+2026-09-01 15:15:23 | INFO     | aphelion.runtime | Event loop exited with code 0
+2026-09-01 15:16:18 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-09-01 15:16:18 | INFO     | aphelion | Log file: C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\logs\aphelion.log
+2026-09-01 15:16:18 | INFO     | aphelion.runtime | Runtime ready — starting session
+2026-09-01 15:16:18 | INFO     | aphelion.session | Session start → project launcher
+2026-09-01 15:16:18 | INFO     | aphelion.runtime | Entering Qt event loop
+2026-09-01 15:16:19 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(680, 291, 560, 480))
+2026-09-01 15:16:20 | INFO     | aphelion.session | Project chosen (mode=open, path=C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\test project.aph)
+2026-09-01 15:16:20 | INFO     | aphelion.session | Opening bootloader
+2026-09-01 15:16:21 | INFO     | aphelion.boot.driver | Running boot stage 1/6: Runtime
+2026-09-01 15:16:21 | INFO     | aphelion.boot.driver | [Runtime] Boot request accepted (open project)
+2026-09-01 15:16:21 | INFO     | aphelion.boot.driver | Running boot stage 2/6: Node registry
+2026-09-01 15:16:21 | INFO     | aphelion.boot.driver | [Node registry] Registered 77 built-in node type(s)
+2026-09-01 15:16:21 | INFO     | aphelion.boot.driver | Running boot stage 3/6: Plugins
+2026-09-01 15:16:21 | INFO     | aphelion.boot.driver | [Plugins] Registered 0 plugin node type(s)
+2026-09-01 15:16:21 | INFO     | aphelion.boot.driver | Running boot stage 4/6: Project document
+2026-09-01 15:16:21 | INFO     | aphelion.boot.driver | [Project document] Loaded project 'test project'
+2026-09-01 15:16:21 | INFO     | aphelion.boot.driver | Running boot stage 5/6: Graph validation
+2026-09-01 15:16:21 | INFO     | aphelion.boot.driver | [Graph validation] Validated project graph
+2026-09-01 15:16:21 | INFO     | aphelion.boot.driver | Running boot stage 6/6: Media sources
+2026-09-01 15:16:22 | INFO     | aphelion.audio.decode | No ffprobe binary found next to bundled ffmpeg; using decode-only audio detection
+2026-09-01 15:16:24 | INFO     | aphelion.boot.driver | [Media sources] Probed media sources (1 ok, 0 unavailable)
+2026-09-01 15:16:24 | INFO     | aphelion.session | Constructing editor for project 'test project'
+2026-09-01 15:16:25 | INFO     | aphelion.session | Editor shown for 'test project'
+2026-09-01 15:17:27 | INFO     | aphelion.editor | Saved project C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\test project.aph
+2026-09-01 15:17:27 | INFO     | aphelion.editor | Closing editor for project 'test project'
+2026-09-01 15:17:28 | INFO     | aphelion.session | Editor destroyed — quitting application
+2026-09-01 15:17:28 | INFO     | aphelion.runtime | Event loop exited with code 0
+2026-09-01 15:19:07 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-09-01 15:19:07 | INFO     | aphelion | Log file: C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\logs\aphelion.log
+2026-09-01 15:19:08 | INFO     | aphelion.runtime | Runtime ready — starting session
+2026-09-01 15:19:08 | INFO     | aphelion.session | Session start → project launcher
+2026-09-01 15:19:08 | INFO     | aphelion.runtime | Entering Qt event loop
+2026-09-01 15:19:08 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(680, 291, 560, 480))
+2026-09-01 15:19:09 | INFO     | aphelion.session | Project chosen (mode=open, path=C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\test project.aph)
+2026-09-01 15:19:09 | INFO     | aphelion.session | Opening bootloader
+2026-09-01 15:19:09 | INFO     | aphelion.boot.driver | Running boot stage 1/6: Runtime
+2026-09-01 15:19:09 | INFO     | aphelion.boot.driver | [Runtime] Boot request accepted (open project)
+2026-09-01 15:19:09 | INFO     | aphelion.boot.driver | Running boot stage 2/6: Node registry
+2026-09-01 15:19:10 | INFO     | aphelion.boot.driver | [Node registry] Registered 77 built-in node type(s)
+2026-09-01 15:19:10 | INFO     | aphelion.boot.driver | Running boot stage 3/6: Plugins
+2026-09-01 15:19:10 | INFO     | aphelion.boot.driver | [Plugins] Registered 0 plugin node type(s)
+2026-09-01 15:19:10 | INFO     | aphelion.boot.driver | Running boot stage 4/6: Project document
+2026-09-01 15:19:10 | INFO     | aphelion.boot.driver | [Project document] Loaded project 'test project'
+2026-09-01 15:19:10 | INFO     | aphelion.boot.driver | Running boot stage 5/6: Graph validation
+2026-09-01 15:19:10 | INFO     | aphelion.boot.driver | [Graph validation] Validated project graph
+2026-09-01 15:19:10 | INFO     | aphelion.boot.driver | Running boot stage 6/6: Media sources
+2026-09-01 15:19:10 | INFO     | aphelion.audio.decode | No ffprobe binary found next to bundled ffmpeg; using decode-only audio detection
+2026-09-01 15:19:11 | INFO     | aphelion.audio.decode | Decoded audio for C:/Users/jackw/Videos/2026-08-20 17-27-50.mp4: has_audio=True sample_rate=48000 channels=1 samples=17707008 duration=368.896s
+2026-09-01 15:19:11 | INFO     | aphelion.boot.driver | [Media sources] Probed media sources (1 ok, 0 unavailable)
+2026-09-01 15:19:11 | INFO     | aphelion.session | Constructing editor for project 'test project'
+2026-09-01 15:19:12 | INFO     | aphelion.session | Editor shown for 'test project'
+2026-09-01 15:19:22 | INFO     | aphelion.audio | Audio playback engine started
+2026-09-01 15:19:22 | INFO     | aphelion.audio.decode | Audio slice frame=0 start=0 end=1600 expected=1600 actual=1600 silent=False
+2026-09-01 15:19:22 | INFO     | aphelion.audio.decode | Audio slice frame=1 start=1600 end=3200 expected=1600 actual=1600 silent=False
+2026-09-01 15:19:22 | INFO     | aphelion.audio.decode | Audio slice frame=2 start=3200 end=4800 expected=1600 actual=1600 silent=False
+2026-09-01 15:19:25 | INFO     | aphelion.audio | Audio playback engine stopped
+2026-09-01 15:19:27 | INFO     | aphelion.editor | Closing editor for project 'test project'
+2026-09-01 15:19:27 | INFO     | aphelion.session | Editor destroyed — quitting application
+2026-09-01 15:19:27 | INFO     | aphelion.runtime | Event loop exited with code 0
+2026-09-01 15:20:27 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-09-01 15:20:27 | INFO     | aphelion | Log file: C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\logs\aphelion.log
+2026-09-01 15:20:27 | INFO     | aphelion.runtime | Runtime ready — starting session
+2026-09-01 15:20:27 | INFO     | aphelion.session | Session start → project launcher
+2026-09-01 15:20:27 | INFO     | aphelion.runtime | Entering Qt event loop
+2026-09-01 15:20:27 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(680, 291, 560, 480))
+2026-09-01 15:20:28 | INFO     | aphelion.session | Project chosen (mode=open, path=C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\test project.aph)
+2026-09-01 15:20:28 | INFO     | aphelion.session | Opening bootloader
+2026-09-01 15:20:29 | INFO     | aphelion.boot.driver | Running boot stage 1/6: Runtime
+2026-09-01 15:20:29 | INFO     | aphelion.boot.driver | [Runtime] Boot request accepted (open project)
+2026-09-01 15:20:29 | INFO     | aphelion.boot.driver | Running boot stage 2/6: Node registry
+2026-09-01 15:20:29 | INFO     | aphelion.boot.driver | [Node registry] Registered 77 built-in node type(s)
+2026-09-01 15:20:29 | INFO     | aphelion.boot.driver | Running boot stage 3/6: Plugins
+2026-09-01 15:20:29 | INFO     | aphelion.boot.driver | [Plugins] Registered 0 plugin node type(s)
+2026-09-01 15:20:29 | INFO     | aphelion.boot.driver | Running boot stage 4/6: Project document
+2026-09-01 15:20:29 | INFO     | aphelion.boot.driver | [Project document] Loaded project 'test project'
+2026-09-01 15:20:29 | INFO     | aphelion.boot.driver | Running boot stage 5/6: Graph validation
+2026-09-01 15:20:29 | INFO     | aphelion.boot.driver | [Graph validation] Validated project graph
+2026-09-01 15:20:29 | INFO     | aphelion.boot.driver | Running boot stage 6/6: Media sources
+2026-09-01 15:20:30 | INFO     | aphelion.audio.decode | No ffprobe binary found next to bundled ffmpeg; using decode-only audio detection
+2026-09-01 15:20:30 | INFO     | aphelion.audio.decode | Decoded audio for C:/Users/jackw/Videos/2026-08-20 17-27-50.mp4: has_audio=True sample_rate=48000 channels=1 samples=17707008 duration=368.896s
+2026-09-01 15:20:30 | INFO     | aphelion.boot.driver | [Media sources] Probed media sources (1 ok, 0 unavailable)
+2026-09-01 15:20:30 | INFO     | aphelion.session | Constructing editor for project 'test project'
+2026-09-01 15:20:31 | INFO     | aphelion.session | Editor shown for 'test project'
+2026-09-01 15:20:32 | INFO     | aphelion.audio | Audio playback engine started
+2026-09-01 15:20:32 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00318 queue=1
+2026-09-01 15:20:32 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00401 queue=1
+2026-09-01 15:20:32 | INFO     | aphelion.audio | Opened audio output stream device=4 rate=48000 channels=1
+2026-09-01 15:20:32 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00636 queue=2
+2026-09-01 15:20:32 | INFO     | aphelion.audio.decode | Audio slice frame=0 start=0 end=1600 expected=1600 actual=1600 silent=False
+2026-09-01 15:20:32 | INFO     | aphelion.audio.viewport | Feed audio frame=0 samples=1600 rate=48000 channels=1 silent=False
+2026-09-01 15:20:32 | INFO     | aphelion.audio.decode | Audio slice frame=1 start=1600 end=3200 expected=1600 actual=1600 silent=False
+2026-09-01 15:20:32 | INFO     | aphelion.audio.decode | Audio slice frame=2 start=3200 end=4800 expected=1600 actual=1600 silent=False
+2026-09-01 15:20:32 | INFO     | aphelion.audio.viewport | Feed audio frame=1 samples=1600 rate=48000 channels=1 silent=False
+2026-09-01 15:20:32 | INFO     | aphelion.audio.viewport | Feed audio frame=2 samples=1600 rate=48000 channels=1 silent=False
+2026-09-01 15:20:32 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00318
+2026-09-01 15:20:32 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00401
+2026-09-01 15:20:32 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00636
+2026-09-01 15:20:32 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00969
+2026-09-01 15:20:32 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.01298
+2026-09-01 15:20:32 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.45889
+2026-09-01 15:20:32 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.17517
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.03112
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.01579
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00713
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00383
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00475
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00548
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00372
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00338
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00297
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00287 queue=1
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00287
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00360 queue=1
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00360
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00281 queue=1
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00281
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00256 queue=1
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00256
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00174 queue=1
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00174
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00191 queue=1
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00191
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00162 queue=1
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00162
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00153 queue=1
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00153
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00161 queue=1
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00161
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00139 queue=1
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00139
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00134 queue=1
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00134
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00123 queue=1
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00123
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00110 queue=1
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00110
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00105 queue=1
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00105
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00101 queue=1
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00101
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00446 queue=1
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00446
+2026-09-01 15:20:33 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00443 queue=1
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00443
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.01569 queue=1
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.01569
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00892 queue=1
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00892
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00734 queue=1
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00734
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00294 queue=1
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00294
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00410 queue=1
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00410
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00415 queue=1
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00415
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00435 queue=1
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00435
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00289 queue=1
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00289
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00299 queue=1
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00299
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00294 queue=1
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00294
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00272 queue=1
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00272
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00317 queue=1
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00317
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00248 queue=1
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00248
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00219 queue=1
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00219
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00192 queue=1
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00192
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.00218 queue=1
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.00218
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.18961 queue=1
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.18961
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.54512 queue=1
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.54512
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.92967 queue=1
+2026-09-01 15:20:34 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.92967
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.94434 queue=1
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.94434
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.92525 queue=1
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.92525
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.94202 queue=1
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.94202
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.94111 queue=1
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.94111
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.93966 queue=1
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.93966
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.92164 queue=1
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.92164
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.93357 queue=1
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.93357
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.78225 queue=1
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.78225
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.93757 queue=1
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.93757
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.72565 queue=1
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.72565
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.40167 queue=1
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.40167
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.45065 queue=1
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.45065
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.65957 queue=1
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.65957
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.93634 queue=1
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.93634
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.93924 queue=1
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.93924
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.94309 queue=1
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.94309
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.90371 queue=1
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.90371
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.80995 queue=1
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.80995
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.93174 queue=1
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.93174
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.93981 queue=1
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.93981
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.94240 queue=1
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.94240
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.94622 queue=1
+2026-09-01 15:20:35 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.94622
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.88393 queue=1
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.88393
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.80944 queue=1
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.80944
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.72210 queue=1
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.72210
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.71943 queue=1
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.71943
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.49729 queue=1
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.49729
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.62260 queue=1
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.62260
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.81663 queue=1
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.81663
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.94526 queue=1
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.94526
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.78859 queue=1
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.78859
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.58055 queue=1
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.58055
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.25546 queue=1
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.25546
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.12076 queue=1
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.12076
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.43558 queue=1
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.43558
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.95084 queue=1
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.95084
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.85956 queue=1
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.85956
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.94542 queue=1
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.94542
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.95229 queue=1
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.95229
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.98187 queue=1
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.98187
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.93906 queue=1
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.93906
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.94600 queue=1
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.94600
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.94112 queue=1
+2026-09-01 15:20:36 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.94112
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.76117 queue=1
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.76117
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.55765 queue=1
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.55765
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.48071 queue=1
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.48071
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.35183 queue=1
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.35183
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.51112 queue=1
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.51112
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.78807 queue=1
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.78807
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.73429 queue=1
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.73429
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.94513 queue=1
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.94513
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.93704 queue=1
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.93704
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.94919 queue=1
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.94919
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.94816 queue=1
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.94816
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.79316 queue=1
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.79316
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.70061 queue=1
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.70061
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.27576 queue=1
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.27576
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.29867 queue=1
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.29867
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.63026 queue=1
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.63026
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.56835 queue=1
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.56835
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.89240 queue=1
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.89240
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.63029 queue=1
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.63029
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.69931 queue=1
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.69931
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.64175 queue=1
+2026-09-01 15:20:37 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.64175
+2026-09-01 15:20:38 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.59497 queue=1
+2026-09-01 15:20:38 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.59497
+2026-09-01 15:20:38 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.93271 queue=1
+2026-09-01 15:20:38 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.93271
+2026-09-01 15:20:38 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.94927 queue=1
+2026-09-01 15:20:38 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.94927
+2026-09-01 15:20:38 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.94995 queue=1
+2026-09-01 15:20:38 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.94995
+2026-09-01 15:20:38 | INFO     | aphelion.audio | Queued audio chunk samples=1600 rate=48000 channels=1 peak=0.88768 queue=1
+2026-09-01 15:20:38 | INFO     | aphelion.audio | Wrote audio chunk samples=1600 rate=48000 channels=1 peak=0.88768
+2026-09-01 15:20:38 | INFO     | aphelion.audio | Audio playback engine stopped
+2026-09-01 15:20:40 | INFO     | aphelion.editor | Closing editor for project 'test project'
+2026-09-01 15:20:40 | INFO     | aphelion.session | Editor destroyed — quitting application
+2026-09-01 15:20:40 | INFO     | aphelion.runtime | Event loop exited with code 0
+2026-09-01 15:21:31 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-09-01 15:21:31 | INFO     | aphelion | Log file: C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\logs\aphelion.log
+2026-09-01 15:21:31 | INFO     | aphelion.runtime | Runtime ready — starting session
+2026-09-01 15:21:31 | INFO     | aphelion.session | Session start → project launcher
+2026-09-01 15:21:31 | INFO     | aphelion.runtime | Entering Qt event loop
+2026-09-01 15:21:32 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(680, 291, 560, 480))
+2026-09-01 15:21:33 | INFO     | aphelion.session | Project chosen (mode=open, path=C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\test project.aph)
+2026-09-01 15:21:33 | INFO     | aphelion.session | Opening bootloader
+2026-09-01 15:21:34 | INFO     | aphelion.boot.driver | Running boot stage 1/6: Runtime
+2026-09-01 15:21:34 | INFO     | aphelion.boot.driver | [Runtime] Boot request accepted (open project)
+2026-09-01 15:21:34 | INFO     | aphelion.boot.driver | Running boot stage 2/6: Node registry
+2026-09-01 15:21:34 | INFO     | aphelion.boot.driver | [Node registry] Registered 77 built-in node type(s)
+2026-09-01 15:21:34 | INFO     | aphelion.boot.driver | Running boot stage 3/6: Plugins
+2026-09-01 15:21:34 | INFO     | aphelion.boot.driver | [Plugins] Registered 0 plugin node type(s)
+2026-09-01 15:21:34 | INFO     | aphelion.boot.driver | Running boot stage 4/6: Project document
+2026-09-01 15:21:34 | INFO     | aphelion.boot.driver | [Project document] Loaded project 'test project'
+2026-09-01 15:21:34 | INFO     | aphelion.boot.driver | Running boot stage 5/6: Graph validation
+2026-09-01 15:21:34 | INFO     | aphelion.boot.driver | [Graph validation] Validated project graph
+2026-09-01 15:21:34 | INFO     | aphelion.boot.driver | Running boot stage 6/6: Media sources
+2026-09-01 15:21:35 | INFO     | aphelion.audio.decode | No ffprobe binary found next to bundled ffmpeg; using decode-only audio detection
+2026-09-01 15:21:36 | INFO     | aphelion.audio.decode | Decoded audio for C:/Users/jackw/Videos/2026-08-20 17-27-50.mp4: has_audio=True sample_rate=48000 channels=2 samples=8853504 duration=184.448s
+2026-09-01 15:21:36 | INFO     | aphelion.boot.driver | [Media sources] Probed media sources (1 ok, 0 unavailable)
+2026-09-01 15:21:36 | INFO     | aphelion.session | Constructing editor for project 'test project'
+2026-09-01 15:21:38 | INFO     | aphelion.session | Editor shown for 'test project'
+2026-09-01 15:21:39 | INFO     | aphelion.audio | Audio playback engine started
+2026-09-01 15:21:39 | INFO     | aphelion.audio | Opened audio output stream device=4 rate=48000 channels=2
+2026-09-01 15:21:39 | INFO     | aphelion.audio.decode | Audio slice frame=0 start=0 end=1600 expected=1600 actual=1600 silent=False
+2026-09-01 15:21:39 | INFO     | aphelion.audio.viewport | Feed audio frame=0 samples=1600 rate=48000 channels=2 silent=False
+2026-09-01 15:21:39 | INFO     | aphelion.audio.decode | Audio slice frame=1 start=1600 end=3200 expected=1600 actual=1600 silent=False
+2026-09-01 15:21:39 | INFO     | aphelion.audio.viewport | Feed audio frame=1 samples=1600 rate=48000 channels=2 silent=False
+2026-09-01 15:21:39 | INFO     | aphelion.audio.decode | Audio slice frame=2 start=3200 end=4800 expected=1600 actual=1600 silent=False
+2026-09-01 15:21:39 | INFO     | aphelion.audio.viewport | Feed audio frame=2 samples=1600 rate=48000 channels=2 silent=False
+2026-09-01 15:21:43 | INFO     | aphelion.audio | Audio playback engine stopped
+2026-09-01 15:21:54 | INFO     | aphelion.audio | Audio playback engine started
+2026-09-01 15:21:54 | INFO     | aphelion.audio | Opened audio output stream device=4 rate=48000 channels=2
+2026-09-01 15:21:56 | INFO     | aphelion.audio | Audio playback engine stopped
+2026-09-01 15:21:58 | INFO     | aphelion.editor | Closing editor for project 'test project'
+2026-09-01 15:21:58 | INFO     | aphelion.session | Editor destroyed — quitting application
+2026-09-01 15:21:58 | INFO     | aphelion.runtime | Event loop exited with code 0

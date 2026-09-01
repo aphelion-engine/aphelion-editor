@@ -193,6 +193,16 @@ class ViewportWidget(QWidget):
             frame_data = frame.frame
             audio_data = frame.audio
             if self._playback_active and audio_data is not None and self._audio_engine.is_enabled():
+                if frame_num < 3:
+                    from utils.logging_setup import get_logger
+                    get_logger("audio.viewport").info(
+                        "Feed audio frame=%s samples=%s rate=%s channels=%s silent=%s",
+                        frame_num,
+                        audio_data.num_samples,
+                        audio_data.sample_rate,
+                        audio_data.num_channels,
+                        audio_data.is_silent(),
+                    )
                 self._audio_engine.feed_audio(audio_data)
         elif isinstance(frame, np.ndarray):
             frame_data = frame
@@ -372,6 +382,7 @@ class ViewportWidget(QWidget):
         self._displayed_fps = 0.0
 
         # Start/stop audio playback
+        self._audio_engine.clear_buffer()
         if active and self._audio_engine.is_enabled():
             self._audio_engine.start()
         else:

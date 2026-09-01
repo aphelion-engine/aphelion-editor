@@ -25,7 +25,7 @@
   "audio": {
     "audio_enabled": true,
     "master_volume": 1.0,
-    "default_device_index": -1,
+    "default_device_index": 4,
     "buffer_size": 10
   },
   "plugins": {
