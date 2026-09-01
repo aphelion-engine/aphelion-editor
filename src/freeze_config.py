@@ -34,7 +34,11 @@ THIRD_PARTY_PACKAGES: Final[list[str]] = [
     "numpy",
     "cv2",
     "imageio",
-    "imageio_ffmpeg",
+    "imageio_ffmpeg",    # Aphelion runtime dependencies
+    "soundfile",
+    "librosa",
+    "sounddevice",
+
 ]
 
 INCLUDE_FILES: Final[list[tuple[str, str]]] = [
