@@ -50,7 +50,7 @@ class PreviewSettings:
         return cls(
             max_width=DEFAULT_PREVIEW_MAX_WIDTH,
             fit_mode=ViewportFitMode.Fit,
-            prefetch_frames=2,
+            prefetch_frames=6,
             background=ViewerBackground.Black,
             exposure_percent=100,
         )
@@ -84,7 +84,7 @@ class PreviewSettings:
         prefetch = defaults.prefetch_frames
         prefetch_prop = node.get_property("prefetch_frames")
         if prefetch_prop is not None and prefetch_prop.value is not None:
-            prefetch = max(0, min(8, int(prefetch_prop.value)))
+            prefetch = max(0, min(12, int(prefetch_prop.value)))
 
         background = defaults.background
         bg_prop = node.get_property("background")

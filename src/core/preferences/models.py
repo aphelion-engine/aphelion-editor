@@ -212,30 +212,72 @@ def _node_colors_from_raw(raw: object) -> dict[str, list[int]]:
 
 @dataclass
 class AudioSettings:
-    """Audio playback and device preferences."""
+    """Audio playback, export, and device preferences."""
 
     audio_enabled: bool = True
     master_volume: float = 1.0
+    host_api_name: str = ""
     default_device_index: int = -1  # -1 means system default
-    buffer_size: int = 10  # Number of audio chunks to buffer
+    latency_preset: str = "balanced"
+    buffer_size: int = 8  # Number of queued audio chunks
+    stream_blocksize: int = 512
+    output_sample_rate: int = 48000
+    output_channels: int = 2
+    export_audio_enabled: bool = True
+    export_sample_rate: int = 48000
+    export_channels: int = 2
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize audio preferences to JSON-compatible data."""
         return {
             "audio_enabled": self.audio_enabled,
             "master_volume": self.master_volume,
+            "host_api_name": self.host_api_name,
             "default_device_index": self.default_device_index,
+            "latency_preset": self.latency_preset,
             "buffer_size": self.buffer_size,
+            "stream_blocksize": self.stream_blocksize,
+            "output_sample_rate": self.output_sample_rate,
+            "output_channels": self.output_channels,
+            "export_audio_enabled": self.export_audio_enabled,
+            "export_sample_rate": self.export_sample_rate,
+            "export_channels": self.export_channels,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AudioSettings:
         """Deserialize audio preferences from JSON-compatible data."""
+        blocksize = int(data.get("stream_blocksize", 512))
+        if blocksize not in {0, 128, 256, 512, 1024, 2048}:
+            blocksize = 512
+        output_sample_rate = int(data.get("output_sample_rate", 48000))
+        if output_sample_rate not in {44100, 48000, 96000}:
+            output_sample_rate = 48000
+        output_channels = int(data.get("output_channels", 2))
+        if output_channels not in {1, 2}:
+            output_channels = 2
+        export_sample_rate = int(data.get("export_sample_rate", 48000))
+        if export_sample_rate not in {44100, 48000, 96000}:
+            export_sample_rate = 48000
+        export_channels = int(data.get("export_channels", 2))
+        if export_channels not in {1, 2}:
+            export_channels = 2
+        latency_preset = str(data.get("latency_preset", "balanced")).lower()
+        if latency_preset not in {"low", "balanced", "safe"}:
+            latency_preset = "balanced"
         return cls(
             audio_enabled=bool(data.get("audio_enabled", True)),
             master_volume=max(0.0, min(2.0, float(data.get("master_volume", 1.0)))),
+            host_api_name=str(data.get("host_api_name", "")),
             default_device_index=int(data.get("default_device_index", -1)),
-            buffer_size=max(1, min(20, int(data.get("buffer_size", 10)))),
+            latency_preset=latency_preset,
+            buffer_size=max(2, min(20, int(data.get("buffer_size", 8)))),
+            stream_blocksize=blocksize,
+            output_sample_rate=output_sample_rate,
+            output_channels=output_channels,
+            export_audio_enabled=bool(data.get("export_audio_enabled", True)),
+            export_sample_rate=export_sample_rate,
+            export_channels=export_channels,
         )
 
 

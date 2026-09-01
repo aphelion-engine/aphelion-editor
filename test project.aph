@@ -4,10 +4,10 @@
   "name": "test project",
   "timeline": {
     "fps": 30,
-    "width": 1920,
-    "height": 1080,
-    "duration": 10.0,
-    "current_frame": 297
+    "width": 1280,
+    "height": 720,
+    "duration": 801.4333333333333,
+    "current_frame": 52
   },
   "active_viewer": "node_1_1788292251992",
   "nodes": {
@@ -15,10 +15,10 @@
       "node_type": "Video Input",
       "node_category": "Input/Output",
       "name": "Video Input",
-      "x": -252.61765888097113,
-      "y": -95.65491179162586,
+      "x": -252.61765888097116,
+      "y": -94.23179027813572,
       "properties": {
-        "file_path": "C:/Users/jackw/Videos/2026-08-20 17-27-50.mp4",
+        "file_path": "C:/Users/jackw/Videos/2026-08-21 14-53-54.mp4",
         "enabled": true,
         "start_frame": 0,
         "end_frame": -1,

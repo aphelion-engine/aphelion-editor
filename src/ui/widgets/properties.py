@@ -92,7 +92,7 @@ def _split_xy_curves(
 class MediaProbeThread(QThread):
     """Probe video metadata off the UI thread so file browse stays responsive."""
 
-    probed = pyqtSignal(float, float, int, int)
+    probed = pyqtSignal(float, float, int, int, int)
     failed = pyqtSignal(str)
 
     def __init__(self, path: str, parent: QObject | None = None) -> None:
@@ -104,7 +104,7 @@ class MediaProbeThread(QThread):
         if info is None or info.duration_sec <= 0.0:
             self.failed.emit(f"Could not read video: {self._path}")
             return
-        self.probed.emit(info.fps, info.duration_sec, info.width, info.height)
+        self.probed.emit(info.fps, info.duration_sec, info.width, info.height, info.frame_count)
 
 
 class PropertiesPanel(QWidget):
@@ -779,8 +779,8 @@ class PropertiesPanel(QWidget):
         generation = self._probe_generation
         thread = MediaProbeThread(path, parent=self)
         thread.probed.connect(
-            lambda fps, dur, w, h, gen=generation, nid=node_id: self._on_probe_ok(
-                gen, nid, fps, dur, w, h
+            lambda fps, dur, w, h, frame_count, gen=generation, nid=node_id: self._on_probe_ok(
+                gen, nid, fps, dur, w, h, frame_count
             )
         )
         thread.failed.connect(
@@ -799,6 +799,7 @@ class PropertiesPanel(QWidget):
         duration_sec: float,
         width: int,
         height: int,
+        frame_count: int,
     ) -> None:
         if generation != self._probe_generation:
             return
@@ -814,6 +815,7 @@ class PropertiesPanel(QWidget):
                 duration_sec=duration_sec,
                 width=width,
                 height=height,
+                frame_count=frame_count,
             )
         self.project.invalidate_cache(node_id)
 

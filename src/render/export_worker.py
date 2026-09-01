@@ -38,6 +38,9 @@ class ExportRequest:
     format: ExportFormat
     fps: int
     full_resolution: bool = False
+    export_audio_enabled: bool = True
+    export_sample_rate: int = 48000
+    export_channels: int = 2
 
 
 class ExportWorker(QThread):
@@ -175,8 +178,8 @@ class ExportWorker(QThread):
     def _export_mp4(self, start: int, end: int, total: int) -> None:
         first_frame: np.ndarray | None = None
         first_audio: AudioData | None = None
-        audio_sample_rate = 48000
-        audio_channels = 2
+        audio_sample_rate = max(1, int(self._request.export_sample_rate))
+        audio_channels = 1 if int(self._request.export_channels) == 1 else 2
 
         # Find first valid frame and extract audio info
         for frame_num in range(start, end + 1):
@@ -185,8 +188,6 @@ class ExportWorker(QThread):
                 first_frame = frame
                 if audio is not None:
                     first_audio = audio
-                    audio_sample_rate = audio.sample_rate
-                    audio_channels = audio.num_channels
                 break
 
         if first_frame is None:
@@ -205,6 +206,7 @@ class ExportWorker(QThread):
                 height=height,
                 audio_sample_rate=audio_sample_rate,
                 audio_channels=audio_channels,
+                include_audio=self._request.export_audio_enabled,
             )
         except (OSError, RuntimeError) as exc:
             self.failed.emit(f"Could not open the video writer: {exc}")
@@ -222,7 +224,7 @@ class ExportWorker(QThread):
                     continue
                 if frame.shape[0] != height or frame.shape[1] != width:
                     frame = cv2.resize(frame, (width, height))
-                writer.write(frame, audio=audio)
+                writer.write(frame, audio=audio if self._request.export_audio_enabled else None)
                 written += 1
                 self.progress.emit(index + 1, total)
         finally:

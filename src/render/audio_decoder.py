@@ -183,6 +183,45 @@ class AudioDecoder:
         self._audio_info = None
         self._decoded_samples = None
 
+    def extract_audio_for_time_range(
+        self,
+        start_time_sec: float,
+        duration_sec: float,
+    ) -> AudioData:
+        """Extract audio samples for an arbitrary time range from the decoded buffer."""
+        if (
+            not self.is_open
+            or self._audio_info is None
+            or not self._audio_info.has_audio
+            or self._decoded_samples is None
+        ):
+            return AudioData.silence(
+                duration=max(0.0, duration_sec),
+                sample_rate=self._audio_info.sample_rate if self._audio_info else 48000,
+                channels=self._audio_info.num_channels if self._audio_info else 2,
+            )
+
+        sample_rate = self._audio_info.sample_rate
+        channels = self._audio_info.num_channels
+        safe_start = max(0.0, float(start_time_sec))
+        safe_duration = max(0.0, float(duration_sec))
+        start_index = max(0, int(round(safe_start * sample_rate)))
+        end_index = max(start_index, int(round((safe_start + safe_duration) * sample_rate)))
+        sliced = self._decoded_samples[start_index:end_index]
+
+        expected_samples = max(1, int(round(safe_duration * sample_rate)))
+        if sliced.shape[0] < expected_samples:
+            if channels > 1:
+                pad = np.zeros((expected_samples - sliced.shape[0], channels), dtype=np.float32)
+            else:
+                pad = np.zeros(expected_samples - sliced.shape[0], dtype=np.float32)
+            sliced = np.concatenate((sliced, pad), axis=0)
+
+        return AudioData(
+            samples=np.ascontiguousarray(sliced.astype(np.float32, copy=False)),
+            sample_rate=sample_rate,
+        )
+
     def extract_audio_for_frame(
         self,
         frame_num: int,
@@ -199,44 +238,15 @@ class AudioDecoder:
         Returns:
             AudioData containing samples for this frame, or silence if no audio
         """
-        if (
-            not self.is_open
-            or self._audio_info is None
-            or not self._audio_info.has_audio
-            or self._decoded_samples is None
-        ):
-            return AudioData.silence(
-                duration=duration_per_frame,
-                sample_rate=self._audio_info.sample_rate if self._audio_info else 48000,
-                channels=self._audio_info.num_channels if self._audio_info else 2,
-            )
-
-        sample_rate = self._audio_info.sample_rate
-        channels = self._audio_info.num_channels
-        start_index = max(0, int(round((frame_num / max(fps, 0.001)) * sample_rate)))
-        end_index = max(start_index, int(round(((frame_num / max(fps, 0.001)) + duration_per_frame) * sample_rate)))
-        sliced = self._decoded_samples[start_index:end_index]
-
-        expected_samples = max(1, int(round(duration_per_frame * sample_rate)))
+        start_time = float(frame_num) / max(fps, 0.001)
+        audio = self.extract_audio_for_time_range(start_time, duration_per_frame)
         if frame_num < 3:
             _LOG.info(
-                "Audio slice frame=%s start=%s end=%s expected=%s actual=%s silent=%s",
+                "Audio slice frame=%s start_time=%.6f duration=%.6f actual=%s silent=%s",
                 frame_num,
-                start_index,
-                end_index,
-                expected_samples,
-                sliced.shape[0],
-                bool(np.max(np.abs(sliced)) < 1e-6) if sliced.size > 0 else True,
+                start_time,
+                duration_per_frame,
+                audio.num_samples,
+                audio.is_silent(),
             )
-
-        if sliced.shape[0] < expected_samples:
-            if channels > 1:
-                pad = np.zeros((expected_samples - sliced.shape[0], channels), dtype=np.float32)
-            else:
-                pad = np.zeros(expected_samples - sliced.shape[0], dtype=np.float32)
-            sliced = np.concatenate((sliced, pad), axis=0)
-
-        return AudioData(
-            samples=np.ascontiguousarray(sliced.astype(np.float32, copy=False)),
-            sample_rate=sample_rate,
-        )
+        return audio

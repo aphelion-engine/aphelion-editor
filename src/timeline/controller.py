@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 PLAYBACK_SPEEDS: tuple[float, ...] = (0.25, 0.5, 1.0, 1.5, 2.0)
 DEFAULT_PLAYBACK_SPEED: float = 1.0
 
@@ -16,6 +18,8 @@ class PlaybackController:
         self.in_point: int = 0
         self.out_point: int = max(0, max_frame)
         self._max_frame: int = max(0, max_frame)
+        self._playback_accumulator_frames: float = 0.0
+        self._last_tick_time: float | None = None
 
     def set_max_frame(self, max_frame: int) -> None:
         """Update timeline length and clamp markers."""
@@ -28,8 +32,9 @@ class PlaybackController:
         return self._max_frame
 
     def timer_interval_ms(self, fps: float) -> int:
-        """Return Qt timer interval for the current speed."""
-        return max(1, int(1000 / (max(fps, 0.001) * self.playback_speed)))
+        """Return a responsive Qt timer interval for playback scheduling."""
+        target_fps = max(fps, 0.001) * self.playback_speed
+        return max(1, int(1000 / max(target_fps * 2.0, 1.0)))
 
     def set_in_point(self, frame: int) -> None:
         self.in_point = max(0, min(frame, self.out_point))
@@ -40,6 +45,29 @@ class PlaybackController:
     def clear_range(self) -> None:
         self.in_point = 0
         self.out_point = self._max_frame
+
+    def start_clock(self) -> None:
+        self._playback_accumulator_frames = 0.0
+        self._last_tick_time = time.monotonic()
+
+    def stop_clock(self) -> None:
+        self._playback_accumulator_frames = 0.0
+        self._last_tick_time = None
+
+    def frames_to_advance(self, fps: float) -> int:
+        """Return how many frames playback should advance on this tick."""
+        now = time.monotonic()
+        if self._last_tick_time is None:
+            self._last_tick_time = now
+            return 1
+        elapsed = max(0.0, now - self._last_tick_time)
+        self._last_tick_time = now
+        self._playback_accumulator_frames += elapsed * max(fps, 0.001) * self.playback_speed
+        frames = int(self._playback_accumulator_frames)
+        if frames <= 0:
+            return 0
+        self._playback_accumulator_frames -= frames
+        return min(frames, 4)
 
     def next_frame(self, current_frame: int) -> int | None:
         """Compute the next frame index, or None if playback should stop."""

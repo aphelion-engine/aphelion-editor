@@ -10,11 +10,12 @@ from PyQt6.QtCore import QRect, Qt
 from PyQt6.QtGui import QCloseEvent, QImage, QPixmap, QResizeEvent
 from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
-from core.audio import FrameWithAudio
+from core.audio import AudioData, FrameWithAudio
 from core.events import ObserverEvent
 from core.nodes.base import FRAME_DTYPE
 from core.preferences.models import PerformanceSettings
 from core.project import Project
+from core.nodes import VideoInputNode
 from effects.frame_ops import to_display_u8
 from render.audio_playback import get_audio_engine
 from render.frame_evaluator import FrameEvaluationWorker
@@ -50,6 +51,7 @@ class ViewportWidget(QWidget):
         self._displayed_fps: float = 0.0
         self._last_display_time: float | None = None
         self._audio_engine = get_audio_engine()
+        self._queued_audio_until_frame: int | None = None
 
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
@@ -130,6 +132,7 @@ class ViewportWidget(QWidget):
         self._displayed_fps = 0.0
         self.project.subscribe(self.on_project_changed)
         self._apply_background()
+        self._queued_audio_until_frame = None
         self.request_update()
 
     def on_project_changed(self, event: ObserverEvent, _data: Any) -> None:
@@ -193,17 +196,7 @@ class ViewportWidget(QWidget):
             frame_data = frame.frame
             audio_data = frame.audio
             if self._playback_active and audio_data is not None and self._audio_engine.is_enabled():
-                if frame_num < 3:
-                    from utils.logging_setup import get_logger
-                    get_logger("audio.viewport").info(
-                        "Feed audio frame=%s samples=%s rate=%s channels=%s silent=%s",
-                        frame_num,
-                        audio_data.num_samples,
-                        audio_data.sample_rate,
-                        audio_data.num_channels,
-                        audio_data.is_silent(),
-                    )
-                self._audio_engine.feed_audio(audio_data)
+                self._feed_smoother_preview_audio(frame_num, audio_data)
         elif isinstance(frame, np.ndarray):
             frame_data = frame
         else:
@@ -373,6 +366,57 @@ class ViewportWidget(QWidget):
             xform,
         )
 
+    def _feed_smoother_preview_audio(self, frame_num: int, fallback_audio: AudioData) -> None:
+        """Queue non-overlapping forward audio chunks during playback."""
+        next_frame_to_queue = frame_num
+        if self._queued_audio_until_frame is not None:
+            next_frame_to_queue = max(frame_num, self._queued_audio_until_frame)
+        if next_frame_to_queue > frame_num + 4:
+            return
+
+        chunk_frames = 10
+        source_audio = None
+        viewer_id = self.project.active_viewer
+        if viewer_id is not None:
+            for connection in self.project.connections:
+                if connection.input_node_id != viewer_id or connection.input_slot != "frame":
+                    continue
+                source_node = self.project.nodes.get(connection.output_node_id)
+                if isinstance(source_node, VideoInputNode):
+                    try:
+                        source_audio = source_node.preview_audio_chunk(next_frame_to_queue, duration_frames=chunk_frames)
+                    except Exception:
+                        source_audio = None
+                    break
+
+        if source_audio is not None:
+            self._audio_engine.feed_audio(source_audio)
+            self._queued_audio_until_frame = next_frame_to_queue + chunk_frames
+            return
+
+        if self._queued_audio_until_frame is None or self._queued_audio_until_frame <= frame_num:
+            self._audio_engine.feed_audio(fallback_audio)
+            self._queued_audio_until_frame = frame_num + 1
+
+    def _prime_audio_playback(self) -> None:
+        """Queue an initial forward audio chunk as soon as playback starts."""
+        viewer_id = self.project.active_viewer
+        if viewer_id is None:
+            return
+        for connection in self.project.connections:
+            if connection.input_node_id != viewer_id or connection.input_slot != "frame":
+                continue
+            source_node = self.project.nodes.get(connection.output_node_id)
+            if not isinstance(source_node, VideoInputNode):
+                continue
+            try:
+                audio = source_node.preview_audio_chunk(self.project.current_frame, duration_frames=12)
+            except Exception:
+                return
+            self._queued_audio_until_frame = self.project.current_frame + 12
+            self._audio_engine.feed_audio(audio)
+            return
+
     def set_playback_active(self, active: bool) -> None:
         """Hint the worker to prefetch; timeline alone drives frame changes."""
         self._playback_active = bool(active)
@@ -380,10 +424,12 @@ class ViewportWidget(QWidget):
         self._sync_playback_proxy_override()
         self._last_display_time = None
         self._displayed_fps = 0.0
+        self._queued_audio_until_frame = None
 
         # Start/stop audio playback
         self._audio_engine.clear_buffer()
         if active and self._audio_engine.is_enabled():
+            self._prime_audio_playback()
             self._audio_engine.start()
         else:
             self._audio_engine.stop()

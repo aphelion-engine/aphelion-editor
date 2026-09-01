@@ -25,6 +25,7 @@ import imageio_ffmpeg
 import numpy as np
 
 from core.audio import AudioData
+from render.audio_playback import _resample_audio
 
 _H264_CRF: int = 18
 """Constant rate factor for libx264 (lower is higher quality; 18 is near-lossless)."""
@@ -45,6 +46,7 @@ class Mp4VideoWriter:
         height: int,
         audio_sample_rate: int = 48000,
         audio_channels: int = 2,
+        include_audio: bool = True,
     ) -> None:
         """Open the FFmpeg-backed writer.
 
@@ -69,8 +71,9 @@ class Mp4VideoWriter:
         # visible image is never distorted.
         self._pad_right: int = width % 2
         self._pad_bottom: int = height % 2
-        self._audio_sample_rate: int = audio_sample_rate
-        self._audio_channels: int = audio_channels
+        self._audio_sample_rate: int = max(1, int(audio_sample_rate))
+        self._audio_channels: int = 1 if int(audio_channels) == 1 else 2
+        self._include_audio: bool = bool(include_audio)
         self._fps: float = fps
         self._output_path: Path = output_path
 
@@ -116,9 +119,25 @@ class Mp4VideoWriter:
         self._writer.append_data(frame_rgb)
 
         # Collect audio samples
-        if audio is not None and not audio.is_silent():
+        if self._include_audio and audio is not None and not audio.is_silent():
+            samples = np.asarray(audio.samples, dtype=np.float32)
+            if samples.ndim == 1:
+                samples = samples[:, np.newaxis]
+            if samples.shape[1] > self._audio_channels:
+                samples = samples[:, :self._audio_channels]
+            elif samples.shape[1] < self._audio_channels:
+                if samples.shape[1] == 1 and self._audio_channels == 2:
+                    samples = np.repeat(samples, 2, axis=1)
+                else:
+                    padding = np.zeros(
+                        (samples.shape[0], self._audio_channels - samples.shape[1]),
+                        dtype=np.float32,
+                    )
+                    samples = np.concatenate((samples, padding), axis=1)
+            if int(audio.sample_rate) != self._audio_sample_rate:
+                samples = _resample_audio(samples, int(audio.sample_rate), self._audio_sample_rate)
             self._has_audio = True
-            self._audio_buffer.append(audio.samples)
+            self._audio_buffer.append(np.clip(samples, -1.0, 1.0).astype(np.float32, copy=False))
 
     def write_video_only(self, frame_rgb: np.ndarray) -> None:
         """Append one uint8 HxWx3 RGB frame without audio (for backward compatibility)."""
@@ -129,7 +148,7 @@ class Mp4VideoWriter:
         self._writer.close()
 
         # If we have audio, mux it into the video file
-        if self._has_audio and self._audio_buffer:
+        if self._include_audio and self._has_audio and self._audio_buffer:
             self._mux_audio()
 
     def _mux_audio(self) -> None:

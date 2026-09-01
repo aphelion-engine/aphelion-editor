@@ -25,8 +25,16 @@
   "audio": {
     "audio_enabled": true,
     "master_volume": 1.0,
-    "default_device_index": 4,
-    "buffer_size": 10
+    "host_api_name": "",
+    "default_device_index": -1,
+    "latency_preset": "safe",
+    "buffer_size": 10,
+    "stream_blocksize": 0,
+    "output_sample_rate": 48000,
+    "output_channels": 2,
+    "export_audio_enabled": true,
+    "export_sample_rate": 48000,
+    "export_channels": 2
   },
   "plugins": {
     "load_bundled": true,

@@ -189,6 +189,10 @@ class ExportDialog(QDialog):
         if fmt == ExportFormat.MP4 and output.suffix.lower() != ".mp4":
             output = output.with_suffix(".mp4")
 
+        audio_prefs = None
+        if self.parent() is not None and hasattr(self.parent(), "preferences_store"):
+            audio_prefs = self.parent().preferences_store.preferences.audio
+
         request = ExportRequest(
             viewer_id=viewer_id,
             start_frame=self._in_point,
@@ -197,6 +201,9 @@ class ExportDialog(QDialog):
             format=fmt,
             fps=self._fps.value(),
             full_resolution=self._full_resolution.isChecked(),
+            export_audio_enabled=True if audio_prefs is None else bool(audio_prefs.export_audio_enabled),
+            export_sample_rate=48000 if audio_prefs is None else int(audio_prefs.export_sample_rate),
+            export_channels=2 if audio_prefs is None else int(audio_prefs.export_channels),
         )
 
         self._cancel_requested = False

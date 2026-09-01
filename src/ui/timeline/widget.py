@@ -276,6 +276,7 @@ class TimelineWidget(QWidget):
             self.start_playback()
 
     def start_playback(self) -> None:
+        self.controller.start_clock()
         self.timer.start(self.controller.timer_interval_ms(self.project.fps))
         self.controller.is_playing = True
         self._set_play_button_state(playing=True)
@@ -284,6 +285,7 @@ class TimelineWidget(QWidget):
 
     def pause_playback(self) -> None:
         self.timer.stop()
+        self.controller.stop_clock()
         self.controller.is_playing = False
         self._set_play_button_state(playing=False)
         self.playback_changed.emit(False)
@@ -305,11 +307,17 @@ class TimelineWidget(QWidget):
             style.polish(self.btn_play)
 
     def _advance_frame(self) -> None:
-        nxt = self.controller.next_frame(self.project.current_frame)
-        if nxt is None:
-            self.pause_playback()
+        steps = self.controller.frames_to_advance(self.project.fps)
+        if steps <= 0:
             return
-        self.set_frame(nxt)
+        current = self.project.current_frame
+        for _ in range(steps):
+            nxt = self.controller.next_frame(current)
+            if nxt is None:
+                self.pause_playback()
+                return
+            current = nxt
+        self.set_frame(current)
 
     def set_frame(self, frame_num: int) -> None:
         self.project.set_frame(frame_num)
