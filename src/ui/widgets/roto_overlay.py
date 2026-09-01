@@ -11,8 +11,8 @@ from PyQt6.QtWidgets import QHBoxLayout, QPushButton, QWidget
 
 from core.history import EditRotoDocumentCommand
 from core.nodes.roto_nodes import RotoNode
-from core.roto.interpolation import interpolate_points
-from core.roto.model import RotoDocument, RotoPoint, RotoShape
+from core.nodes.roto.interpolation import interpolate_points
+from core.nodes.roto.model import RotoDocument, RotoPoint, RotoShape
 
 if TYPE_CHECKING:
     from core.history import HistoryStack

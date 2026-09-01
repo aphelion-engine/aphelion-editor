@@ -14,6 +14,8 @@ from PyQt6.QtCore import QObject, QThread, pyqtSignal
 from effects.frame_ops import to_display_u8
 from render.video_writer import Mp4VideoWriter
 
+from core.audio import AudioData, FrameWithAudio
+
 if TYPE_CHECKING:
     from core.project import Project
 
@@ -99,13 +101,32 @@ class ExportWorker(QThread):
             return
         self._export_mp4(start, end, total)
 
-    def _evaluate_frame_rgb(self, frame_num: int) -> np.ndarray | None:
-        """Evaluate a frame and return it as a contiguous uint8 RGB array."""
+    def _evaluate_frame_rgb(self, frame_num: int) -> tuple[np.ndarray | None, AudioData | None]:
+        """Evaluate a frame and return it as a contiguous uint8 RGB array with audio.
+
+        Returns:
+            Tuple of (frame_rgb, audio_data). Frame may be None if evaluation fails.
+            Audio may be None if no audio is available.
+        """
         result = self._project.evaluate_node(self._request.viewer_id, frame_num)
-        if not isinstance(result, np.ndarray):
+
+        # Handle FrameWithAudio (frame with audio data)
+        if isinstance(result, FrameWithAudio):
+            frame_result = result.frame
+            audio_result = result.audio
+        # Handle multi-output nodes (like Tracker's x/y)
+        elif isinstance(result, dict):
+            frame_result = result.get("frame")
+            audio_result = None
+        else:
+            frame_result = result
+            audio_result = None
+
+        if not isinstance(frame_result, np.ndarray):
             self._skipped_frames += 1
-            return None
-        frame = np.ascontiguousarray(result)
+            return None, None
+
+        frame = np.ascontiguousarray(frame_result)
         if frame.dtype != np.uint8:
             frame = to_display_u8(frame)
         if frame.ndim == 2:
@@ -114,8 +135,9 @@ class ExportWorker(QThread):
             frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2RGB)
         elif frame.shape[2] != 3:
             self._skipped_frames += 1
-            return None
-        return np.ascontiguousarray(frame)
+            return None, None
+
+        return np.ascontiguousarray(frame), audio_result
 
     def _find_last_exception_message(self) -> str | None:
         """Scan every node for the most recent exception logged this run."""
@@ -138,7 +160,7 @@ class ExportWorker(QThread):
             if self._cancelled or self.isInterruptionRequested():
                 self.failed.emit("Export cancelled.")
                 return
-            frame = self._evaluate_frame_rgb(frame_num)
+            frame, _ = self._evaluate_frame_rgb(frame_num)
             if frame is None:
                 continue
             filename = out_dir / f"frame_{frame_num:06d}.png"
@@ -151,16 +173,27 @@ class ExportWorker(QThread):
         self.finished_ok.emit(str(out_dir))
 
     def _export_mp4(self, start: int, end: int, total: int) -> None:
-        first: np.ndarray | None = None
+        first_frame: np.ndarray | None = None
+        first_audio: AudioData | None = None
+        audio_sample_rate = 48000
+        audio_channels = 2
+
+        # Find first valid frame and extract audio info
         for frame_num in range(start, end + 1):
-            first = self._evaluate_frame_rgb(frame_num)
-            if first is not None:
+            frame, audio = self._evaluate_frame_rgb(frame_num)
+            if frame is not None:
+                first_frame = frame
+                if audio is not None:
+                    first_audio = audio
+                    audio_sample_rate = audio.sample_rate
+                    audio_channels = audio.num_channels
                 break
-        if first is None:
+
+        if first_frame is None:
             self.failed.emit(self._no_frames_message("evaluated for export"))
             return
 
-        height, width = first.shape[:2]
+        height, width = first_frame.shape[:2]
         output = self._request.output_path
         output.parent.mkdir(parents=True, exist_ok=True)
 
@@ -170,6 +203,8 @@ class ExportWorker(QThread):
                 fps=float(max(1, self._request.fps)),
                 width=width,
                 height=height,
+                audio_sample_rate=audio_sample_rate,
+                audio_channels=audio_channels,
             )
         except (OSError, RuntimeError) as exc:
             self.failed.emit(f"Could not open the video writer: {exc}")
@@ -182,12 +217,12 @@ class ExportWorker(QThread):
                     self.failed.emit("Export cancelled.")
                     return
                 # Cache-backed, so re-evaluating the probed frame above is free.
-                frame = self._evaluate_frame_rgb(frame_num)
+                frame, audio = self._evaluate_frame_rgb(frame_num)
                 if frame is None:
                     continue
                 if frame.shape[0] != height or frame.shape[1] != width:
                     frame = cv2.resize(frame, (width, height))
-                writer.write(frame)
+                writer.write(frame, audio=audio)
                 written += 1
                 self.progress.emit(index + 1, total)
         finally:

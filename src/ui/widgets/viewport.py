@@ -10,11 +10,13 @@ from PyQt6.QtCore import QRect, Qt
 from PyQt6.QtGui import QCloseEvent, QImage, QPixmap, QResizeEvent
 from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
+from core.audio import FrameWithAudio
 from core.events import ObserverEvent
 from core.nodes.base import FRAME_DTYPE
 from core.preferences.models import PerformanceSettings
 from core.project import Project
 from effects.frame_ops import to_display_u8
+from render.audio_playback import get_audio_engine
 from render.frame_evaluator import FrameEvaluationWorker
 from render.preview import ViewportFitMode
 from ui.widgets.roto_overlay import RotoOverlayWidget

@@ -5146,3 +5146,311 @@ TypeError: VideoInputNode.prepare_evaluation() got an unexpected keyword argumen
 2026-09-01 13:39:03 | INFO     | aphelion.editor | Closing editor for project 'Untitled Project'
 2026-09-01 13:39:03 | INFO     | aphelion.session | Editor destroyed — quitting application
 2026-09-01 13:39:03 | INFO     | aphelion.runtime | Event loop exited with code 0
+2026-09-01 14:48:05 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-09-01 14:48:05 | INFO     | aphelion | Log file: C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\logs\aphelion.log
+2026-09-01 14:48:06 | INFO     | aphelion.runtime | Runtime ready — starting session
+2026-09-01 14:48:06 | INFO     | aphelion.session | Session start → project launcher
+2026-09-01 14:48:06 | INFO     | aphelion.runtime | Entering Qt event loop
+2026-09-01 14:48:06 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(680, 291, 560, 480))
+2026-09-01 14:48:08 | INFO     | aphelion.session | Project chosen (mode=new, path=(untitled))
+2026-09-01 14:48:08 | INFO     | aphelion.session | Opening bootloader
+2026-09-01 14:48:08 | INFO     | aphelion.boot.driver | Running boot stage 1/6: Runtime
+2026-09-01 14:48:08 | INFO     | aphelion.boot.driver | [Runtime] Boot request accepted (new project)
+2026-09-01 14:48:08 | INFO     | aphelion.boot.driver | Running boot stage 2/6: Node registry
+2026-09-01 14:48:08 | INFO     | aphelion.boot.driver | [Node registry] Registered 77 built-in node type(s)
+2026-09-01 14:48:08 | INFO     | aphelion.boot.driver | Running boot stage 3/6: Plugins
+2026-09-01 14:48:09 | INFO     | aphelion.boot.driver | [Plugins] Registered 0 plugin node type(s)
+2026-09-01 14:48:09 | INFO     | aphelion.boot.driver | Running boot stage 4/6: Project document
+2026-09-01 14:48:09 | INFO     | aphelion.boot.driver | [Project document] Created blank project document
+2026-09-01 14:48:09 | INFO     | aphelion.boot.driver | Running boot stage 5/6: Graph validation
+2026-09-01 14:48:09 | INFO     | aphelion.boot.driver | [Graph validation] Validated project graph
+2026-09-01 14:48:09 | INFO     | aphelion.boot.driver | Running boot stage 6/6: Media sources
+2026-09-01 14:48:09 | INFO     | aphelion.boot.driver | [Media sources] Probed media sources (0 ok, 0 unavailable)
+2026-09-01 14:48:09 | INFO     | aphelion.session | Constructing editor for project 'Untitled Project'
+2026-09-01 14:48:10 | INFO     | aphelion.session | Editor shown for 'Untitled Project'
+2026-09-01 14:48:42 | ERROR    | aphelion.nodes | Node Video Input (Video Input) error: cannot access local variable 'json' where it is not associated with a value
+Traceback (most recent call last):
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\render\audio_decoder.py", line 68, in open
+    result = subprocess.run(
+        cmd,
+    ...<2 lines>...
+        timeout=10
+    )
+  File "C:\Python314\Lib\subprocess.py", line 555, in run
+    with Popen(*popenargs, **kwargs) as process:
+         ~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python314\Lib\subprocess.py", line 1039, in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                        pass_fds, cwd, env,
+                        ^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+                        gid, gids, uid, umask,
+                        ^^^^^^^^^^^^^^^^^^^^^^
+                        start_new_session, process_group)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python314\Lib\subprocess.py", line 1553, in _execute_child
+    hp, ht, pid, tid = _winapi.CreateProcess(executable, args,
+                       ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+                             # no special security
+                             ^^^^^^^^^^^^^^^^^^^^^
+    ...<4 lines>...
+                             cwd,
+                             ^^^^
+                             startupinfo)
+                             ^^^^^^^^^^^^
+FileNotFoundError: [WinError 2] The system cannot find the file specified
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\core\nodes\video_input.py", line 359, in evaluate
+    info = self._ensure_open()
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\core\nodes\video_input.py", line 260, in _ensure_open
+    return self._decoder.open(path)
+           ~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\render\video_decoder.py", line 180, in open
+    self._audio_info = self._audio_decoder.open(path)
+                       ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\render\audio_decoder.py", line 131, in open
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError, ValueError) as e:
+                                       ^^^^
+UnboundLocalError: cannot access local variable 'json' where it is not associated with a value
+2026-09-01 14:48:42 | CRITICAL | aphelion | Uncaught exception
+Traceback (most recent call last):
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\render\audio_decoder.py", line 68, in open
+    result = subprocess.run(
+        cmd,
+    ...<2 lines>...
+        timeout=10
+    )
+  File "C:\Python314\Lib\subprocess.py", line 555, in run
+    with Popen(*popenargs, **kwargs) as process:
+         ~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python314\Lib\subprocess.py", line 1039, in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                        pass_fds, cwd, env,
+                        ^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+                        gid, gids, uid, umask,
+                        ^^^^^^^^^^^^^^^^^^^^^^
+                        start_new_session, process_group)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python314\Lib\subprocess.py", line 1553, in _execute_child
+    hp, ht, pid, tid = _winapi.CreateProcess(executable, args,
+                       ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+                             # no special security
+                             ^^^^^^^^^^^^^^^^^^^^^
+    ...<4 lines>...
+                             cwd,
+                             ^^^^
+                             startupinfo)
+                             ^^^^^^^^^^^^
+FileNotFoundError: [WinError 2] The system cannot find the file specified
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\ui\widgets\properties.py", line 103, in run
+    info = probe_video(self._path)
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\render\video_decoder.py", line 364, in probe_video
+    audio_info = audio_decoder.open(path)
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\render\audio_decoder.py", line 131, in open
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError, ValueError) as e:
+                                       ^^^^
+UnboundLocalError: cannot access local variable 'json' where it is not associated with a value
+2026-09-01 14:50:20 | INFO     | aphelion.editor | Closing editor for project 'Untitled Project'
+2026-09-01 14:50:20 | INFO     | aphelion.session | Editor destroyed — quitting application
+2026-09-01 14:50:20 | INFO     | aphelion.runtime | Event loop exited with code 0
+2026-09-01 14:50:37 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-09-01 14:50:37 | INFO     | aphelion | Log file: C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\logs\aphelion.log
+2026-09-01 14:50:37 | INFO     | aphelion.runtime | Runtime ready — starting session
+2026-09-01 14:50:37 | INFO     | aphelion.session | Session start → project launcher
+2026-09-01 14:50:37 | INFO     | aphelion.runtime | Entering Qt event loop
+2026-09-01 14:50:37 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(680, 291, 560, 480))
+2026-09-01 14:50:39 | INFO     | aphelion.session | Project chosen (mode=new, path=(untitled))
+2026-09-01 14:50:39 | INFO     | aphelion.session | Opening bootloader
+2026-09-01 14:50:39 | INFO     | aphelion.boot.driver | Running boot stage 1/6: Runtime
+2026-09-01 14:50:39 | INFO     | aphelion.boot.driver | [Runtime] Boot request accepted (new project)
+2026-09-01 14:50:39 | INFO     | aphelion.boot.driver | Running boot stage 2/6: Node registry
+2026-09-01 14:50:39 | INFO     | aphelion.boot.driver | [Node registry] Registered 77 built-in node type(s)
+2026-09-01 14:50:39 | INFO     | aphelion.boot.driver | Running boot stage 3/6: Plugins
+2026-09-01 14:50:39 | INFO     | aphelion.boot.driver | [Plugins] Registered 0 plugin node type(s)
+2026-09-01 14:50:40 | INFO     | aphelion.boot.driver | Running boot stage 4/6: Project document
+2026-09-01 14:50:40 | INFO     | aphelion.boot.driver | [Project document] Created blank project document
+2026-09-01 14:50:40 | INFO     | aphelion.boot.driver | Running boot stage 5/6: Graph validation
+2026-09-01 14:50:40 | INFO     | aphelion.boot.driver | [Graph validation] Validated project graph
+2026-09-01 14:50:40 | INFO     | aphelion.boot.driver | Running boot stage 6/6: Media sources
+2026-09-01 14:50:40 | INFO     | aphelion.boot.driver | [Media sources] Probed media sources (0 ok, 0 unavailable)
+2026-09-01 14:50:40 | INFO     | aphelion.session | Constructing editor for project 'Untitled Project'
+2026-09-01 14:50:40 | INFO     | aphelion.session | Editor shown for 'Untitled Project'
+2026-09-01 14:51:04 | ERROR    | aphelion.nodes | Node Video Input (Video Input) error: cannot access local variable 'json' where it is not associated with a value
+Traceback (most recent call last):
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\render\audio_decoder.py", line 68, in open
+    result = subprocess.run(
+        cmd,
+    ...<2 lines>...
+        timeout=10
+    )
+  File "C:\Python314\Lib\subprocess.py", line 555, in run
+    with Popen(*popenargs, **kwargs) as process:
+         ~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python314\Lib\subprocess.py", line 1039, in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                        pass_fds, cwd, env,
+                        ^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+                        gid, gids, uid, umask,
+                        ^^^^^^^^^^^^^^^^^^^^^^
+                        start_new_session, process_group)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python314\Lib\subprocess.py", line 1553, in _execute_child
+    hp, ht, pid, tid = _winapi.CreateProcess(executable, args,
+                       ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+                             # no special security
+                             ^^^^^^^^^^^^^^^^^^^^^
+    ...<4 lines>...
+                             cwd,
+                             ^^^^
+                             startupinfo)
+                             ^^^^^^^^^^^^
+FileNotFoundError: [WinError 2] The system cannot find the file specified
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\core\nodes\video_input.py", line 358, in evaluate
+    info = self._ensure_open()
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\core\nodes\video_input.py", line 259, in _ensure_open
+    return self._decoder.open(path)
+           ~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\render\video_decoder.py", line 180, in open
+    self._audio_info = self._audio_decoder.open(path)
+                       ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\render\audio_decoder.py", line 131, in open
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError, ValueError) as e:
+                                       ^^^^
+UnboundLocalError: cannot access local variable 'json' where it is not associated with a value
+2026-09-01 14:51:04 | CRITICAL | aphelion | Uncaught exception
+Traceback (most recent call last):
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\render\audio_decoder.py", line 68, in open
+    result = subprocess.run(
+        cmd,
+    ...<2 lines>...
+        timeout=10
+    )
+  File "C:\Python314\Lib\subprocess.py", line 555, in run
+    with Popen(*popenargs, **kwargs) as process:
+         ~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python314\Lib\subprocess.py", line 1039, in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                        pass_fds, cwd, env,
+                        ^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+                        gid, gids, uid, umask,
+                        ^^^^^^^^^^^^^^^^^^^^^^
+                        start_new_session, process_group)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python314\Lib\subprocess.py", line 1553, in _execute_child
+    hp, ht, pid, tid = _winapi.CreateProcess(executable, args,
+                       ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+                             # no special security
+                             ^^^^^^^^^^^^^^^^^^^^^
+    ...<4 lines>...
+                             cwd,
+                             ^^^^
+                             startupinfo)
+                             ^^^^^^^^^^^^
+FileNotFoundError: [WinError 2] The system cannot find the file specified
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\ui\widgets\properties.py", line 103, in run
+    info = probe_video(self._path)
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\render\video_decoder.py", line 364, in probe_video
+    audio_info = audio_decoder.open(path)
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\render\audio_decoder.py", line 131, in open
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError, ValueError) as e:
+                                       ^^^^
+UnboundLocalError: cannot access local variable 'json' where it is not associated with a value
+2026-09-01 14:52:03 | INFO     | aphelion.editor | Saved project C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\test project.aph
+2026-09-01 14:52:05 | INFO     | aphelion.editor | Closing editor for project 'test project'
+2026-09-01 14:52:05 | INFO     | aphelion.session | Editor destroyed — quitting application
+2026-09-01 14:52:05 | INFO     | aphelion.runtime | Event loop exited with code 0
+2026-09-01 14:52:08 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-09-01 14:52:08 | INFO     | aphelion | Log file: C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\logs\aphelion.log
+2026-09-01 14:52:08 | INFO     | aphelion.runtime | Runtime ready — starting session
+2026-09-01 14:52:08 | INFO     | aphelion.session | Session start → project launcher
+2026-09-01 14:52:08 | INFO     | aphelion.runtime | Entering Qt event loop
+2026-09-01 14:52:08 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(680, 291, 560, 480))
+2026-09-01 14:52:10 | INFO     | aphelion.session | Project chosen (mode=open, path=C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\test project.aph)
+2026-09-01 14:52:10 | INFO     | aphelion.session | Opening bootloader
+2026-09-01 14:52:11 | INFO     | aphelion.boot.driver | Running boot stage 1/6: Runtime
+2026-09-01 14:52:11 | INFO     | aphelion.boot.driver | [Runtime] Boot request accepted (open project)
+2026-09-01 14:52:11 | INFO     | aphelion.boot.driver | Running boot stage 2/6: Node registry
+2026-09-01 14:52:11 | INFO     | aphelion.boot.driver | [Node registry] Registered 77 built-in node type(s)
+2026-09-01 14:52:11 | INFO     | aphelion.boot.driver | Running boot stage 3/6: Plugins
+2026-09-01 14:52:11 | INFO     | aphelion.boot.driver | [Plugins] Registered 0 plugin node type(s)
+2026-09-01 14:52:11 | INFO     | aphelion.boot.driver | Running boot stage 4/6: Project document
+2026-09-01 14:52:11 | INFO     | aphelion.boot.driver | [Project document] Loaded project 'test project'
+2026-09-01 14:52:11 | INFO     | aphelion.boot.driver | Running boot stage 5/6: Graph validation
+2026-09-01 14:52:11 | INFO     | aphelion.boot.driver | [Graph validation] Validated project graph
+2026-09-01 14:52:11 | INFO     | aphelion.boot.driver | Running boot stage 6/6: Media sources
+2026-09-01 14:52:11 | ERROR    | aphelion.nodes | Node Video Input (Video Input) error: cannot access local variable 'json' where it is not associated with a value
+Traceback (most recent call last):
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\render\audio_decoder.py", line 68, in open
+    result = subprocess.run(
+        cmd,
+    ...<2 lines>...
+        timeout=10
+    )
+  File "C:\Python314\Lib\subprocess.py", line 555, in run
+    with Popen(*popenargs, **kwargs) as process:
+         ~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python314\Lib\subprocess.py", line 1039, in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                        pass_fds, cwd, env,
+                        ^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+                        gid, gids, uid, umask,
+                        ^^^^^^^^^^^^^^^^^^^^^^
+                        start_new_session, process_group)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python314\Lib\subprocess.py", line 1553, in _execute_child
+    hp, ht, pid, tid = _winapi.CreateProcess(executable, args,
+                       ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+                             # no special security
+                             ^^^^^^^^^^^^^^^^^^^^^
+    ...<4 lines>...
+                             cwd,
+                             ^^^^
+                             startupinfo)
+                             ^^^^^^^^^^^^
+FileNotFoundError: [WinError 2] The system cannot find the file specified
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\core\nodes\video_input.py", line 264, in probe_media
+    info = self._ensure_open()
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\core\nodes\video_input.py", line 259, in _ensure_open
+    return self._decoder.open(path)
+           ~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\render\video_decoder.py", line 180, in open
+    self._audio_info = self._audio_decoder.open(path)
+                       ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\src\render\audio_decoder.py", line 131, in open
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError, ValueError) as e:
+                                       ^^^^
+UnboundLocalError: cannot access local variable 'json' where it is not associated with a value
+2026-09-01 14:52:11 | INFO     | aphelion.boot.driver | [Media sources] Probed media sources (0 ok, 1 unavailable)
+2026-09-01 14:52:11 | INFO     | aphelion.session | Constructing editor for project 'test project'
+2026-09-01 14:52:12 | INFO     | aphelion.session | Editor shown for 'test project'
+2026-09-01 14:54:12 | INFO     | aphelion.editor | Closing editor for project 'test project'
+2026-09-01 14:54:12 | INFO     | aphelion.session | Editor destroyed — quitting application
+2026-09-01 14:54:12 | INFO     | aphelion.runtime | Event loop exited with code 0

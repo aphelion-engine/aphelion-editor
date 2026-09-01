@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from enum import IntEnum, auto
+
 import numpy as np
 
 from config.constants import DEFAULT_PREVIEW_MAX_WIDTH
+from core.audio import AudioData, FrameWithAudio
 from core.nodes.base import (
     FRAME_DTYPE,
     MediaEdgeMode,
@@ -16,6 +19,13 @@ from core.nodes.base import (
 )
 from effects.frame_ops import from_source_u8
 from render.video_decoder import MediaInfo, VideoDecoder
+
+
+class AudioChannelMode(IntEnum):
+    """Audio channel output mode."""
+
+    Stereo = auto()
+    Mono = auto()
 
 
 class VideoInputNode(Node):
@@ -180,6 +190,42 @@ class VideoInputNode(Node):
                 description="Adopt loaded media duration, FPS, and frame dimensions.",
             ),
         )
+        self.set_property(
+            "audio_enabled",
+            NodeProperty(
+                input_type=NodePropertyInputType.Checkbox,
+                value=True,
+                priority=70,
+                group="Audio",
+                label="Enabled",
+                description="Enable audio output from this source.",
+            ),
+        )
+        self.set_property(
+            "audio_volume",
+            NodeProperty(
+                input_type=NodePropertyInputType.Slider,
+                value=1.0,
+                slider_min_value=0.0,
+                slider_max_value=2.0,
+                priority=71,
+                group="Audio",
+                label="Volume",
+                description="Audio volume multiplier.",
+                suffix="×",
+            ),
+        )
+        self.set_property(
+            "audio_channel_mode",
+            NodeProperty(
+                input_type=NodePropertyInputType.CustomChoice,
+                value=AudioChannelMode.Stereo,
+                priority=72,
+                group="Audio",
+                label="Channels",
+                description="Audio channel output mode.",
+            ),
+        )
 
     def prepare_evaluation(
         self,
@@ -341,18 +387,24 @@ class VideoInputNode(Node):
             )
         return start + int(local)
 
-    def evaluate(self, frame_num: int) -> np.ndarray:
+    def evaluate(self, frame_num: int) -> FrameWithAudio:
         if not self._bool_prop("enabled", True):
-            return self.blank_frame()
+            frame = self.blank_frame()
+            audio = self._get_silence_audio()
+            return FrameWithAudio(frame=frame, audio=audio)
 
         path = self._file_path()
         if not path:
-            return self.blank_frame()
+            frame = self.blank_frame()
+            audio = self._get_silence_audio()
+            return FrameWithAudio(frame=frame, audio=audio)
 
         try:
             info = self._ensure_open()
             if info is None:
-                return self.handle_error_frame()
+                frame = self.handle_error_frame()
+                audio = self._get_silence_audio()
+                return FrameWithAudio(frame=frame, audio=audio)
 
             source_frame = self._resolve_source_frame(
                 frame_num,
@@ -360,20 +412,76 @@ class VideoInputNode(Node):
                 info.fps,
             )
             if source_frame is None:
-                return self.blank_frame()
+                frame = self.blank_frame()
+                audio = self._get_silence_audio()
+                return FrameWithAudio(frame=frame, audio=audio)
 
             frame_u8 = self._decoder.read_rgb(source_frame, self._preview_max_width)
             if frame_u8 is None:
-                return self.handle_error_frame()
+                frame = self.handle_error_frame()
+                audio = self._get_silence_audio()
+                return FrameWithAudio(frame=frame, audio=audio)
 
             frame: np.ndarray = from_source_u8(frame_u8)
             self._previous_frame = self._current_frame
             self._current_frame = frame
-            return frame
-            
+
+            # Get audio for this frame
+            audio = self._decoder.read_audio(source_frame)
+            if audio is None:
+                audio = self._get_silence_audio()
+            else:
+                # Apply audio controls
+                audio = self._process_audio(audio)
+
+            return FrameWithAudio(frame=frame, audio=audio)
+
         except Exception as e:  # noqa: BLE001
             self.log_exception(e)
-            return self.handle_error_frame()
+            frame = self.handle_error_frame()
+            audio = self._get_silence_audio()
+            return FrameWithAudio(frame=frame, audio=audio)
+
+    def _get_silence_audio(self) -> AudioData:
+        """Get silence audio data for the current frame duration."""
+        duration_per_frame = 1.0 / max(self._project_fps, 1.0)
+        # Try to get audio info from decoder for correct sample rate/channels
+        info = self._decoder.info()
+        if info and info.has_audio:
+            return AudioData.silence(
+                duration=duration_per_frame,
+                sample_rate=info.audio_sample_rate,
+                channels=info.audio_channels
+            )
+        return AudioData.silence(duration=duration_per_frame)
+
+    def _process_audio(self, audio: AudioData) -> AudioData:
+        """Apply audio controls (volume, channel mode) to audio data."""
+        if not self._bool_prop("audio_enabled", True):
+            return AudioData.silence(
+                duration=audio.duration,
+                sample_rate=audio.sample_rate,
+                channels=audio.num_channels
+            )
+
+        # Apply volume
+        volume = self._float_prop("audio_volume", 1.0)
+        if volume != 1.0:
+            samples = audio.samples * volume
+            # Clamp to prevent clipping
+            samples = np.clip(samples, -1.0, 1.0)
+        else:
+            samples = audio.samples
+
+        # Apply channel mode
+        channel_mode = self.get_property("audio_channel_mode")
+        if channel_mode is not None and isinstance(channel_mode.value, AudioChannelMode):
+            if channel_mode.value == AudioChannelMode.Mono and audio.num_channels > 1:
+                # Mix down to mono by averaging channels
+                if samples.ndim == 2:
+                    samples = np.mean(samples, axis=1, keepdims=True)
+
+        return AudioData(samples=samples.astype(np.float32), sample_rate=audio.sample_rate)
 
     def close(self) -> None:
         """Release the underlying decoder (call when removing the node)."""

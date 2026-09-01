@@ -11,6 +11,7 @@ from config.constants import (
     DEFAULT_WIDTH,
     FRAME_CACHE_MAX_MB,
 )
+from core.audio import FrameWithAudio
 from core.cache import FrameCache
 from core.events import Connection, ObserverEvent
 from core.graph import DependencyGraph
@@ -391,6 +392,9 @@ class Project:
                 if isinstance(raw_result, dict)
                 else raw_result
             )
+            # Handle FrameWithAudio - extract frame if caller wants the frame slot
+            if isinstance(result, FrameWithAudio) and output_slot == "frame":
+                result = result.frame
             # Viewer is a cheap passthrough — cache producers only to avoid
             # double-counting the same buffer in the LRU budget.
             if node.node_type != "Viewer":

@@ -7,7 +7,7 @@ flat at the ends of the keyed range. See the plan's scope notes for why.
 
 from __future__ import annotations
 
-from core.roto.model import RotoPoint
+from core.nodes.roto.model import RotoPoint
 
 
 def interpolate_points(

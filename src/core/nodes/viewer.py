@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from config.constants import DEFAULT_PREVIEW_MAX_WIDTH
+from core.audio import AudioData, FrameWithAudio
 from core.nodes.base import Node, NodeProperty, NodePropertyInputType, NodeSocketType
 from render.preview import ViewerBackground, ViewportFitMode
 
@@ -127,6 +128,31 @@ class ViewerNode(Node):
                 suffix=" fr",
             ),
         )
+        self.set_property(
+            "audio_enabled",
+            NodeProperty(
+                input_type=NodePropertyInputType.Checkbox,
+                value=True,
+                priority=70,
+                group="Audio",
+                label="Enabled",
+                description="Enable audio playback in the viewer.",
+            ),
+        )
+        self.set_property(
+            "audio_volume",
+            NodeProperty(
+                input_type=NodePropertyInputType.Slider,
+                value=1.0,
+                slider_min_value=0.0,
+                slider_max_value=2.0,
+                priority=71,
+                group="Audio",
+                label="Volume",
+                description="Master audio volume for preview playback.",
+                suffix="×",
+            ),
+        )
 
     def _bool_prop(self, key: str, default: bool) -> bool:
         prop = self.get_property(key)
@@ -134,32 +160,66 @@ class ViewerNode(Node):
             return default
         return bool(prop.value)
 
-    def evaluate(self, frame_num: int) -> np.ndarray:
-        """Return the connected frame with optional exposure / flips."""
+    def evaluate(self, frame_num: int) -> np.ndarray | FrameWithAudio:
+        """Return the connected frame with optional exposure / flips and audio."""
         del frame_num
         if not self._bool_prop("enabled", True):
             return self.blank_frame()
 
         input_frame: object | None = self.get_input_value("frame")
-        if not isinstance(input_frame, np.ndarray):
+
+        # Handle FrameWithAudio input
+        if isinstance(input_frame, FrameWithAudio):
+            frame = input_frame.frame
+            audio = input_frame.audio
+        elif isinstance(input_frame, np.ndarray):
+            frame = input_frame
+            audio = None
+        else:
             return self.blank_frame()
 
-        frame: np.ndarray = input_frame
+        # Apply display transforms
         if self._bool_prop("flip_horizontal", False):
             frame = np.ascontiguousarray(np.fliplr(frame))
         if self._bool_prop("flip_vertical", False):
             frame = np.ascontiguousarray(np.flipud(frame))
 
         if not self._bool_prop("apply_exposure", True):
-            return frame
+            # Apply audio volume if we have audio
+            if audio is not None and self._bool_prop("audio_enabled", True):
+                audio = self._apply_viewer_volume(audio)
+            return FrameWithAudio(frame=frame, audio=audio) if audio is not None else frame
 
         exposure_prop = self.get_property("exposure")
         if exposure_prop is None or exposure_prop.value is None:
-            return frame
+            if audio is not None and self._bool_prop("audio_enabled", True):
+                audio = self._apply_viewer_volume(audio)
+            return FrameWithAudio(frame=frame, audio=audio) if audio is not None else frame
 
         gain = float(exposure_prop.value) / 100.0
         if abs(gain - 1.0) < 0.001:
-            return frame
+            if audio is not None and self._bool_prop("audio_enabled", True):
+                audio = self._apply_viewer_volume(audio)
+            return FrameWithAudio(frame=frame, audio=audio) if audio is not None else frame
 
         adjusted: np.ndarray = frame * np.float32(gain)
-        return adjusted
+
+        # Apply audio volume if we have audio
+        if audio is not None and self._bool_prop("audio_enabled", True):
+            audio = self._apply_viewer_volume(audio)
+
+        return FrameWithAudio(frame=adjusted, audio=audio) if audio is not None else adjusted
+
+    def _apply_viewer_volume(self, audio: AudioData) -> AudioData:
+        """Apply viewer volume control to audio."""
+        volume_prop = self.get_property("audio_volume")
+        if volume_prop is None or volume_prop.value is None:
+            return audio
+
+        volume = float(volume_prop.value)
+        if volume == 1.0:
+            return audio
+
+        samples = audio.samples * volume
+        samples = np.clip(samples, -1.0, 1.0)
+        return AudioData(samples=samples.astype(np.float32), sample_rate=audio.sample_rate)
