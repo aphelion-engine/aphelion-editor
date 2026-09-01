@@ -14,7 +14,7 @@ from core.nodes.roto_nodes import RotoNode
 from core.nodes.tracking_nodes import PlanarTrackerNode, TrackerNode
 from core.project import Project
 from core.project_settings import ProjectSettings
-from core.roto.model import RotoDocument
+from core.nodes.roto.model import RotoDocument
 
 
 class CompositeCommand(Command):

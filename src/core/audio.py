@@ -79,3 +79,33 @@ class AudioData:
         if num_channels > 1:
             samples = samples.reshape(-1, num_channels)
         return cls(samples=samples, sample_rate=sample_rate)
+
+
+@dataclass(frozen=True, slots=True)
+class FrameWithAudio:
+    """Container for a video frame with its synchronized audio data.
+
+    This type is used to carry audio alongside video frames through the node graph,
+    enabling audio processing and export without requiring separate audio connections.
+    """
+
+    frame: np.ndarray
+    """Video frame as HxWx3 float32 array in range [0.0, 1.0]"""
+
+    audio: AudioData | None
+    """Audio data synchronized with this frame, or None if no audio"""
+
+    @property
+    def has_audio(self) -> bool:
+        """Check if this frame has associated audio."""
+        return self.audio is not None and not self.audio.is_silent()
+
+    @property
+    def audio_sample_rate(self) -> int:
+        """Get audio sample rate, defaulting to 48000 if no audio."""
+        return self.audio.sample_rate if self.audio else 48000
+
+    @property
+    def audio_channels(self) -> int:
+        """Get number of audio channels, defaulting to 2 if no audio."""
+        return self.audio.num_channels if self.audio else 2

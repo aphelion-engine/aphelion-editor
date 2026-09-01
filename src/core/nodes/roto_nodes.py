@@ -9,7 +9,7 @@ import numpy as np
 from core.nodes.base import NodeSocketType
 from core.nodes.frame_base import FrameNode
 from core.nodes.property_factory import toggle_property
-from core.roto.model import RotoDocument
+from core.nodes.roto.model import RotoDocument
 from effects.masks import invert_mask
 from effects.roto_raster import rasterize_document
 

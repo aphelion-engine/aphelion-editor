@@ -7,8 +7,8 @@ from collections.abc import Sequence
 import cv2
 import numpy as np
 
-from core.roto.interpolation import interpolate_points
-from core.roto.model import RotoDocument, RotoPoint
+from core.nodes.roto.interpolation import interpolate_points
+from core.nodes.roto.model import RotoDocument, RotoPoint
 
 # Line segments generated per Catmull-Rom curve segment when a shape is smooth.
 _SUBDIVISIONS_PER_SEGMENT: int = 12

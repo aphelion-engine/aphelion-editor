@@ -23,6 +23,8 @@ import cv2
 import numpy as np
 
 from config.constants import DEFAULT_DECODE_CACHE_FRAMES
+from core.audio import AudioData
+from render.audio_decoder import AudioDecoder, AudioInfo
 
 # Prefer sequential decode over hard seeks within this many frames.
 _MAX_FORWARD_GRABS: int = 48
@@ -129,6 +131,9 @@ class VideoDecoder:
         # frame index. Scaling to the requested proxy width happens on
         # every read from this cache — cheap relative to decode/seek.
         self._frame_cache: OrderedDict[int, np.ndarray] = OrderedDict()
+        # Audio decoder for extracting audio from video files
+        self._audio_decoder: AudioDecoder = AudioDecoder()
+        self._audio_info: AudioInfo | None = None
 
     @property
     def path(self) -> str | None:
@@ -170,6 +175,10 @@ class VideoDecoder:
             self._height = height
             self._next_index = 0
             self._frame_cache.clear()
+
+            # Open audio decoder
+            self._audio_info = self._audio_decoder.open(path)
+
             return self.info()
 
     def info(self) -> MediaInfo | None:
@@ -180,12 +189,25 @@ class VideoDecoder:
             if self._frame_count > 0
             else 0.0
         )
+
+        # Get audio info if available
+        has_audio = False
+        audio_sample_rate = 48000
+        audio_channels = 2
+        if self._audio_info is not None:
+            has_audio = self._audio_info.has_audio
+            audio_sample_rate = self._audio_info.sample_rate
+            audio_channels = self._audio_info.num_channels
+
         return MediaInfo(
             fps=self._fps,
             duration_sec=duration,
             width=self._width,
             height=self._height,
             frame_count=self._frame_count,
+            has_audio=has_audio,
+            audio_sample_rate=audio_sample_rate,
+            audio_channels=audio_channels,
         )
 
     def close(self) -> None:
@@ -199,6 +221,8 @@ class VideoDecoder:
         self._path = None
         self._next_index = 0
         self._frame_cache.clear()
+        self._audio_decoder.close()
+        self._audio_info = None
 
     def read_rgb(self, frame_num: int, max_width: int) -> np.ndarray | None:
         """Return an RGB frame at ``frame_num``, optionally proxy-scaled."""
@@ -297,6 +321,24 @@ class VideoDecoder:
         scaled = cv2.resize(rgb, (new_w, new_h), interpolation=cv2.INTER_AREA)
         return np.ascontiguousarray(scaled)
 
+    def read_audio(self, frame_num: int) -> "AudioData | None":
+        """Read audio samples for a specific frame."""
+        if not self.is_open or self._audio_info is None or not self._audio_info.has_audio:
+            # Return silence for the frame duration
+            duration_per_frame = 1.0 / max(self._fps, 0.001)
+            return AudioData.silence(
+                duration=duration_per_frame,
+                sample_rate=self._audio_info.sample_rate if self._audio_info else 48000,
+                channels=self._audio_info.num_channels if self._audio_info else 2
+            )
+
+        duration_per_frame = 1.0 / max(self._fps, 0.001)
+        return self._audio_decoder.extract_audio_for_frame(
+            frame_num=frame_num,
+            fps=self._fps,
+            duration_per_frame=duration_per_frame
+        )
+
 
 def probe_video(path: str) -> MediaInfo | None:
     """Open briefly to read metadata, then release the capture."""
@@ -316,10 +358,23 @@ def probe_video(path: str) -> MediaInfo | None:
 
     if width <= 0 or height <= 0 or frame_count <= 0:
         return None
+
+    # Probe audio info
+    audio_decoder = AudioDecoder()
+    audio_info = audio_decoder.open(path)
+    audio_decoder.close()
+
+    has_audio = audio_info.has_audio if audio_info else False
+    audio_sample_rate = audio_info.sample_rate if audio_info else 48000
+    audio_channels = audio_info.num_channels if audio_info else 2
+
     return MediaInfo(
         fps=fps,
         duration_sec=frame_count / fps,
         width=width,
         height=height,
         frame_count=frame_count,
+        has_audio=has_audio,
+        audio_sample_rate=audio_sample_rate,
+        audio_channels=audio_channels,
     )
