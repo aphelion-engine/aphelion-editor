@@ -370,6 +370,7 @@ class VideoInputNode(Node):
             self._previous_frame = self._current_frame
             self._current_frame = frame
             return frame
+            
         except Exception as e:  # noqa: BLE001
             self.log_exception(e)
             return self.handle_error_frame()

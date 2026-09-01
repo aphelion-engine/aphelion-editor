@@ -14,7 +14,7 @@ python -m build ../aphelion-sdk
 | Package | Directory | Distribution name |
 |---|---|---|
 | Editor | `aphelion-editor/` | `aphelion-editor` |
-| Plugin SDK | `../aphelion-sdk/` | `aphelion-sdk` |
+| Plugin SDK | `../aphelion-sdk/` | `aphelion-plugin-sdk` |
 
 Wheels land in each package's `dist/`.
 

@@ -109,6 +109,9 @@ class MediaInfo:
     width: int
     height: int
     frame_count: int
+    has_audio: bool = False
+    audio_sample_rate: int = 48000
+    audio_channels: int = 2
 
 
 class VideoDecoder:
