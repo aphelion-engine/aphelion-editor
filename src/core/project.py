@@ -392,9 +392,10 @@ class Project:
                 if isinstance(raw_result, dict)
                 else raw_result
             )
-            # Handle FrameWithAudio - extract frame if caller wants the frame slot
-            if isinstance(result, FrameWithAudio) and output_slot == "frame":
-                result = result.frame
+            # Preserve FrameWithAudio on frame outputs so downstream nodes
+            # such as Viewer can keep synchronized audio attached.
+            # Nodes that only understand raw ndarrays already unwrap their
+            # own inputs explicitly.
             # Viewer is a cheap passthrough — cache producers only to avoid
             # double-counting the same buffer in the LRU budget.
             if node.node_type != "Viewer":

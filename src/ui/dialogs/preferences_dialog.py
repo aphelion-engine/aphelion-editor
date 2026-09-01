@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSpinBox,
@@ -322,28 +323,29 @@ class PreferencesDialog(QDialog):
 
         self._audio_device = QComboBox()
         self._audio_device.setObjectName("PreferencesCombo")
-        self._audio_device.addItem("Default System Device", -1)
-
-        # Try to get available audio devices
-        try:
-            from render.audio_playback import AudioPlaybackEngine
-            devices = AudioPlaybackEngine.get_available_devices()
-            for device in devices:
-                self._audio_device.addItem(device.name, device.index)
-
-            # Set current device
-            current_index = self._audio_device.findData(audio.default_device_index)
-            if current_index >= 0:
-                self._audio_device.setCurrentIndex(current_index)
-        except Exception:
-            # If audio playback system fails, just show default
-            pass
+        self._reload_audio_devices()
+        current_index = self._audio_device.findData(audio.default_device_index)
+        if current_index >= 0:
+            self._audio_device.setCurrentIndex(current_index)
 
         device_form.addRow("Output device", self._audio_device)
 
+        button_row = QHBoxLayout()
+        self._refresh_audio_devices_btn = QPushButton("Refresh Devices")
+        self._refresh_audio_devices_btn.setObjectName("PreferencesSecondaryButton")
+        self._refresh_audio_devices_btn.clicked.connect(self._reload_audio_devices)
+        button_row.addWidget(self._refresh_audio_devices_btn)
+
+        self._test_audio_device_btn = QPushButton("Test Device")
+        self._test_audio_device_btn.setObjectName("PreferencesSecondaryButton")
+        self._test_audio_device_btn.clicked.connect(self._test_audio_device)
+        button_row.addWidget(self._test_audio_device_btn)
+        button_row.addStretch(1)
+        device_form.addRow(button_row)
+
         device_hint = QLabel(
-            "Select the audio output device for playback. "
-            "Changes apply when you click Apply or OK."
+            "Select the audio output device for playback, then use Test Device "
+            "to play a short tone through the selected output."
         )
         device_hint.setObjectName("PreferencesHint")
         device_hint.setWordWrap(True)
@@ -656,6 +658,49 @@ class PreferencesDialog(QDialog):
         tokens = ThemeTokens.from_dict(self._theme_tokens.to_dict())
         tokens.node_colors = dict(self._working.node_colors)
         save_theme_file(export_path, tokens)
+
+    def _reload_audio_devices(self) -> None:
+        """Refresh the list of available audio output devices."""
+        selected = self._audio_device.currentData() if hasattr(self, "_audio_device") else -1
+        self._audio_device.clear()
+        try:
+            from render.audio_playback import AudioPlaybackEngine
+
+            for device in AudioPlaybackEngine.get_available_devices():
+                self._audio_device.addItem(device.name, device.index)
+        except Exception as exc:  # noqa: BLE001
+            self._audio_device.addItem("Default System Device", -1)
+            QMessageBox.warning(
+                self,
+                "Audio Devices",
+                f"Failed to enumerate audio devices.\n\n{exc}",
+            )
+            return
+
+        current_index = self._audio_device.findData(selected)
+        if current_index < 0:
+            current_index = self._audio_device.findData(-1)
+        if current_index >= 0:
+            self._audio_device.setCurrentIndex(current_index)
+
+    def _test_audio_device(self) -> None:
+        """Play a short tone through the selected output device."""
+        try:
+            from render.audio_playback import AudioPlaybackEngine
+
+            device_index = int(self._audio_device.currentData())
+            selected = None
+            for device in AudioPlaybackEngine.get_available_devices():
+                if device.index == device_index:
+                    selected = device
+                    break
+            AudioPlaybackEngine().test_device(selected)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(
+                self,
+                "Test Audio Device",
+                f"Could not play test audio.\n\n{exc}",
+            )
 
     def _collect_preferences(self) -> None:
         self._working.editor = EditorSettings(
