@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aphelion-editor"
-version = "0.1.0"
+version = "0.1.1"
 description = "Aphelion Editor — a modern, node-based video editor."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -18,7 +18,6 @@ dependencies = [
     "imageio>=2.34.0",
     "imageio-ffmpeg>=0.4.9",
     "sounddevice>=0.4.6",
-    "aphelion-plugin-sdk @ file:../aphelion-sdk",
 ]
 
 [project.urls]

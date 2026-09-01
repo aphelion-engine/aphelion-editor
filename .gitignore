@@ -11,3 +11,5 @@ userdata/
 resources/
 logs/
 .ruff_cache/
+release/
+
