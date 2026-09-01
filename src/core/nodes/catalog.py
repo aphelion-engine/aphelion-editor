@@ -9,6 +9,23 @@ from core.nodes.advanced_color_nodes import (
     ShadowsHighlightsNode,
     VibranceNode,
 )
+from core.nodes.audio_nodes import (
+    AudioAdvancedMixerNode,
+    AudioAttachNode,
+    AudioCompressorNode,
+    AudioDelayNode,
+    AudioEqNode,
+    AudioExtractNode,
+    AudioGainNode,
+    AudioGateNode,
+    AudioLimiterNode,
+    AudioMixNode,
+    AudioNormalizeNode,
+    AudioPanNode,
+    AudioReverbNode,
+    AudioStereoWidthNode,
+    AudioToMonoNode,
+)
 from core.nodes.base import Node
 from core.nodes.color_effects import (
     ChannelMixerNode,
@@ -96,6 +113,22 @@ BUILTIN_NODE_TYPES: tuple[type[Node], ...] = (
     VideoInputNode,
     ImageInputNode,
     ViewerNode,
+    # Audio
+    AudioExtractNode,
+    AudioAttachNode,
+    AudioGainNode,
+    AudioMixNode,
+    AudioAdvancedMixerNode,
+    AudioDelayNode,
+    AudioReverbNode,
+    AudioEqNode,
+    AudioPanNode,
+    AudioCompressorNode,
+    AudioLimiterNode,
+    AudioGateNode,
+    AudioNormalizeNode,
+    AudioStereoWidthNode,
+    AudioToMonoNode,
     # Generators
     SolidColorNode,
     GradientNode,

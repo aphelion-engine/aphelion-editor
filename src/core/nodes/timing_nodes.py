@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from core.audio import FrameWithAudio
 from core.nodes.base import NodeProperty, NodeSocketType, NodeValue
 from core.nodes.frame_base import FrameEffectNode, FrameNode
 from core.nodes.property_factory import number_property, slider_property
@@ -57,7 +58,9 @@ class TimeRemapNode(FrameNode):
         source_frame = self.float_value("source_frame", _PASSTHROUGH_SENTINEL)
         target = frame_num if source_frame < 0.0 else int(round(source_frame))
         resampled = self.resample_frame(target)
-        return resampled if isinstance(resampled, np.ndarray) else self.blank_frame()
+        if isinstance(resampled, (np.ndarray, FrameWithAudio)):
+            return resampled
+        return self.blank_frame()
 
 
 class FrameHoldNode(FrameNode):
@@ -91,7 +94,9 @@ class FrameHoldNode(FrameNode):
         del frame_num
         target = int(round(self.float_value("hold_frame", 0.0)))
         resampled = self.resample_frame(target)
-        return resampled if isinstance(resampled, np.ndarray) else self.blank_frame()
+        if isinstance(resampled, (np.ndarray, FrameWithAudio)):
+            return resampled
+        return self.blank_frame()
 
 
 class FilmFlickerNode(FrameEffectNode):

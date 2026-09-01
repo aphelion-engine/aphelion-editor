@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from core.audio import FrameWithAudio
 from core.nodes.base import NodeSocketType
 from core.nodes.enums import MaskChannel, SwitchInput
 from core.nodes.frame_base import FrameNode
@@ -39,18 +40,22 @@ class FrameSwitchNode(FrameNode):
             ),
         )
 
-    def evaluate(self, frame_num: int) -> np.ndarray:
-        """Return the selected frame."""
+    def evaluate(self, frame_num: int) -> np.ndarray | FrameWithAudio:
+        """Return the selected frame, preserving any carried audio."""
         del frame_num
         selection: SwitchInput = self.enum_value("input", SwitchInput, SwitchInput.A)
-        primary: np.ndarray | None = self.input_frame(
-            "a" if selection == SwitchInput.A else "b"
-        )
-        fallback: np.ndarray | None = self.input_frame(
-            "b" if selection == SwitchInput.A else "a"
-        )
+        primary_slot = "a" if selection == SwitchInput.A else "b"
+        fallback_slot = "b" if selection == SwitchInput.A else "a"
+        primary_payload = self.input_frame_with_audio(primary_slot)
+        fallback_payload = self.input_frame_with_audio(fallback_slot)
+        primary: np.ndarray | None = primary_payload.frame if primary_payload is not None else self.input_frame(primary_slot)
+        fallback: np.ndarray | None = fallback_payload.frame if fallback_payload is not None else self.input_frame(fallback_slot)
+        if primary_payload is not None:
+            return primary_payload
         if primary is not None:
             return primary
+        if fallback_payload is not None:
+            return fallback_payload
         return fallback if fallback is not None else self.blank_frame()
 
 

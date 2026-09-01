@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
-from PyQt6.QtCore import QPointF, Qt, pyqtSignal
+from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QMouseEvent, QPainter, QPaintEvent, QPalette, QPen, QPolygonF
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -18,6 +18,8 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QSlider,
     QSpinBox,
+    QToolButton,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -50,12 +52,260 @@ class PropertyWidget(QWidget):
         """Replace the current editor value."""
         raise NotImplementedError
 
-class CustomPropertyWidget(PropertyWidget):
-    """Custom property widget."""
+class EqCurveCanvas(QWidget):
+    """Interactive mini EQ graph with draggable bands."""
+
+    bands_changed = pyqtSignal(object)
+
+    def __init__(self, bands: list[dict[str, float]], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._bands: list[dict[str, float]] = []
+        self._active_band: int | None = None
+        self._set_bands(bands)
+        self.setMinimumHeight(170)
+        self.setMouseTracking(True)
+
+    def _set_bands(self, bands: list[dict[str, float]]) -> None:
+        cleaned: list[dict[str, float]] = []
+        for band in bands:
+            freq = float(band.get("freq", 1000.0))
+            gain = float(band.get("gain", 0.0))
+            q = float(band.get("q", 1.0))
+            cleaned.append(
+                {
+                    "freq": max(20.0, min(20000.0, freq)),
+                    "gain": max(-24.0, min(24.0, gain)),
+                    "q": max(0.2, min(10.0, q)),
+                }
+            )
+        cleaned.sort(key=lambda item: item["freq"])
+        self._bands = cleaned
+        self.update()
+
+    def bands(self) -> list[dict[str, float]]:
+        return [dict(band) for band in self._bands]
+
+    def set_bands(self, bands: list[dict[str, float]]) -> None:
+        self._set_bands(bands)
+
+    def _plot_rect(self) -> QRectF:
+        return QRectF(12.0, 12.0, max(10.0, self.width() - 24.0), max(10.0, self.height() - 24.0))
+
+    def _freq_to_x(self, freq: float, rect: QRectF) -> float:
+        lo = np.log10(20.0)
+        hi = np.log10(20000.0)
+        t = (np.log10(max(20.0, min(20000.0, freq))) - lo) / (hi - lo)
+        return rect.left() + rect.width() * t
+
+    def _x_to_freq(self, x: float, rect: QRectF) -> float:
+        lo = np.log10(20.0)
+        hi = np.log10(20000.0)
+        t = 0.0 if rect.width() <= 0 else (x - rect.left()) / rect.width()
+        t = max(0.0, min(1.0, t))
+        return float(10.0 ** (lo + (hi - lo) * t))
+
+    def _gain_to_y(self, gain: float, rect: QRectF) -> float:
+        t = (max(-24.0, min(24.0, gain)) + 24.0) / 48.0
+        return rect.bottom() - rect.height() * t
+
+    def _y_to_gain(self, y: float, rect: QRectF) -> float:
+        t = 0.0 if rect.height() <= 0 else (rect.bottom() - y) / rect.height()
+        t = max(0.0, min(1.0, t))
+        return float((t * 48.0) - 24.0)
+
+    def _band_at(self, pos_x: float, pos_y: float) -> int | None:
+        rect = self._plot_rect()
+        best_idx: int | None = None
+        best_dist = 14.0
+        for idx, band in enumerate(self._bands):
+            bx = self._freq_to_x(band["freq"], rect)
+            by = self._gain_to_y(band["gain"], rect)
+            dist = float(((bx - pos_x) ** 2 + (by - pos_y) ** 2) ** 0.5)
+            if dist <= best_dist:
+                best_dist = dist
+                best_idx = idx
+        return best_idx
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._active_band = self._band_at(event.position().x(), event.position().y())
+            if self._active_band is not None:
+                self._move_active(event.position().x(), event.position().y())
+                return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self._active_band is not None:
+            self._move_active(event.position().x(), event.position().y())
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        self._active_band = None
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            rect = self._plot_rect()
+            freq = self._x_to_freq(event.position().x(), rect)
+            gain = self._y_to_gain(event.position().y(), rect)
+            self._bands.append({"freq": freq, "gain": gain, "q": 1.0})
+            self._bands.sort(key=lambda item: item["freq"])
+            self.bands_changed.emit(self.bands())
+            self.update()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def _move_active(self, x: float, y: float) -> None:
+        if self._active_band is None:
+            return
+        rect = self._plot_rect()
+        band = self._bands[self._active_band]
+        band["freq"] = self._x_to_freq(x, rect)
+        band["gain"] = self._y_to_gain(y, rect)
+        self._bands.sort(key=lambda item: item["freq"])
+        self.bands_changed.emit(self.bands())
+        self.update()
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        pal = self.palette()
+        rect = self._plot_rect()
+        painter.fillRect(self.rect(), pal.color(QPalette.ColorRole.Base).darker(115))
+        painter.fillRect(rect, pal.color(QPalette.ColorRole.Base))
+
+        grid_pen = QPen(pal.color(QPalette.ColorRole.Mid))
+        grid_pen.setWidth(1)
+        painter.setPen(grid_pen)
+        for gain in (-24, -12, 0, 12, 24):
+            y = self._gain_to_y(float(gain), rect)
+            painter.drawLine(int(rect.left()), int(y), int(rect.right()), int(y))
+        for freq in (20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000):
+            x = self._freq_to_x(float(freq), rect)
+            painter.drawLine(int(x), int(rect.top()), int(x), int(rect.bottom()))
+
+        zero_pen = QPen(QColor(90, 170, 255))
+        zero_pen.setWidth(2)
+        painter.setPen(zero_pen)
+        zero_y = self._gain_to_y(0.0, rect)
+        painter.drawLine(int(rect.left()), int(zero_y), int(rect.right()), int(zero_y))
+
+        if self._bands:
+            points = QPolygonF()
+            for x in np.linspace(rect.left(), rect.right(), 192):
+                freq = self._x_to_freq(float(x), rect)
+                total_gain = 0.0
+                for band in self._bands:
+                    distance = np.log2(max(freq, 20.0) / max(band["freq"], 20.0))
+                    spread = max(0.15, 1.2 / band["q"])
+                    total_gain += band["gain"] * float(np.exp(-0.5 * (distance / spread) ** 2))
+                y = self._gain_to_y(max(-24.0, min(24.0, total_gain)), rect)
+                points.append(QPointF(float(x), y))
+            curve_pen = QPen(QColor(255, 180, 80))
+            curve_pen.setWidth(2)
+            painter.setPen(curve_pen)
+            painter.drawPolyline(points)
+
+        for idx, band in enumerate(self._bands):
+            bx = self._freq_to_x(band["freq"], rect)
+            by = self._gain_to_y(band["gain"], rect)
+            color = QColor(255, 210, 100) if idx == self._active_band else QColor(220, 220, 220)
+            painter.setPen(QPen(color, 2))
+            painter.setBrush(color)
+            painter.drawEllipse(QPointF(bx, by), 4.5, 4.5)
+
+
+class EqCurvePropertyWidget(PropertyWidget):
+    """Visual EQ editor with draggable/addable bands."""
+
+    value_changed = pyqtSignal(object)
 
     def __init__(self, prop: NodeProperty, parent: QWidget | None = None) -> None:
-        ...
-        
+        super().__init__(prop, parent)
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        self._row.addLayout(layout, 1)
+
+        bands = self._normalize_value(prop.value)
+        toolbar = QHBoxLayout()
+        toolbar.setContentsMargins(0, 0, 0, 0)
+        toolbar.setSpacing(4)
+        self.add_button = QToolButton()
+        self.add_button.setText("+")
+        self.remove_button = QToolButton()
+        self.remove_button.setText("-")
+        self.summary = QLabel()
+        self.summary.setObjectName("PropertySliderValue")
+        toolbar.addWidget(self.add_button)
+        toolbar.addWidget(self.remove_button)
+        toolbar.addWidget(self.summary, 1)
+        layout.addLayout(toolbar)
+
+        self.canvas = EqCurveCanvas(bands)
+        layout.addWidget(self.canvas)
+
+        self.add_button.clicked.connect(self._add_band)
+        self.remove_button.clicked.connect(self._remove_band)
+        self.canvas.bands_changed.connect(self._on_bands_changed)
+        self._update_summary()
+
+    def _normalize_value(self, value: Any) -> list[dict[str, float]]:
+        if isinstance(value, dict) and isinstance(value.get("bands"), list):
+            bands = value.get("bands")
+            assert isinstance(bands, list)
+            return [dict(item) for item in bands if isinstance(item, dict)]
+        if isinstance(value, dict) and {"low", "mid", "high"}.issubset(set(value.keys())):
+            return [
+                {"freq": 120.0, "gain": float(value.get("low", 0.0)), "q": 0.8},
+                {"freq": 1000.0, "gain": float(value.get("mid", 0.0)), "q": 1.0},
+                {"freq": 8000.0, "gain": float(value.get("high", 0.0)), "q": 0.8},
+            ]
+        return [
+            {"freq": 120.0, "gain": 0.0, "q": 0.8},
+            {"freq": 1000.0, "gain": 0.0, "q": 1.0},
+            {"freq": 8000.0, "gain": 0.0, "q": 0.8},
+        ]
+
+    def _pack_value(self) -> dict[str, Any]:
+        bands = self.canvas.bands()
+        derived = sorted(bands, key=lambda band: band["freq"])
+        low = derived[0]["gain"] if derived else 0.0
+        mid = derived[len(derived) // 2]["gain"] if derived else 0.0
+        high = derived[-1]["gain"] if derived else 0.0
+        return {"bands": bands, "low": low, "mid": mid, "high": high}
+
+    def _update_summary(self) -> None:
+        self.summary.setText(f"{len(self.canvas.bands())} band(s)  ·  drag to shape, double-click to add")
+
+    def _on_bands_changed(self, _bands: object) -> None:
+        self._update_summary()
+        self.value_changed.emit(self._pack_value())
+
+    def _add_band(self) -> None:
+        bands = self.canvas.bands()
+        bands.append({"freq": 2500.0 if not bands else min(20000.0, bands[-1]["freq"] * 1.5), "gain": 0.0, "q": 1.0})
+        self.canvas.set_bands(bands)
+        self._on_bands_changed(self.canvas.bands())
+
+    def _remove_band(self) -> None:
+        bands = self.canvas.bands()
+        if len(bands) <= 1:
+            return
+        bands.pop()
+        self.canvas.set_bands(bands)
+        self._on_bands_changed(self.canvas.bands())
+
+    def get_value(self) -> Any:
+        return self._pack_value()
+
+    def set_value(self, value: Any) -> None:
+        self.canvas.set_bands(self._normalize_value(value))
+        self._update_summary()
+
+
 class NumberPropertyWidget(PropertyWidget):
     """Integer or floating-point spin box."""
 
@@ -524,7 +774,7 @@ class KeyframeButtonWidget(QWidget):
 
 
 class PropertyRow(QWidget):
-    """Single compact horizontal label/editor row."""
+    """Single compact property row with optional full-width editor mode."""
 
     def __init__(
         self,
@@ -534,8 +784,9 @@ class PropertyRow(QWidget):
         parent: QWidget | None = None,
         *,
         keyframe_button: KeyframeButtonWidget | None = None,
+        full_width: bool = False,
     ) -> None:
-        """Lay out the fixed-width label, flexible editor, and optional keyframe toggle."""
+        """Lay out either a normal labeled row or a full-width custom editor."""
         super().__init__(parent)
         self.setObjectName("PropertyRow")
         self.editor: PropertyWidget = editor
@@ -543,7 +794,20 @@ class PropertyRow(QWidget):
         layout: QHBoxLayout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
-        label: QLabel = QLabel(title)
+        if full_width:
+            container = QVBoxLayout()
+            container.setContentsMargins(0, 0, 0, 0)
+            container.setSpacing(4)
+            label: QLabel = QLabel(title)
+            label.setObjectName("PropertyRowLabel")
+            label.setToolTip(description)
+            container.addWidget(label)
+            container.addWidget(editor)
+            layout.addLayout(container, 1)
+            if keyframe_button is not None:
+                layout.addWidget(keyframe_button, alignment=Qt.AlignmentFlag.AlignTop)
+            return
+        label = QLabel(title)
         label.setObjectName("PropertyRowLabel")
         label.setFixedWidth(PROPERTY_LABEL_WIDTH_PX)
         label.setToolTip(description)

@@ -12,7 +12,7 @@ import numpy as np
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
 from effects.frame_ops import to_display_u8
-from render.video_writer import Mp4VideoWriter
+from render.video_writer import ExportQuality, Mp4VideoWriter
 
 from core.audio import AudioData, FrameWithAudio
 
@@ -41,6 +41,10 @@ class ExportRequest:
     export_audio_enabled: bool = True
     export_sample_rate: int = 48000
     export_channels: int = 2
+    export_quality: ExportQuality = ExportQuality.FAST
+
+
+_PROGRESS_UPDATE_INTERVAL: int = 8
 
 
 class ExportWorker(QThread):
@@ -130,12 +134,21 @@ class ExportWorker(QThread):
             return None, None
 
         frame = np.ascontiguousarray(frame_result)
-        if frame.dtype != np.uint8:
-            frame = to_display_u8(frame)
+        if frame.dtype == np.uint8:
+            if frame.ndim == 2:
+                frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
+            elif frame.shape[2] == 4:
+                frame = frame[:, :, :3]
+            elif frame.shape[2] != 3:
+                self._skipped_frames += 1
+                return None, None
+            return np.ascontiguousarray(frame), audio_result
+
+        frame = to_display_u8(frame)
         if frame.ndim == 2:
             frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
         elif frame.shape[2] == 4:
-            frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2RGB)
+            frame = frame[:, :, :3]
         elif frame.shape[2] != 3:
             self._skipped_frames += 1
             return None, None
@@ -169,7 +182,8 @@ class ExportWorker(QThread):
             filename = out_dir / f"frame_{frame_num:06d}.png"
             cv2.imwrite(str(filename), cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
             written += 1
-            self.progress.emit(index + 1, total)
+            if ((index + 1) % _PROGRESS_UPDATE_INTERVAL == 0) or (index + 1 == total):
+                self.progress.emit(index + 1, total)
         if written == 0:
             self.failed.emit(self._no_frames_message("evaluated for export"))
             return
@@ -177,7 +191,6 @@ class ExportWorker(QThread):
 
     def _export_mp4(self, start: int, end: int, total: int) -> None:
         first_frame: np.ndarray | None = None
-        first_audio: AudioData | None = None
         audio_sample_rate = max(1, int(self._request.export_sample_rate))
         audio_channels = 1 if int(self._request.export_channels) == 1 else 2
 
@@ -186,8 +199,6 @@ class ExportWorker(QThread):
             frame, audio = self._evaluate_frame_rgb(frame_num)
             if frame is not None:
                 first_frame = frame
-                if audio is not None:
-                    first_audio = audio
                 break
 
         if first_frame is None:
@@ -207,6 +218,7 @@ class ExportWorker(QThread):
                 audio_sample_rate=audio_sample_rate,
                 audio_channels=audio_channels,
                 include_audio=self._request.export_audio_enabled,
+                quality=self._request.export_quality,
             )
         except (OSError, RuntimeError) as exc:
             self.failed.emit(f"Could not open the video writer: {exc}")
@@ -223,10 +235,12 @@ class ExportWorker(QThread):
                 if frame is None:
                     continue
                 if frame.shape[0] != height or frame.shape[1] != width:
-                    frame = cv2.resize(frame, (width, height))
+                    interpolation = cv2.INTER_AREA if frame.shape[0] > height or frame.shape[1] > width else cv2.INTER_LINEAR
+                    frame = cv2.resize(frame, (width, height), interpolation=interpolation)
                 writer.write(frame, audio=audio if self._request.export_audio_enabled else None)
                 written += 1
-                self.progress.emit(index + 1, total)
+                if ((index + 1) % _PROGRESS_UPDATE_INTERVAL == 0) or (index + 1 == total):
+                    self.progress.emit(index + 1, total)
         finally:
             writer.close()
 

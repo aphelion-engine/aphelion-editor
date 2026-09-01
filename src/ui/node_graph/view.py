@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer
 from PyQt6.QtGui import (
@@ -48,6 +48,11 @@ import ui.node_graph.operations as node_ops
 class NodeGraphView(QGraphicsView):
     """Interactive node graph canvas."""
 
+    _MIN_ZOOM: ClassVar[float] = 0.2
+    _MAX_ZOOM: ClassVar[float] = 3.0
+    _ZOOM_IN_FACTOR: ClassVar[float] = 1.15
+    _ZOOM_OUT_FACTOR: ClassVar[float] = 1.0 / _ZOOM_IN_FACTOR
+
     def __init__(
         self,
         project: Project,
@@ -68,6 +73,7 @@ class NodeGraphView(QGraphicsView):
         self.selection_rect: QRect | None = None
         self._panning: bool = False
         self._pan_anchor: QPointF = QPointF()
+        self._pan_button: Qt.MouseButton | None = None
         self._context_menu: QMenu | None = None
         self._preview_wire: PreviewWireItem | None = None
         self._show_grid: bool = True
@@ -584,12 +590,16 @@ class NodeGraphView(QGraphicsView):
         for item in self.node_items.values():
             item.setSelected(True)
 
+    def _start_panning(self, event: Any) -> None:
+        self._panning = True
+        self._pan_button = event.button()
+        self._pan_anchor = event.position()
+        self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        event.accept()
+
     def mousePressEvent(self, event: Any) -> None:
         if event.button() == Qt.MouseButton.MiddleButton:
-            self._panning = True
-            self._pan_anchor = event.position()
-            self.setCursor(Qt.CursorShape.ClosedHandCursor)
-            event.accept()
+            self._start_panning(event)
             return
 
         if event.button() == Qt.MouseButton.LeftButton:
@@ -602,7 +612,10 @@ class NodeGraphView(QGraphicsView):
             if isinstance(item, ConnectionItem):
                 super().mousePressEvent(event)
                 return
-            if item is None or not isinstance(item, NodeItem):
+            if item is None:
+                self._start_panning(event)
+                return
+            if not isinstance(item, NodeItem):
                 self.selection_start = event.pos()
                 self.selection_rect = QRect(self.selection_start, self.selection_start)
                 if not (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
@@ -658,8 +671,9 @@ class NodeGraphView(QGraphicsView):
             self.finish_connection_drag(self._event_scene_pos(event))
             event.accept()
             return
-        if event.button() == Qt.MouseButton.MiddleButton and self._panning:
+        if self._panning and event.button() == self._pan_button:
             self._panning = False
+            self._pan_button = None
             self.unsetCursor()
             event.accept()
             return
@@ -671,15 +685,38 @@ class NodeGraphView(QGraphicsView):
                 viewport.update()
             event.accept()
             return
+        if self._panning:
+            self._panning = False
+            self._pan_button = None
+            self.unsetCursor()
         super().mouseReleaseEvent(event)
 
     def wheelEvent(self, event: QWheelEvent | None) -> None:
         if event is None:
             return
-        factor = 1.12 if event.angleDelta().y() > 0 else 0.9
-        scale = self.transform().m11() * factor
-        if 0.2 <= scale <= 3.0:
-            self.scale(factor, factor)
+        delta_y = event.angleDelta().y()
+        if delta_y == 0:
+            super().wheelEvent(event)
+            return
+
+        current_scale = self.transform().m11()
+        zoom_factor = self._ZOOM_IN_FACTOR if delta_y > 0 else self._ZOOM_OUT_FACTOR
+        target_scale = max(
+            self._MIN_ZOOM,
+            min(self._MAX_ZOOM, current_scale * zoom_factor),
+        )
+        applied_factor = target_scale / current_scale if current_scale != 0 else 1.0
+        if abs(applied_factor - 1.0) < 1e-6:
+            event.accept()
+            return
+
+        cursor_view_pos = event.position().toPoint()
+        before = self.mapToScene(cursor_view_pos)
+        self.scale(applied_factor, applied_factor)
+        after = self.mapToScene(cursor_view_pos)
+        delta = after - before
+        self.translate(delta.x(), delta.y())
+        event.accept()
 
     def delete_selection(self) -> bool:
         """Delete selected wires or nodes. Returns whether something was removed."""

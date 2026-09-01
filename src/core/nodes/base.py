@@ -17,7 +17,7 @@ from core.audio import AudioData, FrameWithAudio
 # with audio (FrameWithAudio), or — for nodes with more than one Number output
 # (e.g. a Tracker's x/y) — a dict keyed by output slot name. ``Project.evaluate_node``
 # extracts the slot the caller actually asked for; single-output nodes are unaffected.
-NodeValue = np.ndarray | float | FrameWithAudio | dict[str, float]
+NodeValue = np.ndarray | float | AudioData | FrameWithAudio | dict[str, float | AudioData | FrameWithAudio]
 
 # Resolves an arbitrary absolute frame number against a node's connected
 # "frame" upstream, bypassing the current evaluation's own ``frame_num``.
@@ -40,6 +40,7 @@ class NodeSocketType(IntEnum):
     Number = auto()
     Color = auto()
     Node = auto()
+    Audio = auto()
 
 
 # Canonical in-graph frame dtype: HxWx3 float32, nominal range [0.0, 1.0].

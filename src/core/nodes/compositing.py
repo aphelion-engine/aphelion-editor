@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from core.audio import FrameWithAudio
 from core.nodes.base import NodeSocketType
 from core.nodes.enums import BlendMode
 from core.nodes.frame_base import FrameNode
@@ -68,23 +69,33 @@ class MergeNode(FrameNode):
             ),
         )
 
-    def evaluate(self, frame_num: int) -> np.ndarray:
-        """Composite inputs for the requested frame."""
+    def evaluate(self, frame_num: int) -> np.ndarray | FrameWithAudio:
+        """Composite inputs for the requested frame, preserving foreground audio."""
         del frame_num
-        background: np.ndarray | None = self.input_frame("background")
-        foreground: np.ndarray | None = self.input_frame("foreground")
+        background_payload = self.input_frame_with_audio("background")
+        foreground_payload = self.input_frame_with_audio("foreground")
+        background: np.ndarray | None = background_payload.frame if background_payload is not None else self.input_frame("background")
+        foreground: np.ndarray | None = foreground_payload.frame if foreground_payload is not None else self.input_frame("foreground")
         if background is None:
-            return foreground if foreground is not None else self.blank_frame()
+            return foreground_payload if foreground_payload is not None else (foreground if foreground is not None else self.blank_frame())
         if foreground is None or not self.bool_value("enabled", True):
-            return background
+            return background_payload if background_payload is not None else background
         mode: BlendMode = self.enum_value("blend_mode", BlendMode, BlendMode.Normal)
-        return blend_frames(
+        result = blend_frames(
             background,
             foreground,
             mode=mode,
             opacity=self.float_value("opacity", 100.0) / 100.0,
             mask=self.input_frame("mask"),
         )
+        carried_audio = None
+        if foreground_payload is not None and foreground_payload.audio is not None:
+            carried_audio = foreground_payload.audio
+        elif background_payload is not None:
+            carried_audio = background_payload.audio
+        if carried_audio is not None:
+            return FrameWithAudio(frame=result, audio=carried_audio)
+        return result
 
 
 class DissolveNode(FrameNode):
@@ -114,17 +125,24 @@ class DissolveNode(FrameNode):
             ),
         )
 
-    def evaluate(self, frame_num: int) -> np.ndarray:
-        """Dissolve the connected inputs."""
+    def evaluate(self, frame_num: int) -> np.ndarray | FrameWithAudio:
+        """Dissolve the connected inputs, preserving the dominant input's audio."""
         del frame_num
-        frame_a: np.ndarray | None = self.input_frame("a")
-        frame_b: np.ndarray | None = self.input_frame("b")
+        payload_a = self.input_frame_with_audio("a")
+        payload_b = self.input_frame_with_audio("b")
+        frame_a: np.ndarray | None = payload_a.frame if payload_a is not None else self.input_frame("a")
+        frame_b: np.ndarray | None = payload_b.frame if payload_b is not None else self.input_frame("b")
         if frame_a is None:
-            return frame_b if frame_b is not None else self.blank_frame()
+            return payload_b if payload_b is not None else (frame_b if frame_b is not None else self.blank_frame())
         if frame_b is None:
-            return frame_a
-        return dissolve_frames(
+            return payload_a if payload_a is not None else frame_a
+        mix = self.float_value("mix", 50.0) / 100.0
+        result = dissolve_frames(
             frame_a,
             frame_b,
-            mix=self.float_value("mix", 50.0) / 100.0,
+            mix=mix,
         )
+        carried_audio = payload_b.audio if (payload_b is not None and mix >= 0.5) else (payload_a.audio if payload_a is not None else None)
+        if carried_audio is not None:
+            return FrameWithAudio(frame=result, audio=carried_audio)
+        return result

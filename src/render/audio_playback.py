@@ -9,7 +9,7 @@ from dataclasses import dataclass
 import numpy as np
 
 _FALLBACK_SAMPLE_RATES: tuple[int, ...] = (48000, 44100)
-_MAX_WRITE_CHUNKS: int = 2
+_MAX_WRITE_CHUNKS: int = 4
 
 from core.audio import AudioData
 from utils.logging_setup import get_logger
@@ -135,11 +135,9 @@ class AudioPlaybackEngine:
         else:
             latency = "high"
             resolved_blocksize = blocksize if blocksize > 0 else 512
-        requested_rate = int(sample_rate)
-        if requested_rate not in _FALLBACK_SAMPLE_RATES:
-            requested_rate = 48000
+        requested_rate = max(1, int(sample_rate))
         with self._lock:
-            self._preferred_sample_rate = max(1, requested_rate)
+            self._preferred_sample_rate = requested_rate
             self._preferred_channels = 1 if int(channels) == 1 else 2
             self._stream_blocksize = max(0, int(resolved_blocksize))
             self._latency = latency
@@ -244,6 +242,8 @@ class AudioPlaybackEngine:
             self._channels = max(1, int(target_channels))
 
             samples = np.clip(samples * self._volume, -1.0, 1.0).astype(np.float32, copy=False)
+            if len(self._buffer) == self._buffer.maxlen:
+                self._buffer.popleft()
             self._buffer.append(samples)
 
     def _open_stream(self, sd: object, device_index: int | None, sample_rate: int, channels: int) -> object:
@@ -251,6 +251,7 @@ class AudioPlaybackEngine:
         if self._current_device is not None and self._current_device.default_sample_rate > 0:
             preferred_rates.append(int(self._current_device.default_sample_rate))
         preferred_rates.extend(_FALLBACK_SAMPLE_RATES)
+        preferred_rates.extend((96000, 88200, 32000, 24000, 22050))
         seen: set[int] = set()
         last_error: Exception | None = None
         for candidate_rate in preferred_rates:
