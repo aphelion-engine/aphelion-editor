@@ -63,9 +63,17 @@ def _apply_audio_settings(editor: "Editor", audio: AudioSettings) -> None:
     engine.set_enabled(audio.audio_enabled)
     engine.set_volume(audio.master_volume)
     engine.set_buffer_size(audio.buffer_size)
+    engine.set_stream_config(
+        sample_rate=audio.output_sample_rate,
+        channels=audio.output_channels,
+        blocksize=audio.stream_blocksize,
+        latency_preset=audio.latency_preset,
+    )
 
     selected_device = None
     for device in AudioPlaybackEngine.get_available_devices():
+        if audio.host_api_name and device.host_api_name != audio.host_api_name:
+            continue
         if device.index == audio.default_device_index:
             selected_device = device
             break

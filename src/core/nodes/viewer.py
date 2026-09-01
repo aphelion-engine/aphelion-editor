@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from config.constants import DEFAULT_PREVIEW_MAX_WIDTH
+from config.constants import DEFAULT_MAX_PREFETCH_FRAMES, DEFAULT_PREVIEW_MAX_WIDTH
 from core.audio import AudioData, FrameWithAudio
 from core.nodes.base import Node, NodeProperty, NodePropertyInputType, NodeSocketType
 from render.preview import ViewerBackground, ViewportFitMode
@@ -118,9 +118,9 @@ class ViewerNode(Node):
             "prefetch_frames",
             NodeProperty(
                 input_type=NodePropertyInputType.Number,
-                value=2,
+                value=min(6, DEFAULT_MAX_PREFETCH_FRAMES),
                 slider_min_value=0,
-                slider_max_value=6,
+                slider_max_value=12,
                 priority=60,
                 group="Performance",
                 label="Prefetch",

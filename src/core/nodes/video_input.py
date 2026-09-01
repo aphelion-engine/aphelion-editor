@@ -6,7 +6,7 @@ from enum import IntEnum, auto
 
 import numpy as np
 
-from config.constants import DEFAULT_PREVIEW_MAX_WIDTH
+from config.constants import DEFAULT_FPS, DEFAULT_PREVIEW_MAX_WIDTH
 from core.audio import AudioData, FrameWithAudio
 from core.nodes.base import (
     FRAME_DTYPE,
@@ -482,6 +482,44 @@ class VideoInputNode(Node):
                     samples = np.mean(samples, axis=1, keepdims=True)
 
         return AudioData(samples=samples.astype(np.float32), sample_rate=audio.sample_rate)
+
+    def preview_audio_chunk(
+        self,
+        frame_num: int,
+        *,
+        duration_frames: int = 6,
+    ) -> AudioData:
+        """Return a forward contiguous audio chunk for preview playback."""
+        info = self._ensure_open()
+        if info is None:
+            duration = max(1, int(duration_frames)) / max(float(self._project_fps), 1.0)
+            return AudioData.silence(duration=duration)
+
+        source_frame = self._resolve_source_frame(
+            frame_num,
+            info.frame_count,
+            info.fps,
+        )
+        if source_frame is None:
+            duration = max(1, int(duration_frames)) / max(float(self._project_fps), 1.0)
+            return self._get_silence_audio() if duration_frames <= 1 else AudioData.silence(
+                duration=duration,
+                sample_rate=info.audio_sample_rate,
+                channels=info.audio_channels,
+            )
+
+        project_fps = max(float(self._project_fps), 1.0)
+        seconds_per_frame = 1.0 / project_fps
+        chunk_duration = max(1, int(duration_frames)) * seconds_per_frame
+        start_time = float(source_frame) / max(float(info.fps) if info.fps > 0 else float(DEFAULT_FPS), 0.001)
+        audio = self._decoder.read_audio_range(start_time, chunk_duration)
+        if audio is None:
+            return AudioData.silence(
+                duration=chunk_duration,
+                sample_rate=info.audio_sample_rate,
+                channels=info.audio_channels,
+            )
+        return self._process_audio(audio)
 
     def close(self) -> None:
         """Release the underlying decoder (call when removing the node)."""

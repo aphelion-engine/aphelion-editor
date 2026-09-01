@@ -324,7 +324,6 @@ class VideoDecoder:
     def read_audio(self, frame_num: int) -> "AudioData | None":
         """Read audio samples for a specific frame."""
         if not self.is_open or self._audio_info is None or not self._audio_info.has_audio:
-            # Return silence for the frame duration
             duration_per_frame = 1.0 / max(self._fps, 0.001)
             return AudioData.silence(
                 duration=duration_per_frame,
@@ -338,6 +337,16 @@ class VideoDecoder:
             fps=self._fps,
             duration_per_frame=duration_per_frame
         )
+
+    def read_audio_range(self, start_time_sec: float, duration_sec: float) -> "AudioData | None":
+        """Read a contiguous audio range by time for smoother preview playback."""
+        if not self.is_open or self._audio_info is None or not self._audio_info.has_audio:
+            return AudioData.silence(
+                duration=max(0.0, float(duration_sec)),
+                sample_rate=self._audio_info.sample_rate if self._audio_info else 48000,
+                channels=self._audio_info.num_channels if self._audio_info else 2,
+            )
+        return self._audio_decoder.extract_audio_for_time_range(start_time_sec, duration_sec)
 
 
 def probe_video(path: str) -> MediaInfo | None:

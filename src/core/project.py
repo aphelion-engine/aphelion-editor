@@ -41,6 +41,7 @@ class Project:
         self.height = DEFAULT_HEIGHT
         self.duration = DEFAULT_DURATION
         self.current_frame = 0
+        self._timeline_frame_count: int | None = None
 
         self.active_viewer: str | None = None
         self.file_path: str | None = None
@@ -70,7 +71,9 @@ class Project:
 
     @property
     def max_frame(self) -> int:
-        return int(self.duration * self.fps)
+        if self._timeline_frame_count is not None and self._timeline_frame_count > 0:
+            return max(0, self._timeline_frame_count - 1)
+        return max(0, int(round(self.duration * self.fps)) - 1)
 
     def project_settings(self) -> ProjectSettings:
         """Return the current editable project settings snapshot."""
@@ -96,6 +99,7 @@ class Project:
         self.width = max(16, int(settings.width))
         self.height = max(16, int(settings.height))
         self.duration = max(0.1, float(settings.duration))
+        self._timeline_frame_count = None
         self.current_frame = min(self.current_frame, self.max_frame)
         self.clear_cache()
         self.notify_observers(ObserverEvent.ProjectModified, None)
@@ -544,10 +548,17 @@ class Project:
         duration_sec: float,
         width: int,
         height: int,
+        frame_count: int | None = None,
     ) -> None:
         """Align project timeline and frame size with loaded media."""
-        self.fps = max(1, round(fps))
-        self.duration = max(0.1, float(duration_sec))
+        resolved_fps = max(1, round(fps))
+        resolved_duration = max(0.1, float(duration_sec))
+        resolved_frame_count = int(frame_count) if frame_count is not None else 0
+        if resolved_frame_count <= 0:
+            resolved_frame_count = max(1, int(round(resolved_duration * resolved_fps)))
+        self.fps = resolved_fps
+        self.duration = max(resolved_duration, resolved_frame_count / float(resolved_fps))
+        self._timeline_frame_count = resolved_frame_count
         self.width = max(1, width)
         self.height = max(1, height)
         self.current_frame = min(self.current_frame, self.max_frame)
@@ -643,6 +654,7 @@ class Project:
         project.width = max(1, int(timeline.get("width", DEFAULT_WIDTH)))
         project.height = max(1, int(timeline.get("height", DEFAULT_HEIGHT)))
         project.duration = max(0.1, float(timeline.get("duration", DEFAULT_DURATION)))
+        project._timeline_frame_count = max(0, int(round(project.duration * project.fps)))
         project.current_frame = max(0, int(timeline.get("current_frame", 0)))
         project.current_frame = min(project.current_frame, project.max_frame)
 

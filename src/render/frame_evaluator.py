@@ -76,6 +76,8 @@ class FrameEvaluationWorker(QThread):
 
             if self._playing and self._has_no_pending():
                 self._prefetch(node_id, frame_num)
+                if self._has_no_pending():
+                    self._wake.wait(0.001)
 
     def _take_pending(self) -> tuple[str, int] | None:
         with self._lock:

@@ -292,7 +292,7 @@ class PreferencesDialog(QDialog):
         layout.setContentsMargins(12, 12, 12, 12)
         audio = self._working.audio
 
-        general_group = QGroupBox("Audio Settings")
+        general_group = QGroupBox("Playback")
         general_group.setObjectName("PreferencesGroup")
         general_form = QFormLayout(general_group)
 
@@ -308,26 +308,74 @@ class PreferencesDialog(QDialog):
         self._master_volume.setValue(int(audio.master_volume * 100))
         general_form.addRow("Master volume", self._master_volume)
 
+        self._latency_preset = QComboBox()
+        self._latency_preset.setObjectName("PreferencesCombo")
+        self._latency_preset.addItem("Low Latency", "low")
+        self._latency_preset.addItem("Balanced", "balanced")
+        self._latency_preset.addItem("Safe / Stable", "safe")
+        latency_index = self._latency_preset.findData(audio.latency_preset)
+        if latency_index >= 0:
+            self._latency_preset.setCurrentIndex(latency_index)
+        general_form.addRow("Latency preset", self._latency_preset)
+
         self._buffer_size = QSpinBox()
         self._buffer_size.setObjectName("PreferencesSpin")
-        self._buffer_size.setRange(1, 20)
+        self._buffer_size.setRange(2, 20)
         self._buffer_size.setSuffix(" chunks")
         self._buffer_size.setValue(audio.buffer_size)
-        general_form.addRow("Buffer size", self._buffer_size)
+        general_form.addRow("Queue depth", self._buffer_size)
+
+        self._stream_blocksize = QComboBox()
+        self._stream_blocksize.setObjectName("PreferencesCombo")
+        self._stream_blocksize.addItem("Automatic", 0)
+        for size in (128, 256, 512, 1024, 2048):
+            self._stream_blocksize.addItem(str(size), size)
+        blocksize_index = self._stream_blocksize.findData(audio.stream_blocksize)
+        if blocksize_index >= 0:
+            self._stream_blocksize.setCurrentIndex(blocksize_index)
+        general_form.addRow("Buffer size", self._stream_blocksize)
+
+        self._output_sample_rate = QComboBox()
+        self._output_sample_rate.setObjectName("PreferencesCombo")
+        for rate in (44100, 48000, 96000):
+            self._output_sample_rate.addItem(f"{rate} Hz", rate)
+        sample_rate_index = self._output_sample_rate.findData(audio.output_sample_rate)
+        if sample_rate_index >= 0:
+            self._output_sample_rate.setCurrentIndex(sample_rate_index)
+        general_form.addRow("Sample rate", self._output_sample_rate)
+
+        self._output_channels = QComboBox()
+        self._output_channels.setObjectName("PreferencesCombo")
+        self._output_channels.addItem("Mono", 1)
+        self._output_channels.addItem("Stereo", 2)
+        channels_index = self._output_channels.findData(audio.output_channels)
+        if channels_index >= 0:
+            self._output_channels.setCurrentIndex(channels_index)
+        general_form.addRow("Output channels", self._output_channels)
+
+        playback_hint = QLabel(
+            "Recommended starting point: Safe / Stable, 512 or 1024 buffer, "
+            "48 kHz, Stereo, queue depth 10–12. WASAPI is usually the best "
+            "Windows choice here."
+        )
+        playback_hint.setObjectName("PreferencesHint")
+        playback_hint.setWordWrap(True)
+        general_form.addRow(playback_hint)
 
         layout.addWidget(general_group)
 
-        device_group = QGroupBox("Audio Device")
+        device_group = QGroupBox("Playback Device")
         device_group.setObjectName("PreferencesGroup")
         device_form = QFormLayout(device_group)
 
+        self._audio_driver = QComboBox()
+        self._audio_driver.setObjectName("PreferencesCombo")
+        self._audio_driver.currentIndexChanged.connect(self._on_audio_driver_changed)
+        device_form.addRow("Driver", self._audio_driver)
+
         self._audio_device = QComboBox()
         self._audio_device.setObjectName("PreferencesCombo")
-        self._reload_audio_devices()
-        current_index = self._audio_device.findData(audio.default_device_index)
-        if current_index >= 0:
-            self._audio_device.setCurrentIndex(current_index)
-
+        self._reload_audio_devices(preferred_host_api=audio.host_api_name, preferred_device_index=audio.default_device_index)
         device_form.addRow("Output device", self._audio_device)
 
         button_row = QHBoxLayout()
@@ -353,9 +401,44 @@ class PreferencesDialog(QDialog):
 
         layout.addWidget(device_group)
 
+        export_group = QGroupBox("Export")
+        export_group.setObjectName("PreferencesGroup")
+        export_form = QFormLayout(export_group)
+
+        self._export_audio_enabled = QCheckBox("Include audio in video exports")
+        self._export_audio_enabled.setChecked(audio.export_audio_enabled)
+        export_form.addRow(self._export_audio_enabled)
+
+        self._export_sample_rate = QComboBox()
+        self._export_sample_rate.setObjectName("PreferencesCombo")
+        for rate in (44100, 48000, 96000):
+            self._export_sample_rate.addItem(f"{rate} Hz", rate)
+        export_sample_rate_index = self._export_sample_rate.findData(audio.export_sample_rate)
+        if export_sample_rate_index >= 0:
+            self._export_sample_rate.setCurrentIndex(export_sample_rate_index)
+        export_form.addRow("Export sample rate", self._export_sample_rate)
+
+        self._export_channels = QComboBox()
+        self._export_channels.setObjectName("PreferencesCombo")
+        self._export_channels.addItem("Mono", 1)
+        self._export_channels.addItem("Stereo", 2)
+        export_channels_index = self._export_channels.findData(audio.export_channels)
+        if export_channels_index >= 0:
+            self._export_channels.setCurrentIndex(export_channels_index)
+        export_form.addRow("Export channels", self._export_channels)
+
+        export_hint = QLabel(
+            "Recommended export settings: 48 kHz Stereo for general video delivery."
+        )
+        export_hint.setObjectName("PreferencesHint")
+        export_hint.setWordWrap(True)
+        export_form.addRow(export_hint)
+
+        layout.addWidget(export_group)
+
         hint = QLabel(
-            "Audio settings control playback behavior and device selection. "
-            "Volume is a percentage of the original audio level."
+            "Driver lists come from PortAudio via sounddevice. If ASIO is not shown, "
+            "it is not available through the installed PortAudio build on this system."
         )
         hint.setObjectName("PreferencesHint")
         hint.setWordWrap(True)
@@ -659,29 +742,67 @@ class PreferencesDialog(QDialog):
         tokens.node_colors = dict(self._working.node_colors)
         save_theme_file(export_path, tokens)
 
-    def _reload_audio_devices(self) -> None:
+    def _reload_audio_devices(
+        self,
+        preferred_host_api: str | None = None,
+        preferred_device_index: int | None = None,
+    ) -> None:
         """Refresh the list of available audio output devices."""
-        selected = self._audio_device.currentData() if hasattr(self, "_audio_device") else -1
+        current_driver = preferred_host_api if preferred_host_api is not None else (
+            str(self._audio_driver.currentData()) if hasattr(self, "_audio_driver") and self._audio_driver.count() > 0 else ""
+        )
+        current_device = preferred_device_index if preferred_device_index is not None else (
+            int(self._audio_device.currentData()) if hasattr(self, "_audio_device") and self._audio_device.count() > 0 and self._audio_device.currentData() is not None else -1
+        )
+
+        self._audio_driver.blockSignals(True)
+        self._audio_device.blockSignals(True)
+        self._audio_driver.clear()
         self._audio_device.clear()
         try:
             from render.audio_playback import AudioPlaybackEngine
 
-            for device in AudioPlaybackEngine.get_available_devices():
+            devices = AudioPlaybackEngine.get_available_devices()
+            host_apis: list[str] = []
+            for device in devices:
+                if device.host_api_name not in host_apis:
+                    host_apis.append(device.host_api_name)
+
+            self._audio_driver.addItem("All Drivers", "")
+            for host_api in host_apis:
+                if host_api and host_api != "System Default":
+                    self._audio_driver.addItem(host_api, host_api)
+
+            driver_index = self._audio_driver.findData(current_driver)
+            if driver_index < 0:
+                driver_index = 0
+            self._audio_driver.setCurrentIndex(driver_index)
+            selected_driver = str(self._audio_driver.currentData())
+
+            for device in devices:
+                if selected_driver and device.host_api_name != selected_driver:
+                    continue
                 self._audio_device.addItem(device.name, device.index)
         except Exception as exc:  # noqa: BLE001
+            self._audio_driver.addItem("All Drivers", "")
             self._audio_device.addItem("Default System Device", -1)
             QMessageBox.warning(
                 self,
                 "Audio Devices",
                 f"Failed to enumerate audio devices.\n\n{exc}",
             )
-            return
+        finally:
+            self._audio_driver.blockSignals(False)
+            self._audio_device.blockSignals(False)
 
-        current_index = self._audio_device.findData(selected)
+        current_index = self._audio_device.findData(current_device)
         if current_index < 0:
             current_index = self._audio_device.findData(-1)
         if current_index >= 0:
             self._audio_device.setCurrentIndex(current_index)
+
+    def _on_audio_driver_changed(self) -> None:
+        self._reload_audio_devices(preferred_host_api=str(self._audio_driver.currentData()))
 
     def _test_audio_device(self) -> None:
         """Play a short tone through the selected output device."""
@@ -689,8 +810,11 @@ class PreferencesDialog(QDialog):
             from render.audio_playback import AudioPlaybackEngine
 
             device_index = int(self._audio_device.currentData())
+            host_api_name = str(self._audio_driver.currentData())
             selected = None
             for device in AudioPlaybackEngine.get_available_devices():
+                if host_api_name and device.host_api_name != host_api_name:
+                    continue
                 if device.index == device_index:
                     selected = device
                     break
@@ -728,8 +852,16 @@ class PreferencesDialog(QDialog):
         self._working.audio = AudioSettings(
             audio_enabled=self._audio_enabled.isChecked(),
             master_volume=float(self._master_volume.value()) / 100.0,
+            host_api_name=str(self._audio_driver.currentData()),
             default_device_index=int(self._audio_device.currentData()),
+            latency_preset=str(self._latency_preset.currentData()),
             buffer_size=int(self._buffer_size.value()),
+            stream_blocksize=int(self._stream_blocksize.currentData()),
+            output_sample_rate=int(self._output_sample_rate.currentData()),
+            output_channels=int(self._output_channels.currentData()),
+            export_audio_enabled=self._export_audio_enabled.isChecked(),
+            export_sample_rate=int(self._export_sample_rate.currentData()),
+            export_channels=int(self._export_channels.currentData()),
         )
         theme_id = str(self._theme_combo.currentData())
         if theme_id == "custom":

@@ -41,13 +41,13 @@ MAX_DECODE_CACHE_FRAMES: int = 128
 
 # Global ceiling on requested prefetch-ahead frames during playback,
 # applied on top of the per-Viewer "Prefetch" property.
-DEFAULT_MAX_PREFETCH_FRAMES: int = 4
-MAX_MAX_PREFETCH_FRAMES: int = 16
+DEFAULT_MAX_PREFETCH_FRAMES: int = 12
+MAX_MAX_PREFETCH_FRAMES: int = 24
 
 # Forced decode width used only while actively playing, when the playback
 # proxy override is enabled — independent of the per-Viewer proxy width so
 # scrubbing/paused review can stay at full preview quality.
-DEFAULT_PLAYBACK_PROXY_WIDTH: int = 640
+DEFAULT_PLAYBACK_PROXY_WIDTH: int = 480
 
 # Graph layout: horizontal gap when inserting a node into a chain
 NODE_CHAIN_GAP_PX: float = 220.0
