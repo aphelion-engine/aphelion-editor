@@ -290,7 +290,7 @@ class AudioGainNode(FrameNode):
     node_color = AUDIO_NODE_COLOR
 
     def _setup_sockets(self) -> None:
-        self.add_input("audio", NodeSocketType.Frame)
+        self.add_input("audio", NodeSocketType.Audio)
         self.add_output("audio", NodeSocketType.Audio)
         self.set_property("enabled", toggle_property(True, priority=0, group="Gain", label="Enabled", description="Bypass this node without removing it."))
         self.set_property("gain", slider_property(100, 0, 300, priority=10, group="Gain", label="Gain", description="Linear output gain.", suffix="%"))
@@ -363,7 +363,7 @@ class AudioDelayNode(FrameNode):
     node_color = AUDIO_NODE_COLOR
 
     def _setup_sockets(self) -> None:
-        self.add_input("audio", NodeSocketType.Frame)
+        self.add_input("audio", NodeSocketType.Audio)
         self.add_output("audio", NodeSocketType.Audio)
         self.set_property("delay_ms", number_property(120.0, 1.0, 2000.0, priority=0, group="Delay", label="Delay", description="Delay time in milliseconds.", suffix=" ms"))
         self.set_property("feedback", slider_property(35, 0, 95, priority=1, group="Delay", label="Feedback", description="Amount of delayed signal fed back.", suffix="%"))
@@ -396,7 +396,7 @@ class AudioReverbNode(FrameNode):
     node_color = AUDIO_NODE_COLOR
 
     def _setup_sockets(self) -> None:
-        self.add_input("audio", NodeSocketType.Frame)
+        self.add_input("audio", NodeSocketType.Audio)
         self.add_output("audio", NodeSocketType.Audio)
         self.set_property("decay", slider_property(55, 0, 95, priority=0, group="Reverb", label="Decay", description="Strength of successive reflections.", suffix="%"))
         self.set_property("pre_delay_ms", number_property(35.0, 0.0, 250.0, priority=1, group="Reverb", label="Pre-Delay", description="Gap before the first reflection.", suffix=" ms"))
@@ -429,7 +429,7 @@ class AudioEqNode(FrameNode):
     node_color = AUDIO_NODE_COLOR
 
     def _setup_sockets(self) -> None:
-        self.add_input("audio", NodeSocketType.Frame)
+        self.add_input("audio", NodeSocketType.Audio)
         self.add_output("audio", NodeSocketType.Audio)
         self.set_property("preset", choice_property(EqBandMode.Balanced, priority=0, group="EQ", label="Preset", description="Quick tone-shaping preset."))
         self.set_property("low_gain", slider_property(0, -24, 24, priority=1, group="EQ", label="Low", description="Low band gain.", suffix=" dB"))
@@ -489,7 +489,7 @@ class AudioPanNode(FrameNode):
     node_color = AUDIO_NODE_COLOR
 
     def _setup_sockets(self) -> None:
-        self.add_input("audio", NodeSocketType.Frame)
+        self.add_input("audio", NodeSocketType.Audio)
         self.add_output("audio", NodeSocketType.Audio)
         self.set_property("pan", slider_property(0, -100, 100, priority=0, group="Pan", label="Pan", description="Left/right stereo placement.", suffix="%"))
         _add_standard_effect_mix(self, group="Pan", wet_default=100)
@@ -521,7 +521,7 @@ class AudioCompressorNode(FrameNode):
     node_color = AUDIO_NODE_COLOR
 
     def _setup_sockets(self) -> None:
-        self.add_input("audio", NodeSocketType.Frame)
+        self.add_input("audio", NodeSocketType.Audio)
         self.add_output("audio", NodeSocketType.Audio)
         self.set_property("threshold", slider_property(70, 1, 100, priority=0, group="Compressor", label="Threshold", description="Compression threshold.", suffix="%"))
         self.set_property("ratio", number_property(4.0, 1.0, 20.0, priority=1, group="Compressor", label="Ratio", description="Compression ratio above threshold.", suffix=":1"))
@@ -556,7 +556,7 @@ class AudioLimiterNode(FrameNode):
     node_color = AUDIO_NODE_COLOR
 
     def _setup_sockets(self) -> None:
-        self.add_input("audio", NodeSocketType.Frame)
+        self.add_input("audio", NodeSocketType.Audio)
         self.add_output("audio", NodeSocketType.Audio)
         self.set_property("ceiling", slider_property(95, 1, 100, priority=0, group="Limiter", label="Ceiling", description="Maximum allowed peak level.", suffix="%"))
         _add_standard_effect_mix(self, group="Limiter", wet_default=100)
@@ -582,7 +582,7 @@ class AudioGateNode(FrameNode):
     node_color = AUDIO_NODE_COLOR
 
     def _setup_sockets(self) -> None:
-        self.add_input("audio", NodeSocketType.Frame)
+        self.add_input("audio", NodeSocketType.Audio)
         self.add_output("audio", NodeSocketType.Audio)
         self.set_property("threshold", slider_property(4, 0, 40, priority=0, group="Gate", label="Threshold", description="Signals below this level are attenuated.", suffix="%"))
         self.set_property("reduction", slider_property(0, 0, 100, priority=1, group="Gate", label="Reduction", description="Remaining level below the threshold.", suffix="%"))
@@ -610,7 +610,7 @@ class AudioNormalizeNode(FrameNode):
     node_color = AUDIO_NODE_COLOR
 
     def _setup_sockets(self) -> None:
-        self.add_input("audio", NodeSocketType.Frame)
+        self.add_input("audio", NodeSocketType.Audio)
         self.add_output("audio", NodeSocketType.Audio)
         self.set_property("target_peak", slider_property(95, 1, 100, priority=0, group="Normalize", label="Target Peak", description="Desired peak output level.", suffix="%"))
         _add_standard_effect_mix(self, group="Normalize", wet_default=100)
@@ -639,7 +639,7 @@ class AudioStereoWidthNode(FrameNode):
     node_color = AUDIO_NODE_COLOR
 
     def _setup_sockets(self) -> None:
-        self.add_input("audio", NodeSocketType.Frame)
+        self.add_input("audio", NodeSocketType.Audio)
         self.add_output("audio", NodeSocketType.Audio)
         self.set_property("width", slider_property(100, 0, 200, priority=0, group="Stereo", label="Width", description="0 collapses to mono, 200 exaggerates side information.", suffix="%"))
         _add_standard_effect_mix(self, group="Stereo", wet_default=100)
@@ -739,7 +739,7 @@ class AudioToMonoNode(FrameNode):
     node_color = AUDIO_NODE_COLOR
 
     def _setup_sockets(self) -> None:
-        self.add_input("audio", NodeSocketType.Frame)
+        self.add_input("audio", NodeSocketType.Audio)
         self.add_output("audio", NodeSocketType.Audio)
 
     def evaluate(self, frame_num: int) -> NodeValue:

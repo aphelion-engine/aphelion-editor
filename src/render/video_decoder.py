@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import threading
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 # Must be set before the first OpenCV/FFmpeg capture is created.
@@ -349,9 +350,8 @@ class VideoDecoder:
         return self._audio_decoder.extract_audio_for_time_range(start_time_sec, duration_sec)
 
 
-def probe_video(path: str) -> MediaInfo | None:
-    """Open briefly to read metadata, then release the capture."""
-    _configure_decoder_logging()
+def _probe_video_metadata(path: str) -> tuple[float, int, int, int] | None:
+    """Return ``(fps, frame_count, width, height)`` or ``None`` on failure."""
     with _CAPTURE_LOCK:
         capture = cv2.VideoCapture(path, cv2.CAP_FFMPEG)
         if not capture.isOpened():
@@ -364,15 +364,33 @@ def probe_video(path: str) -> MediaInfo | None:
         width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
         height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
         capture.release()
-
     if width <= 0 or height <= 0 or frame_count <= 0:
         return None
+    return fps, frame_count, width, height
 
-    # Probe audio info
+
+def _probe_audio_metadata(path: str) -> AudioInfo | None:
+    """Return audio metadata for ``path`` without retaining decoder state."""
     audio_decoder = AudioDecoder()
-    audio_info = audio_decoder.open(path)
-    audio_decoder.close()
+    try:
+        return audio_decoder.open(path)
+    finally:
+        audio_decoder.close()
 
+
+def probe_video(path: str) -> MediaInfo | None:
+    """Open briefly to read metadata, then release the capture."""
+    _configure_decoder_logging()
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="media-probe") as executor:
+        video_future = executor.submit(_probe_video_metadata, path)
+        audio_future = executor.submit(_probe_audio_metadata, path)
+        video_info = video_future.result()
+        audio_info = audio_future.result()
+
+    if video_info is None:
+        return None
+
+    fps, frame_count, width, height = video_info
     has_audio = audio_info.has_audio if audio_info else False
     audio_sample_rate = audio_info.sample_rate if audio_info else 48000
     audio_channels = audio_info.num_channels if audio_info else 2
