@@ -40,6 +40,7 @@ from config.theme_tokens import BUILTIN_THEMES, ThemeTokens, builtin_theme
 from core.nodes.registry import NodeInfo, global_node_registry
 from core.preferences.models import (
     AppPreferences,
+    AudioSettings,
     EditorSettings,
     PerformanceSettings,
     ThemeSettings,
@@ -89,6 +90,7 @@ class PreferencesDialog(QDialog):
         tabs.setObjectName("PreferencesTabs")
         tabs.addTab(self._build_general_tab(), "General")
         tabs.addTab(self._build_performance_tab(), "Performance")
+        tabs.addTab(self._build_audio_tab(), "Audio")
         tabs.addTab(self._plugin_page, "Plugins")
         tabs.addTab(self._build_keybinds_tab(), "Keybinds")
         tabs.addTab(self._build_theme_tab(), "Appearance")
@@ -276,6 +278,82 @@ class PreferencesDialog(QDialog):
         hint = QLabel(
             "Higher cache and prefetch values trade RAM for smoother scrubbing"
             " and playback. Changes apply when you click Apply or OK."
+        )
+        hint.setObjectName("PreferencesHint")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        layout.addStretch(1)
+        return page
+
+    def _build_audio_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(12, 12, 12, 12)
+        audio = self._working.audio
+
+        general_group = QGroupBox("Audio Settings")
+        general_group.setObjectName("PreferencesGroup")
+        general_form = QFormLayout(general_group)
+
+        self._audio_enabled = QCheckBox("Enable audio playback")
+        self._audio_enabled.setChecked(audio.audio_enabled)
+        general_form.addRow(self._audio_enabled)
+
+        self._master_volume = QSpinBox()
+        self._master_volume.setObjectName("PreferencesSpin")
+        self._master_volume.setRange(0, 200)
+        self._master_volume.setSingleStep(10)
+        self._master_volume.setSuffix("%")
+        self._master_volume.setValue(int(audio.master_volume * 100))
+        general_form.addRow("Master volume", self._master_volume)
+
+        self._buffer_size = QSpinBox()
+        self._buffer_size.setObjectName("PreferencesSpin")
+        self._buffer_size.setRange(1, 20)
+        self._buffer_size.setSuffix(" chunks")
+        self._buffer_size.setValue(audio.buffer_size)
+        general_form.addRow("Buffer size", self._buffer_size)
+
+        layout.addWidget(general_group)
+
+        device_group = QGroupBox("Audio Device")
+        device_group.setObjectName("PreferencesGroup")
+        device_form = QFormLayout(device_group)
+
+        self._audio_device = QComboBox()
+        self._audio_device.setObjectName("PreferencesCombo")
+        self._audio_device.addItem("Default System Device", -1)
+
+        # Try to get available audio devices
+        try:
+            from render.audio_playback import AudioPlaybackEngine
+            devices = AudioPlaybackEngine.get_available_devices()
+            for device in devices:
+                self._audio_device.addItem(device.name, device.index)
+
+            # Set current device
+            current_index = self._audio_device.findData(audio.default_device_index)
+            if current_index >= 0:
+                self._audio_device.setCurrentIndex(current_index)
+        except Exception:
+            # If audio playback system fails, just show default
+            pass
+
+        device_form.addRow("Output device", self._audio_device)
+
+        device_hint = QLabel(
+            "Select the audio output device for playback. "
+            "Changes apply when you click Apply or OK."
+        )
+        device_hint.setObjectName("PreferencesHint")
+        device_hint.setWordWrap(True)
+        device_form.addRow(device_hint)
+
+        layout.addWidget(device_group)
+
+        hint = QLabel(
+            "Audio settings control playback behavior and device selection. "
+            "Volume is a percentage of the original audio level."
         )
         hint.setObjectName("PreferencesHint")
         hint.setWordWrap(True)
@@ -601,6 +679,12 @@ class PreferencesDialog(QDialog):
             playback_proxy_width=int(self._proxy_width.value()),
             drop_frames_during_playback=self._drop_frames.isChecked(),
             show_performance_overlay=self._show_overlay.isChecked(),
+        )
+        self._working.audio = AudioSettings(
+            audio_enabled=self._audio_enabled.isChecked(),
+            master_volume=float(self._master_volume.value()) / 100.0,
+            default_device_index=int(self._audio_device.currentData()),
+            buffer_size=int(self._buffer_size.value()),
         )
         theme_id = str(self._theme_combo.currentData())
         if theme_id == "custom":

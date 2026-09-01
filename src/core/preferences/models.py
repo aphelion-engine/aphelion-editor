@@ -211,6 +211,35 @@ def _node_colors_from_raw(raw: object) -> dict[str, list[int]]:
 
 
 @dataclass
+class AudioSettings:
+    """Audio playback and device preferences."""
+
+    audio_enabled: bool = True
+    master_volume: float = 1.0
+    default_device_index: int = -1  # -1 means system default
+    buffer_size: int = 10  # Number of audio chunks to buffer
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize audio preferences to JSON-compatible data."""
+        return {
+            "audio_enabled": self.audio_enabled,
+            "master_volume": self.master_volume,
+            "default_device_index": self.default_device_index,
+            "buffer_size": self.buffer_size,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> AudioSettings:
+        """Deserialize audio preferences from JSON-compatible data."""
+        return cls(
+            audio_enabled=bool(data.get("audio_enabled", True)),
+            master_volume=max(0.0, min(2.0, float(data.get("master_volume", 1.0)))),
+            default_device_index=int(data.get("default_device_index", -1)),
+            buffer_size=max(1, min(20, int(data.get("buffer_size", 10)))),
+        )
+
+
+@dataclass
 class PluginSettings:
     """How third-party plugins are discovered, enabled, and reloaded."""
 
@@ -247,6 +276,7 @@ class AppPreferences:
     editor: EditorSettings = field(default_factory=EditorSettings)
     theme: ThemeSettings = field(default_factory=ThemeSettings)
     performance: PerformanceSettings = field(default_factory=PerformanceSettings)
+    audio: AudioSettings = field(default_factory=AudioSettings)
     plugins: PluginSettings = field(default_factory=PluginSettings)
     node_colors: dict[str, list[int]] = field(default_factory=dict)
     keybinds: dict[str, str] = field(default_factory=dict)
@@ -261,6 +291,7 @@ class AppPreferences:
             "editor": self.editor.to_dict(),
             "theme": self.theme.to_dict(),
             "performance": self.performance.to_dict(),
+            "audio": self.audio.to_dict(),
             "plugins": self.plugins.to_dict(),
             "node_colors": self.node_colors,
             "keybinds": self.keybinds,
@@ -278,6 +309,7 @@ class AppPreferences:
             performance=PerformanceSettings.from_dict(
                 _as_dict(data.get("performance"))
             ),
+            audio=AudioSettings.from_dict(_as_dict(data.get("audio"))),
             plugins=PluginSettings.from_dict(_as_dict(data.get("plugins"))),
             node_colors=_node_colors_from_raw(data.get("node_colors")),
             keybinds=_str_str_map(data.get("keybinds")),

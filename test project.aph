@@ -7,7 +7,7 @@
     "width": 1920,
     "height": 1080,
     "duration": 10.0,
-    "current_frame": 146
+    "current_frame": 209
   },
   "active_viewer": "node_1_1788292251992",
   "nodes": {
@@ -38,7 +38,13 @@
           "__enum__": "VideoFrameErrorMethod",
           "name": "Black"
         },
-        "auto_sync_timeline": true
+        "auto_sync_timeline": true,
+        "audio_enabled": true,
+        "audio_volume": 2,
+        "audio_channel_mode": {
+          "__enum__": "AudioChannelMode",
+          "name": "Stereo"
+        }
       },
       "animated_properties": {}
     },
@@ -63,7 +69,9 @@
           "__enum__": "ViewerBackground",
           "name": "Black"
         },
-        "prefetch_frames": 2
+        "prefetch_frames": 2,
+        "audio_enabled": true,
+        "audio_volume": 1.0
       },
       "animated_properties": {}
     }

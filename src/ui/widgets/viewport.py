@@ -49,6 +49,7 @@ class ViewportWidget(QWidget):
         self._performance: PerformanceSettings = PerformanceSettings()
         self._displayed_fps: float = 0.0
         self._last_display_time: float | None = None
+        self._audio_engine = get_audio_engine()
 
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
@@ -187,10 +188,18 @@ class ViewportWidget(QWidget):
         if pending == (node_id, frame_num):
             self._pending_request = None
 
-        if isinstance(frame, np.ndarray):
-            self.display_frame(frame)
+        # Handle FrameWithAudio - extract frame and audio
+        if isinstance(frame, FrameWithAudio):
+            frame_data = frame.frame
+            audio_data = frame.audio
+            if self._playback_active and audio_data is not None and self._audio_engine.is_enabled():
+                self._audio_engine.feed_audio(audio_data)
+        elif isinstance(frame, np.ndarray):
+            frame_data = frame
         else:
-            self.display_frame(self._blank_frame())
+            frame_data = self._blank_frame()
+
+        self.display_frame(frame_data)
 
     def _result_is_relevant(self, node_id: str, frame_num: int) -> bool:
         """Accept exact requests or safe stale playback results.
@@ -362,8 +371,15 @@ class ViewportWidget(QWidget):
         self._last_display_time = None
         self._displayed_fps = 0.0
 
+        # Start/stop audio playback
+        if active and self._audio_engine.is_enabled():
+            self._audio_engine.start()
+        else:
+            self._audio_engine.stop()
+
     def shutdown(self) -> None:
         """Stop background evaluation before the editor window is torn down."""
+        self._audio_engine.stop()
         self._worker.stop()
 
     def resizeEvent(self, a0: QResizeEvent | None) -> None:

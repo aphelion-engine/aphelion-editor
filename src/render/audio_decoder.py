@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import tempfile
@@ -56,6 +57,20 @@ class AudioDecoder:
         self._close()
 
         try:
+            # Check if FFmpeg is available
+            try:
+                subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=5)
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                # FFmpeg not available, fall back to no audio
+                self._path = path
+                self._audio_info = AudioInfo(
+                    sample_rate=48000,
+                    num_channels=2,
+                    duration_sec=0.0,
+                    has_audio=False
+                )
+                return self._audio_info
+
             # Use FFmpeg to probe audio information
             cmd = [
                 "ffmpeg",
@@ -99,7 +114,6 @@ class AudioDecoder:
                 )
                 return self._audio_info
 
-            import json
             probe_data = json.loads(probe_result.stdout)
 
             if not probe_data.get("streams"):
@@ -128,7 +142,7 @@ class AudioDecoder:
 
             return self._audio_info
 
-        except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError, ValueError) as e:
+        except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError, ValueError, FileNotFoundError) as e:
             # Fallback: assume no audio
             self._path = path
             self._audio_info = AudioInfo(
@@ -186,6 +200,17 @@ class AudioDecoder:
             return AudioData.silence(duration=duration_per_frame)
 
         try:
+            # Check if FFmpeg is available
+            try:
+                subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=5)
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                # FFmpeg not available, return silence
+                return AudioData.silence(
+                    duration=duration_per_frame,
+                    sample_rate=self._audio_info.sample_rate,
+                    channels=self._audio_info.num_channels
+                )
+
             # Calculate start time for this frame
             start_time = frame_num / fps
 
@@ -228,7 +253,7 @@ class AudioDecoder:
                 sample_rate=self._audio_info.sample_rate
             )
 
-        except (subprocess.TimeoutExpired, ValueError) as e:
+        except (subprocess.TimeoutExpired, ValueError, FileNotFoundError) as e:
             return AudioData.silence(
                 duration=duration_per_frame,
                 sample_rate=self._audio_info.sample_rate if self._audio_info else 48000,

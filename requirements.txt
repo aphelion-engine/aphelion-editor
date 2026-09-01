@@ -8,3 +8,4 @@ imageio-ffmpeg>=0.4.9
 cx_Freeze>=8.6.4
 soundfile>=0.14.0
 librosa>=1.0.0
+sounddevice>=0.4.6

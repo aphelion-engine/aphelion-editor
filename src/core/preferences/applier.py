@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from config.theme_engine import ThemeStyles, build_theme_styles
 from core.nodes.registry import global_node_registry
-from core.preferences.models import AppPreferences, PerformanceSettings
+from core.preferences.models import AppPreferences, AudioSettings, PerformanceSettings
 from render import video_decoder
 from ui.node_graph.theme_state import apply_graph_palette
 
@@ -38,6 +38,7 @@ def apply_preferences_to_editor(editor: "Editor", preferences: AppPreferences) -
     _apply_styles(editor, styles, tokens.window_bg)
     _apply_editor_settings(editor, preferences)
     _apply_performance_settings(editor, preferences.performance)
+    _apply_audio_settings(editor, preferences.audio)
     editor.node_graph.set_show_grid(preferences.editor.show_graph_grid)
     editor.node_graph.refresh_theme()
     editor.refresh_node_colors()
@@ -51,6 +52,24 @@ def _apply_performance_settings(
     video_decoder.set_decode_cache_frames(performance.decode_cache_frames)
     video_decoder.set_hardware_decode_enabled(performance.hardware_decode_enabled)
     editor.viewport.apply_performance_settings(performance)
+
+
+def _apply_audio_settings(editor: "Editor", audio: AudioSettings) -> None:
+    """Push audio preferences into the shared preview playback engine."""
+    del editor
+    from render.audio_playback import AudioPlaybackEngine, get_audio_engine
+
+    engine = get_audio_engine()
+    engine.set_enabled(audio.audio_enabled)
+    engine.set_volume(audio.master_volume)
+    engine.set_buffer_size(audio.buffer_size)
+
+    selected_device = None
+    for device in AudioPlaybackEngine.get_available_devices():
+        if device.index == audio.default_device_index:
+            selected_device = device
+            break
+    engine.set_device(selected_device)
 
 
 def _apply_styles(editor: "Editor", styles: ThemeStyles, window_bg: str) -> None:

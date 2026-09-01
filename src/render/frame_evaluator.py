@@ -9,6 +9,7 @@ import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from config.constants import DEFAULT_MAX_PREFETCH_FRAMES
+from core.audio import FrameWithAudio
 
 if TYPE_CHECKING:
     from core.project import Project
@@ -86,12 +87,17 @@ class FrameEvaluationWorker(QThread):
         with self._lock:
             return self._pending is None
 
-    def _evaluate(self, node_id: str, frame_num: int) -> np.ndarray | None:
+    def _evaluate(self, node_id: str, frame_num: int) -> np.ndarray | FrameWithAudio | None:
         try:
             result = self._project.evaluate_node(node_id, frame_num)
         except Exception as exc:  # noqa: BLE001
             self._project.log_exception(exc)
             return None
+        if isinstance(result, FrameWithAudio):
+            return FrameWithAudio(
+                frame=np.ascontiguousarray(result.frame),
+                audio=result.audio,
+            )
         if isinstance(result, np.ndarray):
             return np.ascontiguousarray(result)
         return None
