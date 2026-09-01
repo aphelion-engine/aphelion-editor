@@ -2,6 +2,8 @@
 
 **A node-based video compositor.** Build a graph, preview in real time, export from any Viewer.
 
+![Sample](https://github.com/aphelion-engine/aphelion-editor/blob/main/resources/aphelion-editor-app-sample.png)
+
 Aphelion is a desktop suite: node graph, viewport, timeline, media pool, and property inspector. The pipeline is float32 RGB. Export and tracking run off the UI thread. Third-party nodes use the sibling [Plugin SDK](../aphelion-sdk/README.md).
 
 Version **0.1.0**. Python **3.11+**.
