@@ -11,50 +11,172 @@ import numpy as np
 
 
 def _estimate_bytes(value: Any) -> int:
+    """Estimate the memory consumed by a cached value."""
+
     if isinstance(value, np.ndarray):
         return int(value.nbytes)
+
     return sys.getsizeof(value)
 
 
 class FrameCache:
-    """Thread-safe LRU cache keyed by (node_id, frame_num, output_slot)."""
+    """LRU cache keyed by ``(node_id, frame_num, output_slot)``.
+
+    The cache remains thread-safe for normal project/UI access.
+
+    ``get_fast`` and ``set_fast`` are intentionally available for the
+    Project evaluator, which already owns the project's global evaluation
+    lock. Avoid using the fast methods from arbitrary threads.
+    """
+
+    __slots__ = (
+        "_max_bytes",
+        "_current_bytes",
+        "_entries",
+        "_sizes",
+        "_lock",
+    )
 
     def __init__(self, max_mb: int = 512) -> None:
-        self._max_bytes = max_mb * 1024 * 1024
+        self._max_bytes = max(1, int(max_mb)) * 1024 * 1024
         self._current_bytes = 0
-        self._entries: OrderedDict[tuple[str, int, str], Any] = OrderedDict()
-        self._sizes: dict[tuple[str, int, str], int] = {}
+
+        self._entries: OrderedDict[
+            tuple[str, int, str],
+            Any,
+        ] = OrderedDict()
+
+        self._sizes: dict[
+            tuple[str, int, str],
+            int,
+        ] = {}
+
         self._lock = threading.RLock()
 
-    def get(self, key: tuple[str, int, str]) -> Any | None:
-        with self._lock:
-            if key not in self._entries:
-                return None
-            self._entries.move_to_end(key)
-            return self._entries[key]
+    # ------------------------------------------------------------------
+    # Normal thread-safe API
+    # ------------------------------------------------------------------
 
-    def set(self, key: tuple[str, int, str], value: Any) -> None:
+    def get(
+        self,
+        key: tuple[str, int, str],
+    ) -> Any | None:
+        with self._lock:
+            return self._get_unlocked(key)
+
+    def set(
+        self,
+        key: tuple[str, int, str],
+        value: Any,
+    ) -> None:
+        with self._lock:
+            self._set_unlocked(key, value)
+
+    # ------------------------------------------------------------------
+    # Fast API
+    #
+    # These deliberately do not acquire the cache lock.
+    #
+    # Project.evaluate_node() already holds Project._eval_lock for the
+    # complete recursive evaluation tree, so acquiring another RLock for
+    # every node/cache access is unnecessary overhead.
+    # ------------------------------------------------------------------
+
+    def get_fast(
+        self,
+        key: tuple[str, int, str],
+    ) -> Any | None:
+        return self._get_unlocked(key)
+
+    def set_fast(
+        self,
+        key: tuple[str, int, str],
+        value: Any,
+    ) -> None:
+        self._set_unlocked(key, value)
+
+    # ------------------------------------------------------------------
+    # Internal unlocked implementation
+    # ------------------------------------------------------------------
+
+    def _get_unlocked(
+        self,
+        key: tuple[str, int, str],
+    ) -> Any | None:
+        entries = self._entries
+
+        try:
+            value = entries[key]
+        except KeyError:
+            return None
+
+        entries.move_to_end(key)
+        return value
+
+    def _set_unlocked(
+        self,
+        key: tuple[str, int, str],
+        value: Any,
+    ) -> None:
         size = _estimate_bytes(value)
+
+        entries = self._entries
+        sizes = self._sizes
+
+        old_size = sizes.pop(key, None)
+
+        if old_size is not None:
+            self._current_bytes -= old_size
+            del entries[key]
+
+        # A single frame larger than the entire cache should not cause
+        # unrelated cached frames to survive indefinitely.
+        if size > self._max_bytes:
+            entries.clear()
+            sizes.clear()
+            self._current_bytes = 0
+            return
+
+        current_bytes = self._current_bytes
+        max_bytes = self._max_bytes
+
+        while (
+            current_bytes + size > max_bytes
+            and entries
+        ):
+            oldest_key, _ = entries.popitem(last=False)
+            current_bytes -= sizes.pop(oldest_key)
+
+        entries[key] = value
+        sizes[key] = size
+
+        self._current_bytes = current_bytes + size
+
+    # ------------------------------------------------------------------
+    # Invalidation
+    # ------------------------------------------------------------------
+
+    def invalidate_node(
+        self,
+        node_id: str,
+    ) -> None:
         with self._lock:
-            if key in self._entries:
-                self._current_bytes -= self._sizes[key]
-                del self._entries[key]
-                del self._sizes[key]
+            entries = self._entries
+            sizes = self._sizes
 
-            while self._current_bytes + size > self._max_bytes and self._entries:
-                oldest_key, _ = self._entries.popitem(last=False)
-                self._current_bytes -= self._sizes.pop(oldest_key)
+            # Avoid allocating a list when the cache is empty.
+            if not entries:
+                return
 
-            self._entries[key] = value
-            self._sizes[key] = size
-            self._current_bytes += size
+            remove = [
+                key
+                for key in entries
+                if key[0] == node_id
+            ]
 
-    def invalidate_node(self, node_id: str) -> None:
-        with self._lock:
-            keys_to_remove = [k for k in self._entries if k[0] == node_id]
-            for key in keys_to_remove:
-                self._current_bytes -= self._sizes.pop(key)
-                del self._entries[key]
+            for key in remove:
+                self._current_bytes -= sizes.pop(key)
+                del entries[key]
 
     def clear(self) -> None:
         with self._lock:
@@ -62,23 +184,45 @@ class FrameCache:
             self._sizes.clear()
             self._current_bytes = 0
 
-    def set_max_mb(self, max_mb: int) -> None:
-        """Resize the memory budget at runtime, evicting oldest entries if needed.
+    # ------------------------------------------------------------------
+    # Budget
+    # ------------------------------------------------------------------
 
-        Parameters:
-            max_mb: New cache budget in megabytes; values below 1 MB are clamped.
+    def set_max_mb(
+        self,
+        max_mb: int,
+    ) -> None:
+        """Resize the memory budget."""
 
-        Side effects:
-            May evict least-recently-used entries when shrinking the budget.
-        """
         with self._lock:
-            self._max_bytes = max(1, int(max_mb)) * 1024 * 1024
-            while self._current_bytes > self._max_bytes and self._entries:
-                oldest_key, _ = self._entries.popitem(last=False)
-                self._current_bytes -= self._sizes.pop(oldest_key)
+            self._max_bytes = (
+                max(1, int(max_mb))
+                * 1024
+                * 1024
+            )
+
+            entries = self._entries
+            sizes = self._sizes
+
+            while (
+                self._current_bytes > self._max_bytes
+                and entries
+            ):
+                oldest_key, _ = entries.popitem(
+                    last=False
+                )
+
+                self._current_bytes -= sizes.pop(
+                    oldest_key
+                )
+
+    # ------------------------------------------------------------------
+    # Statistics
+    # ------------------------------------------------------------------
 
     @property
     def size_mb(self) -> float:
+        # Reading an integer is effectively atomic under CPython.
         return self._current_bytes / (1024 * 1024)
 
     @property

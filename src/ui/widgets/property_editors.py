@@ -6,6 +6,7 @@ from enum import Enum
 from typing import Any
 
 from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
+import numpy as np  
 from PyQt6.QtGui import QColor, QMouseEvent, QPainter, QPaintEvent, QPalette, QPen, QPolygonF
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -51,6 +52,7 @@ class PropertyWidget(QWidget):
     def set_value(self, value: Any) -> None:
         """Replace the current editor value."""
         raise NotImplementedError
+
 
 class EqCurveCanvas(QWidget):
     """Interactive mini EQ graph with draggable bands."""
@@ -128,7 +130,8 @@ class EqCurveCanvas(QWidget):
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
-            self._active_band = self._band_at(event.position().x(), event.position().y())
+            self._active_band = self._band_at(
+                event.position().x(), event.position().y())
             if self._active_band is not None:
                 self._move_active(event.position().x(), event.position().y())
                 return
@@ -173,7 +176,8 @@ class EqCurveCanvas(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         pal = self.palette()
         rect = self._plot_rect()
-        painter.fillRect(self.rect(), pal.color(QPalette.ColorRole.Base).darker(115))
+        painter.fillRect(self.rect(), pal.color(
+            QPalette.ColorRole.Base).darker(115))
         painter.fillRect(rect, pal.color(QPalette.ColorRole.Base))
 
         grid_pen = QPen(pal.color(QPalette.ColorRole.Mid))
@@ -181,16 +185,19 @@ class EqCurveCanvas(QWidget):
         painter.setPen(grid_pen)
         for gain in (-24, -12, 0, 12, 24):
             y = self._gain_to_y(float(gain), rect)
-            painter.drawLine(int(rect.left()), int(y), int(rect.right()), int(y))
+            painter.drawLine(int(rect.left()), int(y),
+                             int(rect.right()), int(y))
         for freq in (20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000):
             x = self._freq_to_x(float(freq), rect)
-            painter.drawLine(int(x), int(rect.top()), int(x), int(rect.bottom()))
+            painter.drawLine(int(x), int(rect.top()),
+                             int(x), int(rect.bottom()))
 
         zero_pen = QPen(QColor(90, 170, 255))
         zero_pen.setWidth(2)
         painter.setPen(zero_pen)
         zero_y = self._gain_to_y(0.0, rect)
-        painter.drawLine(int(rect.left()), int(zero_y), int(rect.right()), int(zero_y))
+        painter.drawLine(int(rect.left()), int(zero_y),
+                         int(rect.right()), int(zero_y))
 
         if self._bands:
             points = QPolygonF()
@@ -198,9 +205,11 @@ class EqCurveCanvas(QWidget):
                 freq = self._x_to_freq(float(x), rect)
                 total_gain = 0.0
                 for band in self._bands:
-                    distance = np.log2(max(freq, 20.0) / max(band["freq"], 20.0))
+                    distance = np.log2(max(freq, 20.0) /
+                                       max(band["freq"], 20.0))
                     spread = max(0.15, 1.2 / band["q"])
-                    total_gain += band["gain"] * float(np.exp(-0.5 * (distance / spread) ** 2))
+                    total_gain += band["gain"] * \
+                        float(np.exp(-0.5 * (distance / spread) ** 2))
                 y = self._gain_to_y(max(-24.0, min(24.0, total_gain)), rect)
                 points.append(QPointF(float(x), y))
             curve_pen = QPen(QColor(255, 180, 80))
@@ -211,7 +220,8 @@ class EqCurveCanvas(QWidget):
         for idx, band in enumerate(self._bands):
             bx = self._freq_to_x(band["freq"], rect)
             by = self._gain_to_y(band["gain"], rect)
-            color = QColor(255, 210, 100) if idx == self._active_band else QColor(220, 220, 220)
+            color = QColor(255, 210, 100) if idx == self._active_band else QColor(
+                220, 220, 220)
             painter.setPen(QPen(color, 2))
             painter.setBrush(color)
             painter.drawEllipse(QPointF(bx, by), 4.5, 4.5)
@@ -259,9 +269,12 @@ class EqCurvePropertyWidget(PropertyWidget):
             return [dict(item) for item in bands if isinstance(item, dict)]
         if isinstance(value, dict) and {"low", "mid", "high"}.issubset(set(value.keys())):
             return [
-                {"freq": 120.0, "gain": float(value.get("low", 0.0)), "q": 0.8},
-                {"freq": 1000.0, "gain": float(value.get("mid", 0.0)), "q": 1.0},
-                {"freq": 8000.0, "gain": float(value.get("high", 0.0)), "q": 0.8},
+                {"freq": 120.0, "gain": float(
+                    value.get("low", 0.0)), "q": 0.8},
+                {"freq": 1000.0, "gain": float(
+                    value.get("mid", 0.0)), "q": 1.0},
+                {"freq": 8000.0, "gain": float(
+                    value.get("high", 0.0)), "q": 0.8},
             ]
         return [
             {"freq": 120.0, "gain": 0.0, "q": 0.8},
@@ -278,7 +291,8 @@ class EqCurvePropertyWidget(PropertyWidget):
         return {"bands": bands, "low": low, "mid": mid, "high": high}
 
     def _update_summary(self) -> None:
-        self.summary.setText(f"{len(self.canvas.bands())} band(s)  ·  drag to shape, double-click to add")
+        self.summary.setText(
+            f"{len(self.canvas.bands())} band(s)  ·  drag to shape, double-click to add")
 
     def _on_bands_changed(self, _bands: object) -> None:
         self._update_summary()
@@ -286,7 +300,8 @@ class EqCurvePropertyWidget(PropertyWidget):
 
     def _add_band(self) -> None:
         bands = self.canvas.bands()
-        bands.append({"freq": 2500.0 if not bands else min(20000.0, bands[-1]["freq"] * 1.5), "gain": 0.0, "q": 1.0})
+        bands.append({"freq": 2500.0 if not bands else min(
+            20000.0, bands[-1]["freq"] * 1.5), "gain": 0.0, "q": 1.0})
         self.canvas.set_bands(bands)
         self._on_bands_changed(self.canvas.bands())
 
@@ -317,7 +332,8 @@ class NumberPropertyWidget(PropertyWidget):
         high: float = float(prop.slider_max_value)
         if high <= low:
             low, high = -999999.0, 999999.0
-        self.spinbox: QSpinBox | QDoubleSpinBox = self._build_spin(prop, low, high)
+        self.spinbox: QSpinBox | QDoubleSpinBox = self._build_spin(
+            prop, low, high)
         self._row.addWidget(self.spinbox, 1)
 
     def _build_spin(
@@ -805,7 +821,8 @@ class PropertyRow(QWidget):
             container.addWidget(editor)
             layout.addLayout(container, 1)
             if keyframe_button is not None:
-                layout.addWidget(keyframe_button, alignment=Qt.AlignmentFlag.AlignTop)
+                layout.addWidget(
+                    keyframe_button, alignment=Qt.AlignmentFlag.AlignTop)
             return
         label = QLabel(title)
         label.setObjectName("PropertyRowLabel")
