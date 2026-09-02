@@ -18,13 +18,6 @@ if TYPE_CHECKING:
 class FrameEvaluationWorker(QThread):
     """
     Background frame evaluator optimized for interactive playback.
-
-    Design goals:
-    - Latest request always wins.
-    - Avoid unnecessary locking in the hot path.
-    - Avoid unnecessary ndarray copies.
-    - Prefetch sequentially while the UI is idle.
-    - Never allow stale prefetch work to starve a newer request.
     """
 
     frame_ready = pyqtSignal(str, int, object)
