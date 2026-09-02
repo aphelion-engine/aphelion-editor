@@ -13,5 +13,8 @@ logs/
 .ruff_cache/
 release/
 
+installer/
+logs/
+lib/
 
 *.zip
