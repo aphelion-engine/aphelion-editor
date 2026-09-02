@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import cv2
 
 from core.nodes.base import NodeProperty
 from core.nodes.enums import MirrorAxis
@@ -269,3 +270,270 @@ def _axis_slider(
         description=f"Adjust {label.lower()}.",
         suffix=suffix,
     )
+
+class GlowNode(FrameEffectNode):
+    """Thresholded glow effect."""
+
+    node_type = "Glow"
+    node_category = CREATIVE_CATEGORY
+    node_description = "Soft glow with threshold and blur"
+    node_color = (220, 140, 180)
+
+    def setup_effect_properties(self):
+        self.set_property(
+            "threshold",
+            slider_property(
+                0.7, 0.0, 1.0,
+                priority=10,
+                group="Glow",
+                label="Threshold",
+                description="Brightness threshold for glow",
+            ),
+        )
+        self.set_property(
+            "radius",
+            slider_property(
+                12, 1, 64,
+                priority=11,
+                group="Glow",
+                label="Radius",
+                description="Glow blur radius",
+                suffix=" px",
+            ),
+        )
+        self.set_property(
+            "intensity",
+            slider_property(
+                1.0, 0.0, 5.0,
+                priority=12,
+                group="Glow",
+                label="Intensity",
+                description="Glow strength",
+            ),
+        )
+
+    def process_frame(self, frame, frame_num):
+        del frame_num
+        rgb = frame[..., :3].astype(np.float32)
+        bright = np.clip(rgb - self.float_value("threshold", 0.7), 0, 1)
+        radius = int(self.float_value("radius", 12))
+        glow = cv2.GaussianBlur(bright, (0, 0), radius)
+        out = rgb + glow * self.float_value("intensity", 1.0)
+        return np.clip(out, 0, 1)
+
+class LightWrapNode(FrameEffectNode):
+    """Wrap background light around foreground edges."""
+
+    node_type = "Light Wrap"
+    node_category = CREATIVE_CATEGORY
+    node_description = "Wrap background light around foreground edges"
+    node_color = (180, 160, 120)
+
+    def setup_effect_properties(self):
+        self.set_property(
+            "amount",
+            slider_property(
+                50, 0, 200,
+                priority=10,
+                group="Wrap",
+                label="Amount",
+                description="Light wrap intensity",
+                suffix="%",
+            ),
+        )
+        self.set_property(
+            "blur",
+            slider_property(
+                8, 0, 64,
+                priority=11,
+                group="Wrap",
+                label="Blur",
+                description="Blur radius for wrap",
+                suffix=" px",
+            ),
+        )
+
+    def process_frame(self, frame, frame_num):
+        del frame_num
+        fg = frame
+        bg = self.input_frame("background") or frame
+
+        if fg.shape[2] < 4:
+            return fg
+
+        alpha = fg[..., 3:4].astype(np.float32)
+        blur = int(self.float_value("blur", 8))
+        amount = self.float_value("amount", 50) / 100.0
+
+        bg_blur = cv2.GaussianBlur(bg[..., :3].astype(np.float32), (0, 0), blur)
+        wrap = bg_blur * (1.0 - alpha)
+        out = fg[..., :3] + wrap * amount
+        return np.concatenate([np.clip(out, 0, 1), alpha], axis=2)
+
+class GlowEdgesNode(FrameEffectNode):
+    """Glow only on edges."""
+
+    node_type = "Glow Edges"
+    node_category = CREATIVE_CATEGORY
+    node_description = "Glow applied only to detected edges"
+    node_color = (200, 120, 200)
+
+    def setup_effect_properties(self):
+        self.set_property(
+            "radius",
+            slider_property(
+                8, 1, 64,
+                priority=10,
+                group="Edges",
+                label="Radius",
+                description="Glow blur radius",
+                suffix=" px",
+            ),
+        )
+        self.set_property(
+            "intensity",
+            slider_property(
+                1.0, 0.0, 5.0,
+                priority=11,
+                group="Edges",
+                label="Intensity",
+                description="Glow strength",
+            ),
+        )
+
+    def process_frame(self, frame, frame_num):
+        del frame_num
+        gray = cv2.cvtColor(frame[..., :3], cv2.COLOR_RGB2GRAY)
+        edges = cv2.Canny((gray * 255).astype(np.uint8), 80, 160).astype(np.float32) / 255.0
+        edges = cv2.GaussianBlur(edges, (0, 0), self.float_value("radius", 8))
+        glow = edges[..., None] * self.float_value("intensity", 1.0)
+        return np.clip(frame[..., :3] + glow, 0, 1)
+
+class HalftoneNode(FrameEffectNode):
+    """Comic-style halftone shading."""
+
+    node_type = "Halftone"
+    node_category = CREATIVE_CATEGORY
+    node_description = "Dot-pattern halftone shading"
+    node_color = (160, 120, 200)
+
+    def setup_effect_properties(self):
+        self.set_property(
+            "scale",
+            slider_property(
+                8, 2, 64,
+                priority=10,
+                group="Halftone",
+                label="Scale",
+                description="Dot size",
+                suffix=" px",
+            ),
+        )
+        self.set_property(
+            "contrast",
+            slider_property(
+                1.0, 0.0, 3.0,
+                priority=11,
+                group="Halftone",
+                label="Contrast",
+                description="Halftone contrast",
+            ),
+        )
+
+    def process_frame(self, frame, frame_num):
+        del frame_num
+        gray = cv2.cvtColor(frame[..., :3], cv2.COLOR_RGB2GRAY)
+        scale = int(self.float_value("scale", 8))
+        contrast = self.float_value("contrast", 1.0)
+
+        small = cv2.resize(gray, (frame.shape[1] // scale, frame.shape[0] // scale))
+        dots = cv2.resize(small, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_NEAREST)
+        dots = np.clip(dots * contrast, 0, 1)
+        return np.dstack([dots, dots, dots])
+
+class PosterEdgesNode(FrameEffectNode):
+    """Posterize + edge enhancement."""
+
+    node_type = "Poster Edges"
+    node_category = CREATIVE_CATEGORY
+    node_description = "Posterize colors and enhance edges"
+    node_color = (180, 140, 160)
+
+    def setup_effect_properties(self):
+        self.set_property(
+            "levels",
+            slider_property(
+                6, 2, 32,
+                priority=10,
+                group="Poster",
+                label="Levels",
+                description="Posterization levels",
+            ),
+        )
+        self.set_property(
+            "edge_strength",
+            slider_property(
+                1.0, 0.0, 5.0,
+                priority=11,
+                group="Poster",
+                label="Edge Strength",
+                description="Edge enhancement",
+            ),
+        )
+
+    def process_frame(self, frame, frame_num):
+        del frame_num
+        levels = int(self.float_value("levels", 6))
+        edge_strength = self.float_value("edge_strength", 1.0)
+
+        rgb = frame[..., :3]
+        poster = np.floor(rgb * levels) / levels
+
+        gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+        edges = cv2.Canny((gray * 255).astype(np.uint8), 80, 160).astype(np.float32) / 255.0
+        edges = edges[..., None] * edge_strength
+
+        return np.clip(poster + edges, 0, 1)
+
+class VHSNode(FrameEffectNode):
+    """Analog VHS distortion."""
+
+    node_type = "VHS"
+    node_category = CREATIVE_CATEGORY
+    node_description = "Analog VHS distortion and color bleed"
+    node_color = (200, 100, 120)
+
+    def setup_effect_properties(self):
+        self.set_property(
+            "bleed",
+            slider_property(
+                20, 0, 100,
+                priority=10,
+                group="VHS",
+                label="Bleed",
+                description="Color bleed amount",
+                suffix="%",
+            ),
+        )
+        self.set_property(
+            "noise",
+            slider_property(
+                10, 0, 100,
+                priority=11,
+                group="VHS",
+                label="Noise",
+                description="Static noise amount",
+                suffix="%",
+            ),
+        )
+
+    def process_frame(self, frame, frame_num):
+        del frame_num
+        bleed = self.float_value("bleed", 20) / 100.0
+        noise = self.float_value("noise", 10) / 100.0
+
+        rgb = frame[..., :3].astype(np.float32)
+        shifted = np.roll(rgb, int(bleed * 10), axis=1)
+        static = np.random.random(rgb.shape).astype(np.float32) * noise
+
+        return np.clip(shifted + static, 0, 1)

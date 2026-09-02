@@ -9,6 +9,26 @@ class NoiseType(Enum):
     SIMPLEX = "simplex"
     FBM = "fbm"
 
+class VolumeSliceAxis(IntEnum):
+    XY = auto()
+    XZ = auto()
+    YZ = auto()
+
+class DepthRampMode(IntEnum):
+    Horizontal = auto()
+    Vertical = auto()
+    Radial = auto()
+
+class DepthShape(IntEnum):
+    Sphere = auto()
+    Box = auto()
+    Cylinder = auto()
+    
+class ZMergeMode(IntEnum):
+    Min = auto()
+    Max = auto()
+    Average = auto()
+
 class BlendMode(IntEnum):
     """Pixel combination used by compositing nodes."""
 
@@ -79,6 +99,14 @@ class CombineMaskMode(IntEnum):
     Intersect = auto()
     Max = auto()
 
+class MatteCombineMode(IntEnum):
+    """Pixel operation used to combine two mattes."""
+
+    Add = auto()
+    Subtract = auto()
+    Multiply = auto()
+    Max = auto()
+    Min = auto()
 
 class MathOperation(IntEnum):
     """Binary arithmetic operation for ``MathNode``."""

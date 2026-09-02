@@ -4,21 +4,48 @@
   "name": "original",
   "timeline": {
     "fps": 24,
-    "width": 2048,
-    "height": 1080,
-    "duration": 11.219541666666666,
-    "current_frame": 163
+    "width": 640,
+    "height": 302,
+    "duration": 11.208333333333334,
+    "current_frame": 179
   },
   "active_viewer": "node_2_1788322242951",
   "nodes": {
+    "node_2_1788322242951": {
+      "node_type": "Viewer",
+      "node_category": "Input/Output",
+      "name": "Viewer",
+      "x": 1062.8321547731769,
+      "y": 92.10220016589128,
+      "properties": {
+        "enabled": true,
+        "fit_mode": {
+          "__enum__": "ViewportFitMode",
+          "name": "Fit"
+        },
+        "preview_max_width": 439,
+        "apply_exposure": true,
+        "exposure": 123,
+        "flip_horizontal": false,
+        "flip_vertical": false,
+        "background": {
+          "__enum__": "ViewerBackground",
+          "name": "Black"
+        },
+        "prefetch_frames": 6,
+        "audio_enabled": true,
+        "audio_volume": 100
+      },
+      "animated_properties": {}
+    },
     "node_0_1788322233840": {
       "node_type": "Video Input",
       "node_category": "Input/Output",
       "name": "Video Input",
-      "x": 32.044417789664294,
-      "y": 21.36294519310968,
+      "x": -455.27356149013946,
+      "y": 20.202664290062543,
       "properties": {
-        "file_path": "C:/Users/jackw/Downloads/PF0047-04_Clip-4_REC709_2K.mp4",
+        "file_path": "C:/Users/jackw/OneDrive/Desktop/git-projects/aphelion-engine/aphelion-editor/examples/keying/result.mp4",
         "enabled": true,
         "start_frame": 0,
         "end_frame": -1,
@@ -41,37 +68,106 @@
         "auto_sync_timeline": true,
         "audio_enabled": true,
         "audio_volume": 100,
-        "audio_channel_mode": {
-          "__enum__": "AudioChannelMode",
-          "name": "Stereo"
-        }
+        "audio_channel_mode": "Stereo"
       },
       "animated_properties": {}
     },
-    "node_2_1788322242951": {
-      "node_type": "Viewer",
-      "node_category": "Input/Output",
-      "name": "Viewer",
-      "x": 239.03271360969939,
-      "y": 158.23821163957888,
+    "node_2_1788341435140": {
+      "node_type": "Volumetric Light",
+      "node_category": "Generator",
+      "name": "Volumetric Light",
+      "x": -119.2454711854243,
+      "y": 57.33165318757142,
+      "properties": {
+        "intensity": 76,
+        "samples": 32,
+        "center_x": 60,
+        "center_y": 16
+      },
+      "animated_properties": {}
+    },
+    "node_3_1788341457885": {
+      "node_type": "Merge",
+      "node_category": "Compositing",
+      "name": "Merge",
+      "x": 194.63712148615966,
+      "y": -55.93424163364561,
       "properties": {
         "enabled": true,
-        "fit_mode": {
-          "__enum__": "ViewportFitMode",
-          "name": "Fit"
+        "blend_mode": {
+          "__enum__": "BlendMode",
+          "name": "Lighten"
         },
-        "preview_max_width": 439,
-        "apply_exposure": true,
-        "exposure": 123,
-        "flip_horizontal": false,
-        "flip_vertical": false,
-        "background": {
-          "__enum__": "ViewerBackground",
-          "name": "Black"
+        "opacity": 48
+      },
+      "animated_properties": {}
+    },
+    "node_6_1788341517132": {
+      "node_type": "Merge",
+      "node_category": "Compositing",
+      "name": "Merge",
+      "x": 418.6026277797981,
+      "y": 35.75924171261772,
+      "properties": {
+        "enabled": true,
+        "blend_mode": {
+          "__enum__": "BlendMode",
+          "name": "Overlay"
         },
-        "prefetch_frames": 6,
-        "audio_enabled": true,
-        "audio_volume": 100
+        "opacity": 26
+      },
+      "animated_properties": {}
+    },
+    "node_5_1788341628552": {
+      "node_type": "Depth Tilt Shift",
+      "node_category": "Depth",
+      "name": "Depth Tilt Shift",
+      "x": 64.6856603448787,
+      "y": 201.6481188428221,
+      "properties": {
+        "blur_near": 2,
+        "blur_far": 18
+      },
+      "animated_properties": {}
+    },
+    "node_6_1788341635231": {
+      "node_type": "Camera Depth",
+      "node_category": "Depth Generator",
+      "name": "Camera Depth",
+      "x": -224.22428451386213,
+      "y": 223.69345600071802,
+      "properties": {
+        "fov": 60
+      },
+      "animated_properties": {}
+    },
+    "node_7_1788341691524": {
+      "node_type": "Shadows / Highlights",
+      "node_category": "Color",
+      "name": "Shadows / Highlights",
+      "x": 678.0521784834016,
+      "y": 72.88823061012658,
+      "properties": {
+        "enabled": true,
+        "mix": 100,
+        "shadows": -9,
+        "highlights": -24,
+        "balance": -100
+      },
+      "animated_properties": {}
+    },
+    "node_8_1788341716878": {
+      "node_type": "Hue & Saturation",
+      "node_category": "Color",
+      "name": "Hue & Saturation",
+      "x": 858.6026277797985,
+      "y": 207.48081536359618,
+      "properties": {
+        "enabled": true,
+        "mix": 16,
+        "hue": -3,
+        "saturation": 130,
+        "lightness": -3
       },
       "animated_properties": {}
     }
@@ -79,6 +175,60 @@
   "connections": [
     {
       "output_node_id": "node_0_1788322233840",
+      "output_slot": "frame",
+      "input_node_id": "node_2_1788341435140",
+      "input_slot": "frame"
+    },
+    {
+      "output_node_id": "node_0_1788322233840",
+      "output_slot": "frame",
+      "input_node_id": "node_3_1788341457885",
+      "input_slot": "background"
+    },
+    {
+      "output_node_id": "node_0_1788322233840",
+      "output_slot": "frame",
+      "input_node_id": "node_5_1788341628552",
+      "input_slot": "frame"
+    },
+    {
+      "output_node_id": "node_2_1788341435140",
+      "output_slot": "frame",
+      "input_node_id": "node_3_1788341457885",
+      "input_slot": "foreground"
+    },
+    {
+      "output_node_id": "node_3_1788341457885",
+      "output_slot": "frame",
+      "input_node_id": "node_6_1788341517132",
+      "input_slot": "background"
+    },
+    {
+      "output_node_id": "node_5_1788341628552",
+      "output_slot": "frame",
+      "input_node_id": "node_6_1788341517132",
+      "input_slot": "foreground"
+    },
+    {
+      "output_node_id": "node_6_1788341517132",
+      "output_slot": "frame",
+      "input_node_id": "node_7_1788341691524",
+      "input_slot": "frame"
+    },
+    {
+      "output_node_id": "node_6_1788341635231",
+      "output_slot": "depth",
+      "input_node_id": "node_5_1788341628552",
+      "input_slot": "depth"
+    },
+    {
+      "output_node_id": "node_7_1788341691524",
+      "output_slot": "frame",
+      "input_node_id": "node_8_1788341716878",
+      "input_slot": "frame"
+    },
+    {
+      "output_node_id": "node_8_1788341716878",
       "output_slot": "frame",
       "input_node_id": "node_2_1788322242951",
       "input_slot": "frame"

@@ -282,6 +282,30 @@ class PremultNode(FrameNode):
         out = np.concatenate([rgb * a, a], axis=2)
         return out
 
+class UnpremultNode(FrameNode):
+    """Divide RGB by alpha."""
+
+    node_type = "Unpremult"
+    node_category = "Keying"
+    node_description = "Divide RGB channels by alpha"
+    node_color = (110, 140, 160)
+
+    def _setup_sockets(self):
+        self.add_input("frame", NodeSocketType.Frame)
+        self.add_output("frame", NodeSocketType.Frame)
+
+    def evaluate(self, frame_num):
+        del frame_num
+        f = self.input_frame()
+        if f is None or f.shape[2] < 4:
+            return f if f is not None else self.blank_frame()
+
+        rgb = f[..., :3].astype(np.float32)
+        a = f[..., 3:4].astype(np.float32)
+        safe = np.maximum(a, 1e-6)
+        return np.concatenate([rgb / safe, a], axis=2)
+
+
 class CleanPlateNode(FrameNode):
     node_type = "Clean Plate"
     node_category = "Keying"

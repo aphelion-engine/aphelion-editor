@@ -8,9 +8,9 @@ from core.nodes.base import ColorRgb, NodeProperty, NodePropertyInputType
 
 
 def slider_property(
-    value: int,
-    minimum: int,
-    maximum: int,
+    value: float | int,
+    minimum: float | int,
+    maximum: float |int,
     *,
     priority: int,
     group: str,

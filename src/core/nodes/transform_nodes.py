@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import cv2
 
 from core.nodes.base import NodeProperty, NodeSocketType
 from core.nodes.enums import TransformBorderMode
@@ -318,7 +319,7 @@ class CropNode(FrameNode):
         """Register frame sockets and crop controls."""
         self.add_input("frame", NodeSocketType.Frame)
         self.add_output("frame", NodeSocketType.Frame)
-        
+
         for priority, key, label in (
             (10, "left", "Left"),
             (11, "right", "Right"),
@@ -364,6 +365,97 @@ class CropNode(FrameNode):
             resize_to_frame=self.bool_value("resize_to_frame", True),
         )
 
+class ShearNode(FrameEffectNode):
+    """Shear the frame horizontally or vertically."""
+
+    node_type = "Shear"
+    node_category = TRANSFORM_CATEGORY
+    node_description = "Shear the frame horizontally or vertically"
+    node_color = (140, 120, 200)
+
+    def setup_effect_properties(self):
+        self.set_property(
+            "shear_x",
+            slider_property(
+                0, -1.0, 1.0,
+                priority=10,
+                group="Shear",
+                label="Shear X",
+                description="Horizontal shear amount",
+            ),
+        )
+        self.set_property(
+            "shear_y",
+            slider_property(
+                0, -1.0, 1.0,
+                priority=11,
+                group="Shear",
+                label="Shear Y",
+                description="Vertical shear amount",
+            ),
+        )
+
+    def process_frame(self, frame, frame_num):
+        del frame_num
+        h, w = frame.shape[:2]
+        sx = self.float_value("shear_x", 0.0)
+        sy = self.float_value("shear_y", 0.0)
+
+        M = np.array([[1, sx, 0],
+                      [sy, 1, 0]], dtype=np.float32)
+
+        return cv2.warpAffine(frame, M, (w, h), flags=cv2.INTER_LINEAR)
+
+class PerspectiveNode(FrameEffectNode):
+    """Apply a simple perspective warp."""
+
+    node_type = "Perspective"
+    node_category = TRANSFORM_CATEGORY
+    node_description = "Simple perspective warp using tilt and skew"
+    node_color = (150, 110, 210)
+
+    def setup_effect_properties(self):
+        self.set_property(
+            "tilt",
+            slider_property(
+                0, -100.0, 100.0,
+                priority=10,
+                group="Perspective",
+                label="Tilt",
+                description="Vertical perspective tilt",
+            ),
+        )
+        self.set_property(
+            "skew",
+            slider_property(
+                0, -100.0, 100.0,
+                priority=11,
+                group="Perspective",
+                label="Skew",
+                description="Horizontal perspective skew",
+            ),
+        )
+
+    def process_frame(self, frame, frame_num):
+        del frame_num
+        h, w = frame.shape[:2]
+        tilt = self.float_value("tilt", 0.0) / 100.0
+        skew = self.float_value("skew", 0.0) / 100.0
+
+        # pyrefly: ignore [bad-argument-type]
+        src: np.floating[np._32Bit] = np.float32([[0, 0], [w, 0], [0, h], [w, h]])
+        # pyrefly: ignore [bad-argument-type]
+        dst: np.floating[np._32Bit]   = np.float32([
+            [0 + skew * w, 0 + tilt * h],
+            [w - skew * w, 0 + tilt * h],
+            [0 - skew * w, h - tilt * h],
+            [w + skew * w, h - tilt * h],
+        ])
+
+        # pyrefly: ignore [no-matching-overload]
+        M = cv2.getPerspectiveTransform(src, dst)
+        return cv2.warpPerspective(frame, M, (w, h))
+
 
 def _corner_label(name: str) -> str:
     """Convert a corner property key into a display label."""
@@ -404,3 +496,128 @@ def _transform_slider(
         description=description,
         suffix=suffix,
     )
+
+class SphericalWarpNode(FrameEffectNode):
+    """Spherical distortion warp."""
+
+    node_type = "Spherical Warp"
+    node_category = TRANSFORM_CATEGORY
+    node_description = "Spherical distortion for VR/fisheye effects"
+    node_color = (130, 140, 200)
+
+    def setup_effect_properties(self):
+        self.set_property(
+            "strength",
+            slider_property(
+                0.5, 0.0, 2.0,
+                priority=10,
+                group="Sphere",
+                label="Strength",
+                description="Spherical distortion strength",
+            ),
+        )
+
+    def process_frame(self, frame, frame_num):
+        del frame_num
+        h, w = frame.shape[:2]
+        strength = self.float_value("strength", 0.5)
+
+        yy, xx = np.indices((h, w))
+        cx, cy = w / 2, h / 2
+
+        dx = (xx - cx) / cx
+        dy = (yy - cy) / cy
+        r = np.sqrt(dx * dx + dy * dy)
+
+        factor = 1 + strength * (r * r)
+        map_x = cx + dx * cx * factor
+        map_y = cy + dy * cy * factor
+
+        return cv2.remap(frame, map_x.astype(np.float32), map_y.astype(np.float32),
+                         cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+
+class PolarWarpNode(FrameEffectNode):
+    """Polar coordinate warp."""
+
+    node_type = "Polar Warp"
+    node_category = TRANSFORM_CATEGORY
+    node_description = "Convert frame to polar coordinates"
+    node_color = (160, 130, 200)
+
+    def setup_effect_properties(self):
+        self.set_property(
+            "reverse",
+            toggle_property(
+                False,
+                priority=10,
+                group="Polar",
+                label="Reverse",
+                description="Reverse polar transform",
+            ),
+        )
+
+    def process_frame(self, frame, frame_num):
+        del frame_num
+        reverse = self.bool_value("reverse", False)
+        flags = cv2.WARP_POLAR_LINEAR
+        if reverse:
+            flags |= cv2.WARP_INVERSE_MAP
+
+        h, w = frame.shape[:2]
+        center = (w / 2, h / 2)
+        max_radius = min(center)
+
+        return cv2.warpPolar(frame, (w, h), center, max_radius, flags)
+
+class SwirlNode(FrameEffectNode):
+    """Swirl distortion around a center point."""
+
+    node_type = "Swirl"
+    node_category = TRANSFORM_CATEGORY
+    node_description = "Swirl distortion around a center point"
+    node_color = (180, 100, 200)
+
+    def setup_effect_properties(self):
+        self.set_property(
+            "angle",
+            slider_property(
+                180, -720, 720,
+                priority=10,
+                group="Swirl",
+                label="Angle",
+                description="Swirl rotation amount",
+                suffix="°",
+            ),
+        )
+        self.set_property(
+            "radius",
+            slider_property(
+                200, 10, 2000,
+                priority=11,
+                group="Swirl",
+                label="Radius",
+                description="Swirl radius",
+                suffix=" px",
+            ),
+        )
+
+    def process_frame(self, frame, frame_num):
+        del frame_num
+        h, w = frame.shape[:2]
+        angle = np.deg2rad(self.float_value("angle", 180))
+        radius = self.float_value("radius", 200)
+
+        yy, xx = np.indices((h, w))
+        cx, cy = w / 2, h / 2
+
+        dx = xx - cx
+        dy = yy - cy
+        r = np.sqrt(dx * dx + dy * dy)
+
+        theta = np.arctan2(dy, dx) + angle * np.exp(-(r / radius)**2)
+
+        map_x = cx + r * np.cos(theta)
+        map_y = cy + r * np.sin(theta)
+
+        return cv2.remap(frame, map_x.astype(np.float32), map_y.astype(np.float32),
+                         cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)

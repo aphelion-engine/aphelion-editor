@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import numpy as np
+import cv2
 
 from core.audio import FrameWithAudio
 from core.nodes.base import NodeSocketType
-from core.nodes.enums import BlendMode
+from core.nodes.enums import BlendMode, MatteCombineMode
 from core.nodes.frame_base import FrameNode
 from core.nodes.property_factory import (
     choice_property,
@@ -146,3 +147,140 @@ class DissolveNode(FrameNode):
         if carried_audio is not None:
             return FrameWithAudio(frame=result, audio=carried_audio)
         return result
+
+class AlphaOverNode(FrameNode):
+    """Alpha composite foreground over background."""
+
+    node_type = "Alpha Over"
+    node_category = COMPOSITING_CATEGORY
+    node_description = "Alpha composite foreground over background"
+    node_color = (80, 160, 140)
+
+    def _setup_sockets(self):
+        self.add_input("background", NodeSocketType.Frame)
+        self.add_input("foreground", NodeSocketType.Frame)
+        self.add_output("frame", NodeSocketType.Frame)
+
+    def evaluate(self, frame_num):
+        del frame_num
+        bg = self.input_frame("background")
+        fg = self.input_frame("foreground")
+        if bg is None:
+            return fg if fg is not None else self.blank_frame()
+        if fg is None:
+            return bg
+
+        if fg.shape[2] < 4:
+            return fg
+
+        a = fg[..., 3:4].astype(np.float32)
+        out = fg[..., :3] * a + bg[..., :3] * (1 - a)
+        return np.concatenate([out, np.ones_like(a)], axis=2)
+
+class AlphaUnderNode(FrameNode):
+    """Alpha composite background over foreground."""
+
+    node_type = "Alpha Under"
+    node_category = COMPOSITING_CATEGORY
+    node_description = "Alpha composite background over foreground"
+    node_color = (100, 160, 140)
+
+    def _setup_sockets(self):
+        self.add_input("background", NodeSocketType.Frame)
+        self.add_input("foreground", NodeSocketType.Frame)
+        self.add_output("frame", NodeSocketType.Frame)
+
+    def evaluate(self, frame_num):
+        del frame_num
+        bg = self.input_frame("background")
+        fg = self.input_frame("foreground")
+        if bg is None:
+            return fg if fg is not None else self.blank_frame()
+        if fg is None:
+            return bg
+
+        if bg.shape[2] < 4:
+            return bg
+
+        a = bg[..., 3:4].astype(np.float32)
+        out = bg[..., :3] * a + fg[..., :3] * (1 - a)
+        return np.concatenate([out, np.ones_like(a)], axis=2)
+
+class StencilNode(FrameNode):
+    """Stencil foreground using background alpha."""
+
+    node_type = "Stencil"
+    node_category = COMPOSITING_CATEGORY
+    node_description = "Use background alpha to cut out foreground"
+    node_color = (120, 160, 120)
+
+    def _setup_sockets(self):
+        self.add_input("background", NodeSocketType.Frame)
+        self.add_input("foreground", NodeSocketType.Frame)
+        self.add_output("frame", NodeSocketType.Frame)
+
+    def evaluate(self, frame_num):
+        del frame_num
+        bg = self.input_frame("background")
+        fg = self.input_frame("foreground")
+        if bg is None or fg is None:
+            return self.blank_frame()
+
+        if bg.shape[2] < 4:
+            return fg
+
+        mask = bg[..., 3:4].astype(np.float32)
+        out = fg[..., :3] * mask
+        return np.concatenate([out, mask], axis=2)
+
+
+class MatteCombineProNode(FrameNode):
+    """Combine two mattes with advanced operations."""
+
+    node_type = "Matte Combine Pro"
+    node_category = COMPOSITING_CATEGORY
+    node_description = "Add, subtract, multiply, max, or min two mattes"
+    node_color = (140, 160, 100)
+
+    def _setup_sockets(self):
+        self.add_input("a", NodeSocketType.Mask)
+        self.add_input("b", NodeSocketType.Mask)
+        self.add_output("mask", NodeSocketType.Mask)
+
+        self.set_property(
+            "mode",
+            choice_property(
+                # pyrefly: ignore [bad-argument-type]
+                MatteCombineMode,
+                priority=10,
+                group="Combine",
+                label="Mode",
+                description="Matte combine operation",
+            ),
+        )
+
+    def evaluate(self, frame_num):
+        del frame_num
+        a = self.input_frame("a")
+        b = self.input_frame("b")
+        if a is None:
+            return b if b is not None else self.blank_frame()
+        if b is None:
+            return a
+
+        mode = self.get_property("mode") or MatteCombineMode.Add
+
+        if mode == MatteCombineMode.Add:
+            out = a + b
+        elif mode == MatteCombineMode.Subtract:
+            out = a - b
+        elif mode == MatteCombineMode.Multiply:
+            out = a * b
+        elif mode == MatteCombineMode.Max:
+            out = np.maximum(a, b)
+        elif mode == MatteCombineMode.Min:
+            out = np.minimum(a, b)
+
+        # pyrefly: ignore [unbound-name]
+        return np.clip(out, 0, 1)
+
