@@ -8,10 +8,6 @@ from core.events import Connection
 from core.nodes.base import Node, NodeProperty, NodePropertyInputType, NodeSocketType
 
 if TYPE_CHECKING:
-    # ``Project`` only appears in type hints here (``from __future__ import
-    # annotations`` defers their evaluation) — importing it directly at
-    # module scope would create a cycle, since ``core.project`` imports
-    # ``sockets_compatible`` from this module.
     from core.project import Project
 
 PROPERTY_LINK_SOURCE_SLOT: str = "source"
@@ -80,12 +76,25 @@ def sockets_compatible(
     output_type: NodeSocketType,
     input_type: NodeSocketType,
 ) -> bool:
-    """Return whether an output may connect to an input socket."""
+    """
+    Return whether an output may connect to an input socket.
+
+    FIXED BEHAVIOR:
+    - NodeSocketType.Any accepts ANY output type.
+    - NodeSocketType.Node behaves exactly like Any (legacy compatibility).
+    - Otherwise, strict type matching.
+    """
+
+    # NEW: Any accepts everything
+    if input_type == NodeSocketType.Any:
+        return True
+
+    # NEW: Node behaves like Any (node-reference socket)
     if input_type == NodeSocketType.Node:
         return True
-    if output_type == input_type:
-        return True
-    return False
+
+    # Strict match for all other socket types
+    return output_type == input_type
 
 
 def is_property_link_source_connection(connection: Connection) -> bool:
