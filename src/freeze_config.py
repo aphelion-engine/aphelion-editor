@@ -27,6 +27,7 @@ APP_PACKAGES: Final[list[str]] = [
     "timeline",
     "ui",
     "utils",
+    "aphelion-plugin-sdk",
 ]
 
 THIRD_PARTY_PACKAGES: Final[list[str]] = [
@@ -38,7 +39,6 @@ THIRD_PARTY_PACKAGES: Final[list[str]] = [
     "soundfile",
     "librosa",
     "sounddevice",
-
 ]
 
 INCLUDE_FILES: Final[list[tuple[str, str]]] = [

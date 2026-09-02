@@ -18,6 +18,8 @@ dependencies = [
     "imageio>=2.34.0",
     "imageio-ffmpeg>=0.4.9",
     "sounddevice>=0.4.6",
+    "aphelion-plugin-sdk @ file:../aphelion-sdk",
+
 ]
 
 [project.urls]

@@ -782,7 +782,6 @@ def validate_loaded_project(
     errors: list[str] = []
 
     if not project.nodes:
-        errors.append("project contains no nodes")
         return errors
 
     node_ids = set(project.nodes)
