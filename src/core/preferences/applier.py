@@ -41,6 +41,7 @@ def apply_preferences_to_editor(editor: "Editor", preferences: AppPreferences) -
     _apply_audio_settings(editor, preferences.audio)
     editor.node_graph.set_show_grid(preferences.editor.show_graph_grid)
     editor.node_graph.refresh_theme()
+    editor.node_graph.layout_mode = preferences.editor.graph_layout_mode
     editor.refresh_node_colors()
 
 

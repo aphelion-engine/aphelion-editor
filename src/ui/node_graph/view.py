@@ -36,6 +36,7 @@ from core.history import (
 )
 from core.nodes import global_node_registry
 from core.project import Project
+
 from ui.node_graph.connection_item import ConnectionItem, PreviewWireItem
 from ui.node_graph.constants import GRID_SPACING_PX, SOCKET_SNAP_DISTANCE_PX
 from ui.node_graph.theme_state import current_graph_palette
@@ -82,7 +83,7 @@ class NodeGraphView(QGraphicsView):
         self._cursor_scene_pos: QPointF = QPointF(0.0, 0.0)
         self._paste_generation: int = 0
         self._search_palette: NodeSearchPalette | None = None
-        self.layout_mode = GraphLayoutMode.HIERARCHICAL
+        self.layout_mode = node_ops.GraphLayoutMode.HIERARCHICAL
 
         self._configure_view()
         self.project.subscribe(self.on_project_changed)

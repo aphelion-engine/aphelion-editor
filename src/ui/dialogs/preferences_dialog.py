@@ -48,7 +48,7 @@ from core.preferences.models import (
 )
 from ui.dialogs.plugin_preferences_tab import PluginPreferencesPage
 from ui.widgets.key_capture import KeyCaptureEdit
-
+from ui.node_graph import operations as node_ops
 
 class PreferencesDialog(QDialog):
     """Modal preferences editor for settings, plugins, keybinds, themes, and node colors."""
@@ -86,10 +86,10 @@ class PreferencesDialog(QDialog):
         title = QLabel("Preferences")
         title.setObjectName("PreferencesTitle")
         root.addWidget(title)
-
         tabs = QTabWidget()
         tabs.setObjectName("PreferencesTabs")
         tabs.addTab(self._build_general_tab(), "General")
+        tabs.addTab(self._build_node_graph_tab(), "Node Graph")
         tabs.addTab(self._build_performance_tab(), "Performance")
         tabs.addTab(self._build_audio_tab(), "Audio")
         tabs.addTab(self._plugin_page, "Plugins")
@@ -192,6 +192,42 @@ class PreferencesDialog(QDialog):
         hint = QLabel("Changes apply when you click Apply or OK.")
         hint.setObjectName("PreferencesHint")
         layout.addWidget(hint)
+        layout.addStretch(1)
+        return page
+
+    def _build_node_graph_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(12, 12, 12, 12)
+
+        group = QGroupBox("Graph Layout")
+        group.setObjectName("PreferencesGroup")
+        form = QFormLayout(group)
+
+        settings = self._working.editor
+
+        # Combo box for layout mode
+        self._graph_layout_combo = QComboBox()
+        self._graph_layout_combo.setObjectName("PreferencesCombo")
+
+        # Populate with enum values
+        for mode in node_ops.GraphLayoutMode:
+            self._graph_layout_combo.addItem(mode.name.replace("_", " ").title(), mode)
+
+        # Set current value
+        index = self._graph_layout_combo.findData(settings.graph_layout_mode)
+        if index >= 0:
+            self._graph_layout_combo.setCurrentIndex(index)
+
+        form.addRow("Organization algorithm", self._graph_layout_combo)
+
+        # Optional: show grid toggle (already exists in General tab)
+        # But many editors put it here too
+        self._graph_show_grid = QCheckBox("Show background grid")
+        self._graph_show_grid.setChecked(settings.show_graph_grid)
+        form.addRow(self._graph_show_grid)
+
+        layout.addWidget(group)
         layout.addStretch(1)
         return page
 
@@ -837,6 +873,7 @@ class PreferencesDialog(QDialog):
             # Not edited by any control in this dialog (toggled from the
             # toolbar instead) — carry the current value forward so saving
             # Preferences can never silently reset pin-bar visibility.
+            graph_layout_mode=node_ops.GraphLayoutMode(self._graph_layout_combo.currentData()),
             show_pin_bar=self._working.editor.show_pin_bar,
         )
         self._working.performance = PerformanceSettings(
