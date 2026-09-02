@@ -13,3 +13,5 @@ logs/
 .ruff_cache/
 release/
 
+
+*.zip
