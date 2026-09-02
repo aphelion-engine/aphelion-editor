@@ -82,6 +82,7 @@ class NodeGraphView(QGraphicsView):
         self._cursor_scene_pos: QPointF = QPointF(0.0, 0.0)
         self._paste_generation: int = 0
         self._search_palette: NodeSearchPalette | None = None
+        self.layout_mode = GraphLayoutMode.HIERARCHICAL
 
         self._configure_view()
         self.project.subscribe(self.on_project_changed)

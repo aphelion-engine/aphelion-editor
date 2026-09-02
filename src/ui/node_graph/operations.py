@@ -22,11 +22,21 @@ if TYPE_CHECKING:
     from ui.node_graph.node_item import NodeItem
     from ui.node_graph.view import NodeGraphView
 
+from enum import Enum
+
+class GraphLayoutMode(Enum):
+    FRUCHTERMAN = 1
+    HIERARCHICAL = 2
+    GRID = 3
+    DAG_LAYERED = 4
+
+# ---------------------------------------------------------------------------
+# Selection / basic operations
+# ---------------------------------------------------------------------------
 
 def selected_node_items(view: NodeGraphView) -> list[NodeItem]:
     """Return currently selected node items."""
     from ui.node_graph.node_item import NodeItem
-
     return [item for item in view.scene.selectedItems() if isinstance(item, NodeItem)]
 
 
@@ -44,8 +54,7 @@ def duplicate_items(view: NodeGraphView, items: list[NodeItem]) -> None:
         return
     add_commands: list[AddNodeCommand] = []
     for item in items:
-        new_node = _build_node_copy(
-            view, item.node_id, offset_x=36.0, offset_y=36.0)
+        new_node = _build_node_copy(view, item.node_id, offset_x=36.0, offset_y=36.0)
         if new_node is None:
             continue
         add_commands.append(AddNodeCommand(new_node))
@@ -80,6 +89,10 @@ def _commit_positions(
     view.history.push(MoveNodesCommand(before, after))
 
 
+# ---------------------------------------------------------------------------
+# Alignment / distribution
+# ---------------------------------------------------------------------------
+
 def align_left(view: NodeGraphView, items: list[NodeItem]) -> None:
     if not items:
         return
@@ -96,8 +109,7 @@ def align_right(view: NodeGraphView, items: list[NodeItem]) -> None:
         return
     right = max(item.pos().x() + item.rect().width() for item in items)
     after = {
-        item.node_id: (float(right - item.rect().width()),
-                       float(item.pos().y()))
+        item.node_id: (float(right - item.rect().width()), float(item.pos().y()))
         for item in items
     }
     _commit_positions(view, items, after)
@@ -119,8 +131,7 @@ def align_bottom(view: NodeGraphView, items: list[NodeItem]) -> None:
         return
     bottom = max(item.pos().y() + item.rect().height() for item in items)
     after = {
-        item.node_id: (float(item.pos().x()), float(
-            bottom - item.rect().height()))
+        item.node_id: (float(item.pos().x()), float(bottom - item.rect().height()))
         for item in items
     }
     _commit_positions(view, items, after)
@@ -132,8 +143,7 @@ def align_center_h(view: NodeGraphView, items: list[NodeItem]) -> None:
     centers = [item.pos().x() + item.rect().width() / 2 for item in items]
     target = sum(centers) / len(centers)
     after = {
-        item.node_id: (float(target - item.rect().width() / 2),
-                       float(item.pos().y()))
+        item.node_id: (float(target - item.rect().width() / 2), float(item.pos().y()))
         for item in items
     }
     _commit_positions(view, items, after)
@@ -145,8 +155,7 @@ def align_center_v(view: NodeGraphView, items: list[NodeItem]) -> None:
     centers = [item.pos().y() + item.rect().height() / 2 for item in items]
     target = sum(centers) / len(centers)
     after = {
-        item.node_id: (float(item.pos().x()), float(
-            target - item.rect().height() / 2))
+        item.node_id: (float(item.pos().x()), float(target - item.rect().height() / 2))
         for item in items
     }
     _commit_positions(view, items, after)
@@ -180,6 +189,10 @@ def distribute_vertical(view: NodeGraphView, items: list[NodeItem]) -> None:
     _commit_positions(view, items, after)
 
 
+# ---------------------------------------------------------------------------
+# Copy / paste / insert
+# ---------------------------------------------------------------------------
+
 def create_node_copy(
     view: NodeGraphView,
     node_id: str,
@@ -187,8 +200,7 @@ def create_node_copy(
     offset_y: float,
 ) -> str | None:
     """Create a duplicated node through history and return its id."""
-    new_node = _build_node_copy(
-        view, node_id, offset_x=offset_x, offset_y=offset_y)
+    new_node = _build_node_copy(view, node_id, offset_x=offset_x, offset_y=offset_y)
     if new_node is None:
         return None
     command = AddNodeCommand(new_node)
@@ -296,18 +308,161 @@ def insertable_node_types(
     return results
 
 
-# ---------------------------------------------------------------------------
-# Advanced graph organization (layered + size-aware + component grouping)
-# ---------------------------------------------------------------------------
+# This uses the Fruchterman–Reingold algorithm!
+# https://thesnowyxgit.github.io/CodeSight/graphs/fruchterman-reingold
+def organize_graph_fruchterman(view: NodeGraphView) -> bool:
+    """
+    Organize graph using the Fruchterman–Reingold force-directed algorithm.
+    Produces natural clusters, clear areas, and readable layouts.
+    """
 
-def organize_graph(view: NodeGraphView) -> bool:
-    """Auto-arrange all nodes by data flow using a layered, size-aware layout.
+    import random
+    import math
+    from ui.node_graph.node_layout import measure_node
 
-    This uses a Sugiyama-style layered layout:
-    - Topological layering (left-to-right flow).
-    - Size-aware spacing based on measured node width/height.
-    - Component grouping (disconnected subgraphs separated).
-    - Median-based ordering within layers to reduce crossings.
+    project = view.project
+    nodes = project.nodes
+    connections = project.connections
+
+    if not nodes:
+        return False
+
+    # ------------------------------------------------------------
+    # Build adjacency list
+    # ------------------------------------------------------------
+    adjacency = {nid: [] for nid in nodes}
+    for c in connections:
+        adjacency[c.output_node_id].append(c.input_node_id)
+        adjacency[c.input_node_id].append(c.output_node_id)  # undirected for layout
+
+    # ------------------------------------------------------------
+    # Measure node sizes
+    # ------------------------------------------------------------
+    sizes = {}
+    for nid, node in nodes.items():
+        item = view.node_items.get(nid)
+        if item:
+            m = measure_node(node)
+            sizes[nid] = (m.width, m.height)
+        else:
+            sizes[nid] = (max(int(node.width), 160), max(int(node.height), 92))
+
+    # ------------------------------------------------------------
+    # Initialize positions randomly
+    # ------------------------------------------------------------
+    positions = {}
+    for nid in nodes:
+        positions[nid] = [
+            random.uniform(0, 1),
+            random.uniform(0, 1),
+        ]
+
+    # ------------------------------------------------------------
+    # Force-directed parameters
+    # ------------------------------------------------------------
+    area = 20000.0
+    k = math.sqrt(area / max(len(nodes), 1))  # ideal distance
+    iterations = 80
+    temperature = 200.0
+
+    # ------------------------------------------------------------
+    # Force-directed simulation
+    # ------------------------------------------------------------
+    for _ in range(iterations):
+        disp = {nid: [0.0, 0.0] for nid in nodes}
+
+        # ----------------------------
+        # Repulsive forces
+        # ----------------------------
+        for v in nodes:
+            for u in nodes:
+                if u == v:
+                    continue
+                dx = positions[v][0] - positions[u][0]
+                dy = positions[v][1] - positions[u][1]
+                dist = math.sqrt(dx * dx + dy * dy) + 0.01
+                force = (k * k) / dist
+                disp[v][0] += (dx / dist) * force
+                disp[v][1] += (dy / dist) * force
+
+        # ----------------------------
+        # Attractive forces
+        # ----------------------------
+        for v in nodes:
+            for u in adjacency[v]:
+                dx = positions[v][0] - positions[u][0]
+                dy = positions[v][1] - positions[u][1]
+                dist = math.sqrt(dx * dx + dy * dy) + 0.01
+                force = (dist * dist) / k
+                disp[v][0] -= (dx / dist) * force
+                disp[v][1] -= (dy / dist) * force
+
+        # ----------------------------
+        # Apply displacement
+        # ----------------------------
+        for v in nodes:
+            dx, dy = disp[v]
+            dist = math.sqrt(dx * dx + dy * dy)
+            if dist > 0:
+                positions[v][0] += (dx / dist) * min(dist, temperature)
+                positions[v][1] += (dy / dist) * min(dist, temperature)
+
+        # ----------------------------
+        # Cool down
+        # ----------------------------
+        temperature *= 0.92
+
+    # ------------------------------------------------------------
+    # Normalize positions and scale to screen space
+    # ------------------------------------------------------------
+    xs = [positions[nid][0] for nid in nodes]
+    ys = [positions[nid][1] for nid in nodes]
+
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+
+    scale_x = 400.0
+    scale_y = 300.0
+
+    after = {}
+    for nid in nodes:
+        px = positions[nid][0]
+        py = positions[nid][1]
+
+        nx = (px - min_x) / (max_x - min_x + 0.001)
+        ny = (py - min_y) / (max_y - min_y + 0.001)
+
+        after[nid] = (
+            nx * scale_x * len(nodes) ** 0.5,
+            ny * scale_y * len(nodes) ** 0.5,
+        )
+
+    # ------------------------------------------------------------
+    # Commit positions
+    # ------------------------------------------------------------
+    before = {nid: (float(node.x), float(node.y)) for nid, node in nodes.items()}
+
+    if before == after:
+        return False
+
+    if not view.history.push(MoveNodesCommand(before, after)):
+        return False
+
+    view.fit_all_nodes()
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Hierarchical / tree-based layout
+# ---------------------------------------------------------------------------
+def organize_graph_hierarchical(view: NodeGraphView) -> bool:
+    """
+    Compact hierarchical / tree-based layout.
+
+    - X = depth (distance from sources)
+    - Y = compacted branch index (logical branch)
+    - Category zones create vertical grouping without extreme separation
+    - Disconnected components become separate horizontal areas
     """
 
     from ui.node_graph.node_layout import measure_node
@@ -319,158 +474,170 @@ def organize_graph(view: NodeGraphView) -> bool:
     if not nodes:
         return False
 
-    # Build adjacency and reverse adjacency
-    adjacency: Dict[str, List[str]] = {nid: [] for nid in nodes}
-    reverse_adj: Dict[str, List[str]] = {nid: [] for nid in nodes}
+    # ------------------------------------------------------------
+    # Build adjacency (directed)
+    # ------------------------------------------------------------
+    adjacency = {nid: [] for nid in nodes}
+    reverse_adj = {nid: [] for nid in nodes}
 
-    for conn in connections:
-        if conn.output_node_id in adjacency and conn.input_node_id in reverse_adj:
-            adjacency[conn.output_node_id].append(conn.input_node_id)
-            reverse_adj[conn.input_node_id].append(conn.output_node_id)
+    for c in connections:
+        adjacency[c.output_node_id].append(c.input_node_id)
+        reverse_adj[c.input_node_id].append(c.output_node_id)
 
-    # Detect connected components (so disconnected graphs don't overlap)
-    components: List[List[str]] = []
-    visited: set[str] = set()
+    # ------------------------------------------------------------
+    # Find connected components
+    # ------------------------------------------------------------
+    components = []
+    visited = set()
 
     for nid in nodes:
         if nid in visited:
             continue
         stack = [nid]
-        comp: List[str] = []
+        comp = []
         visited.add(nid)
         while stack:
-            current = stack.pop()
-            comp.append(current)
-            for child in adjacency[current]:
-                if child not in visited:
-                    visited.add(child)
-                    stack.append(child)
-            for parent in reverse_adj[current]:
+            cur = stack.pop()
+            comp.append(cur)
+            for nxt in adjacency[cur]:
+                if nxt not in visited:
+                    visited.add(nxt)
+                    stack.append(nxt)
+            for parent in reverse_adj[cur]:
                 if parent not in visited:
                     visited.add(parent)
                     stack.append(parent)
         components.append(comp)
 
+    # ------------------------------------------------------------
     # Measure node sizes
-    sizes: Dict[str, Tuple[int, int]] = {}
-    for node_id, node in nodes.items():
-        item = view.node_items.get(node_id)
-        if item is not None:
-            measured = measure_node(node)
-            sizes[node_id] = (measured.width, measured.height)
+    # ------------------------------------------------------------
+    sizes = {}
+    for nid, node in nodes.items():
+        item = view.node_items.get(nid)
+        if item:
+            m = measure_node(node)
+            sizes[nid] = (m.width, m.height)
         else:
-            sizes[node_id] = (max(int(node.width), 160),
-                              max(int(node.height), 92))
+            sizes[nid] = (max(int(node.width), 160), max(int(node.height), 92))
 
+    # ------------------------------------------------------------
     # Layout parameters
-    BASE_X_SPACING = 80.0
-    BASE_Y_SPACING = 40.0
-    COMPONENT_X_GAP = 320.0
-    COMPONENT_Y_GAP = 240.0
+    # ------------------------------------------------------------
+    DEPTH_X = 260.0
+    BRANCH_Y = 140.0
+    CATEGORY_ZONE_SPACING = 3      # small multiplier
+    AREA_GAP_X = 600.0
 
-    after: Dict[str, Tuple[float, float]] = {}
-    component_offset_x = 0.0
-    component_offset_y = 0.0
+    after = {}
+    area_offset_x = 0.0
 
-    # Layout each component independently
-    for comp_index, comp_nodes in enumerate(components):
-        # Build indegree for this component
-        indegree: Dict[str, int] = {nid: 0 for nid in comp_nodes}
-        for nid in comp_nodes:
-            for child in adjacency[nid]:
-                if child in indegree:
-                    indegree[child] += 1
+    # ------------------------------------------------------------
+    # Category → vertical zone
+    # ------------------------------------------------------------
+    def zone(node):
+        t = node.node_type.lower()
+        c = (node.node_category or "").lower()
+        if "input" in t or "source" in t or "media" in c:
+            return 0
+        if "motion" in t or "transform" in t:
+            return 1
+        if "audio" in t or "sound" in c:
+            return 2
+        if "viewer" in t or "output" in t or "render" in t:
+            return 3
+        return 4
 
-        # Topological order (Kahn)
-        queue: List[str] = [nid for nid in comp_nodes if indegree[nid] == 0]
-        topo_order: List[str] = []
+    # ------------------------------------------------------------
+    # Layout each component
+    # ------------------------------------------------------------
+    for comp in components:
+
+        # --------------------------------------------------------
+        # Find roots (nodes with no inputs)
+        # --------------------------------------------------------
+        roots = [nid for nid in comp if not reverse_adj[nid]]
+        if not roots:
+            roots = [comp[0]]
+
+        # --------------------------------------------------------
+        # Compute depth (distance from roots)
+        # --------------------------------------------------------
+        depth = {nid: 0 for nid in comp}
+        queue = list(roots)
 
         while queue:
-            nid = queue.pop(0)
-            topo_order.append(nid)
+            cur = queue.pop(0)
+            for child in adjacency[cur]:
+                if depth[child] < depth[cur] + 1:
+                    depth[child] = depth[cur] + 1
+                    queue.append(child)
+
+        # --------------------------------------------------------
+        # Compute branch index using DFS
+        # --------------------------------------------------------
+        branch_index = {}
+        branch_counter = 0
+
+        def dfs(nid):
+            nonlocal branch_counter
+            if nid in branch_index:
+                return
+            branch_index[nid] = branch_counter
+            branch_counter += 1
             for child in adjacency[nid]:
-                if child in indegree:
-                    indegree[child] -= 1
-                    if indegree[child] == 0:
-                        queue.append(child)
+                dfs(child)
 
-        # If cycles exist, append remaining nodes
-        for nid in comp_nodes:
-            if nid not in topo_order:
-                topo_order.append(nid)
+        for r in roots:
+            dfs(r)
 
-        # Assign layers based on longest path depth
-        layer: Dict[str, int] = {nid: 0 for nid in comp_nodes}
-        for nid in topo_order:
-            for child in adjacency[nid]:
-                if child in layer:
-                    layer[child] = max(layer[child], layer[nid] + 1)
+        # Assign branch to any node not reached
+        for nid in comp:
+            if nid not in branch_index:
+                branch_index[nid] = branch_counter
+                branch_counter += 1
 
-        # Group nodes by layer
-        layers: Dict[int, List[str]] = {}
-        for nid, depth in layer.items():
-            layers.setdefault(depth, []).append(nid)
+        # --------------------------------------------------------
+        # Apply category zones (but compactly)
+        # --------------------------------------------------------
+        for nid in comp:
+            node = nodes[nid]
+            branch_index[nid] += zone(node) * CATEGORY_ZONE_SPACING
 
-        # Sort nodes within each layer by median of parent layer index
-        for depth, group in layers.items():
-            if depth == 0:
-                # Stable sort by name for first layer
-                layers[depth] = sorted(group, key=lambda nid: nodes[nid].name)
-                continue
+        # --------------------------------------------------------
+        # COMPACT BRANCHES
+        # --------------------------------------------------------
+        # Normalize branch indices so they are centered and tight
+        all_branches = list(branch_index.values())
+        min_b = min(all_branches)
+        max_b = max(all_branches)
 
-            parent_median: Dict[str, float] = {}
-            for nid in group:
-                parents = [p for p in reverse_adj[nid] if p in comp_nodes]
-                if parents:
-                    parent_median[nid] = sum(layer[p]
-                                             for p in parents) / len(parents)
-                else:
-                    parent_median[nid] = float(depth)
-            layers[depth] = sorted(group, key=lambda nid: parent_median[nid])
+        # Center around 0
+        mid = (min_b + max_b) / 2.0
 
-        # Compute per-layer max width and height
-        layer_max_width: Dict[int, float] = {}
-        layer_max_height: Dict[int, float] = {}
-        for depth, group in layers.items():
-            max_w = 0.0
-            max_h = 0.0
-            for nid in group:
-                w, h = sizes[nid]
-                max_w = max(max_w, float(w))
-                max_h = max(max_h, float(h))
-            layer_max_width[depth] = max_w
-            layer_max_height[depth] = max_h
+        for nid in comp:
+            branch_index[nid] = branch_index[nid] - mid
 
-        # Compute x positions per layer (cumulative)
-        layer_x: Dict[int, float] = {}
-        current_x = component_offset_x
-        sorted_layers = sorted(layers.keys())
-        for depth in sorted_layers:
-            layer_x[depth] = current_x
-            current_x += layer_max_width[depth] + BASE_X_SPACING
+        # --------------------------------------------------------
+        # Assign positions
+        # --------------------------------------------------------
+        for nid in comp:
+            d = depth[nid]
+            b = branch_index[nid]
+            w, h = sizes[nid]
 
-        # Compute y positions within each layer (centered around component_offset_y)
-        for depth in sorted_layers:
-            group = layers[depth]
-            total_height = sum(
-                layer_max_height[depth] for _ in group) + BASE_Y_SPACING * (len(group) - 1)
-            start_y = component_offset_y - total_height / 2.0
-            y_cursor = start_y
-            for nid in group:
-                w, h = sizes[nid]
-                x = layer_x[depth]
-                # Center node vertically within its slot
-                after[nid] = (x, y_cursor)
-                y_cursor += layer_max_height[depth] + BASE_Y_SPACING
+            x = area_offset_x + d * DEPTH_X
+            y = b * BRANCH_Y
 
-        # Advance component offsets for next component
-        component_offset_x = current_x + COMPONENT_X_GAP
-        if comp_index % 2 == 1:
-            component_offset_y += COMPONENT_Y_GAP
+            after[nid] = (x, y - h * 0.5)
 
-    before: Dict[str, Tuple[float, float]] = {
-        node_id: (float(node.x), float(node.y)) for node_id, node in nodes.items()
-    }
+        max_depth = max(depth.values()) if depth else 0
+        area_offset_x += (max_depth + 2) * DEPTH_X + AREA_GAP_X
+
+    # ------------------------------------------------------------
+    # Commit
+    # ------------------------------------------------------------
+    before = {nid: (float(node.x), float(node.y)) for nid, node in nodes.items()}
 
     if before == after:
         return False
@@ -481,6 +648,10 @@ def organize_graph(view: NodeGraphView) -> bool:
     view.fit_all_nodes()
     return True
 
+
+# ---------------------------------------------------------------------------
+# Node copy helper
+# ---------------------------------------------------------------------------
 
 def _build_node_copy(
     view: NodeGraphView,
