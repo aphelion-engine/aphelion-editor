@@ -18,6 +18,8 @@ from config.constants import (
 )
 from config.theme_tokens import ThemeTokens, aphelion_dark, builtin_theme
 
+from ui.node_graph import operations as node_ops
+
 DEFAULT_PINNED_ACTIONS: tuple[str, ...] = (
     "save_project",
     "undo",
@@ -45,6 +47,8 @@ class EditorSettings:
     show_status_key_hints: bool = True
     show_pin_bar: bool = False
 
+    graph_layout_mode: node_ops.GraphLayoutMode = node_ops.GraphLayoutMode.HIERARCHICAL
+    
     def to_dict(self) -> dict[str, Any]:
         return {
             "editor_font_family": self.editor_font_family,
@@ -54,6 +58,7 @@ class EditorSettings:
             "autosave_interval_ms": self.autosave_interval_ms,
             "show_status_key_hints": self.show_status_key_hints,
             "show_pin_bar": self.show_pin_bar,
+            "graph_layout_mode": self.graph_layout_mode.value,
         }
 
     @classmethod

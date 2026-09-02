@@ -134,6 +134,7 @@ class Editor(QMainWindow):
         self.viewport = ViewportWidget(self.project, self.history)
         self.timeline = TimelineWidget(self.project, self.keybinds)
         self.node_graph = NodeGraphView(self.project, self.history, self.keybinds)
+        
         self.properties = PropertiesPanel(self.project, self.history)
         self.keyframes = KeyframesPanelWidget(self.project, self.history)
         self.log_viewer = LogViewerWidget()

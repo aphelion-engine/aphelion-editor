@@ -24,11 +24,13 @@ if TYPE_CHECKING:
 
 from enum import Enum
 
+
 class GraphLayoutMode(Enum):
     FRUCHTERMAN = 1
     HIERARCHICAL = 2
     GRID = 3
     DAG_LAYERED = 4
+
 
 # ---------------------------------------------------------------------------
 # Selection / basic operations
@@ -308,8 +310,31 @@ def insertable_node_types(
     return results
 
 
-# This uses the Fruchterman–Reingold algorithm!
-# https://thesnowyxgit.github.io/CodeSight/graphs/fruchterman-reingold
+# ---------------------------------------------------------------------------
+# Layout dispatcher
+# ---------------------------------------------------------------------------
+
+def organize_graph(view: NodeGraphView) -> bool:
+    """Dispatch to the selected layout algorithm based on view.layout_mode."""
+    mode = getattr(view, "layout_mode", GraphLayoutMode.HIERARCHICAL)
+
+    if mode is GraphLayoutMode.FRUCHTERMAN:
+        return organize_graph_fruchterman(view)
+    if mode is GraphLayoutMode.HIERARCHICAL:
+        return organize_graph_hierarchical(view)
+    if mode is GraphLayoutMode.GRID:
+        return organize_graph_grid(view)
+    if mode is GraphLayoutMode.DAG_LAYERED:
+        return organize_graph_dag_layered(view)
+
+    # Fallback
+    return organize_graph_hierarchical(view)
+
+
+# ---------------------------------------------------------------------------
+# Fruchterman–Reingold force-directed layout
+# ---------------------------------------------------------------------------
+
 def organize_graph_fruchterman(view: NodeGraphView) -> bool:
     """
     Organize graph using the Fruchterman–Reingold force-directed algorithm.
@@ -327,17 +352,11 @@ def organize_graph_fruchterman(view: NodeGraphView) -> bool:
     if not nodes:
         return False
 
-    # ------------------------------------------------------------
-    # Build adjacency list
-    # ------------------------------------------------------------
     adjacency = {nid: [] for nid in nodes}
     for c in connections:
         adjacency[c.output_node_id].append(c.input_node_id)
-        adjacency[c.input_node_id].append(c.output_node_id)  # undirected for layout
+        adjacency[c.input_node_id].append(c.output_node_id)
 
-    # ------------------------------------------------------------
-    # Measure node sizes
-    # ------------------------------------------------------------
     sizes = {}
     for nid, node in nodes.items():
         item = view.node_items.get(nid)
@@ -347,33 +366,18 @@ def organize_graph_fruchterman(view: NodeGraphView) -> bool:
         else:
             sizes[nid] = (max(int(node.width), 160), max(int(node.height), 92))
 
-    # ------------------------------------------------------------
-    # Initialize positions randomly
-    # ------------------------------------------------------------
     positions = {}
     for nid in nodes:
-        positions[nid] = [
-            random.uniform(0, 1),
-            random.uniform(0, 1),
-        ]
+        positions[nid] = [random.uniform(0, 1), random.uniform(0, 1)]
 
-    # ------------------------------------------------------------
-    # Force-directed parameters
-    # ------------------------------------------------------------
     area = 20000.0
-    k = math.sqrt(area / max(len(nodes), 1))  # ideal distance
+    k = math.sqrt(area / max(len(nodes), 1))
     iterations = 80
     temperature = 200.0
 
-    # ------------------------------------------------------------
-    # Force-directed simulation
-    # ------------------------------------------------------------
     for _ in range(iterations):
         disp = {nid: [0.0, 0.0] for nid in nodes}
 
-        # ----------------------------
-        # Repulsive forces
-        # ----------------------------
         for v in nodes:
             for u in nodes:
                 if u == v:
@@ -385,9 +389,6 @@ def organize_graph_fruchterman(view: NodeGraphView) -> bool:
                 disp[v][0] += (dx / dist) * force
                 disp[v][1] += (dy / dist) * force
 
-        # ----------------------------
-        # Attractive forces
-        # ----------------------------
         for v in nodes:
             for u in adjacency[v]:
                 dx = positions[v][0] - positions[u][0]
@@ -397,9 +398,6 @@ def organize_graph_fruchterman(view: NodeGraphView) -> bool:
                 disp[v][0] -= (dx / dist) * force
                 disp[v][1] -= (dy / dist) * force
 
-        # ----------------------------
-        # Apply displacement
-        # ----------------------------
         for v in nodes:
             dx, dy = disp[v]
             dist = math.sqrt(dx * dx + dy * dy)
@@ -407,14 +405,8 @@ def organize_graph_fruchterman(view: NodeGraphView) -> bool:
                 positions[v][0] += (dx / dist) * min(dist, temperature)
                 positions[v][1] += (dy / dist) * min(dist, temperature)
 
-        # ----------------------------
-        # Cool down
-        # ----------------------------
         temperature *= 0.92
 
-    # ------------------------------------------------------------
-    # Normalize positions and scale to screen space
-    # ------------------------------------------------------------
     xs = [positions[nid][0] for nid in nodes]
     ys = [positions[nid][1] for nid in nodes]
 
@@ -437,9 +429,6 @@ def organize_graph_fruchterman(view: NodeGraphView) -> bool:
             ny * scale_y * len(nodes) ** 0.5,
         )
 
-    # ------------------------------------------------------------
-    # Commit positions
-    # ------------------------------------------------------------
     before = {nid: (float(node.x), float(node.y)) for nid, node in nodes.items()}
 
     if before == after:
@@ -455,6 +444,7 @@ def organize_graph_fruchterman(view: NodeGraphView) -> bool:
 # ---------------------------------------------------------------------------
 # Hierarchical / tree-based layout
 # ---------------------------------------------------------------------------
+
 def organize_graph_hierarchical(view: NodeGraphView) -> bool:
     """
     Compact hierarchical / tree-based layout.
@@ -474,9 +464,6 @@ def organize_graph_hierarchical(view: NodeGraphView) -> bool:
     if not nodes:
         return False
 
-    # ------------------------------------------------------------
-    # Build adjacency (directed)
-    # ------------------------------------------------------------
     adjacency = {nid: [] for nid in nodes}
     reverse_adj = {nid: [] for nid in nodes}
 
@@ -484,17 +471,14 @@ def organize_graph_hierarchical(view: NodeGraphView) -> bool:
         adjacency[c.output_node_id].append(c.input_node_id)
         reverse_adj[c.input_node_id].append(c.output_node_id)
 
-    # ------------------------------------------------------------
-    # Find connected components
-    # ------------------------------------------------------------
-    components = []
-    visited = set()
+    components: List[List[str]] = []
+    visited: set[str] = set()
 
     for nid in nodes:
         if nid in visited:
             continue
         stack = [nid]
-        comp = []
+        comp: List[str] = []
         visited.add(nid)
         while stack:
             cur = stack.pop()
@@ -509,10 +493,7 @@ def organize_graph_hierarchical(view: NodeGraphView) -> bool:
                     stack.append(parent)
         components.append(comp)
 
-    # ------------------------------------------------------------
-    # Measure node sizes
-    # ------------------------------------------------------------
-    sizes = {}
+    sizes: Dict[str, Tuple[int, int]] = {}
     for nid, node in nodes.items():
         item = view.node_items.get(nid)
         if item:
@@ -521,21 +502,15 @@ def organize_graph_hierarchical(view: NodeGraphView) -> bool:
         else:
             sizes[nid] = (max(int(node.width), 160), max(int(node.height), 92))
 
-    # ------------------------------------------------------------
-    # Layout parameters
-    # ------------------------------------------------------------
     DEPTH_X = 260.0
     BRANCH_Y = 140.0
-    CATEGORY_ZONE_SPACING = 3      # small multiplier
+    CATEGORY_ZONE_SPACING = 3
     AREA_GAP_X = 600.0
 
-    after = {}
+    after: Dict[str, Tuple[float, float]] = {}
     area_offset_x = 0.0
 
-    # ------------------------------------------------------------
-    # Category → vertical zone
-    # ------------------------------------------------------------
-    def zone(node):
+    def zone(node: Node) -> int:
         t = node.node_type.lower()
         c = (node.node_category or "").lower()
         if "input" in t or "source" in t or "media" in c:
@@ -548,23 +523,13 @@ def organize_graph_hierarchical(view: NodeGraphView) -> bool:
             return 3
         return 4
 
-    # ------------------------------------------------------------
-    # Layout each component
-    # ------------------------------------------------------------
     for comp in components:
-
-        # --------------------------------------------------------
-        # Find roots (nodes with no inputs)
-        # --------------------------------------------------------
         roots = [nid for nid in comp if not reverse_adj[nid]]
         if not roots:
             roots = [comp[0]]
 
-        # --------------------------------------------------------
-        # Compute depth (distance from roots)
-        # --------------------------------------------------------
-        depth = {nid: 0 for nid in comp}
-        queue = list(roots)
+        depth: Dict[str, int] = {nid: 0 for nid in comp}
+        queue: List[str] = list(roots)
 
         while queue:
             cur = queue.pop(0)
@@ -573,13 +538,10 @@ def organize_graph_hierarchical(view: NodeGraphView) -> bool:
                     depth[child] = depth[cur] + 1
                     queue.append(child)
 
-        # --------------------------------------------------------
-        # Compute branch index using DFS
-        # --------------------------------------------------------
-        branch_index = {}
+        branch_index: Dict[str, int] = {}
         branch_counter = 0
 
-        def dfs(nid):
+        def dfs(nid: str) -> None:
             nonlocal branch_counter
             if nid in branch_index:
                 return
@@ -591,36 +553,23 @@ def organize_graph_hierarchical(view: NodeGraphView) -> bool:
         for r in roots:
             dfs(r)
 
-        # Assign branch to any node not reached
         for nid in comp:
             if nid not in branch_index:
                 branch_index[nid] = branch_counter
                 branch_counter += 1
 
-        # --------------------------------------------------------
-        # Apply category zones (but compactly)
-        # --------------------------------------------------------
         for nid in comp:
             node = nodes[nid]
             branch_index[nid] += zone(node) * CATEGORY_ZONE_SPACING
 
-        # --------------------------------------------------------
-        # COMPACT BRANCHES
-        # --------------------------------------------------------
-        # Normalize branch indices so they are centered and tight
         all_branches = list(branch_index.values())
         min_b = min(all_branches)
         max_b = max(all_branches)
-
-        # Center around 0
         mid = (min_b + max_b) / 2.0
 
         for nid in comp:
             branch_index[nid] = branch_index[nid] - mid
 
-        # --------------------------------------------------------
-        # Assign positions
-        # --------------------------------------------------------
         for nid in comp:
             d = depth[nid]
             b = branch_index[nid]
@@ -634,9 +583,112 @@ def organize_graph_hierarchical(view: NodeGraphView) -> bool:
         max_depth = max(depth.values()) if depth else 0
         area_offset_x += (max_depth + 2) * DEPTH_X + AREA_GAP_X
 
-    # ------------------------------------------------------------
-    # Commit
-    # ------------------------------------------------------------
+    before = {nid: (float(node.x), float(node.y)) for nid, node in nodes.items()}
+
+    if before == after:
+        return False
+
+    if not view.history.push(MoveNodesCommand(before, after)):
+        return False
+
+    view.fit_all_nodes()
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Grid layout
+# ---------------------------------------------------------------------------
+
+def organize_graph_grid(view: NodeGraphView) -> bool:
+    """Simple grid layout for readability and debugging."""
+
+    project = view.project
+    nodes = project.nodes
+
+    if not nodes:
+        return False
+
+    GRID_X = 240.0
+    GRID_Y = 160.0
+    MAX_COL = 8
+
+    after: Dict[str, Tuple[float, float]] = {}
+    row = 0
+    col = 0
+
+    for nid in nodes:
+        x = col * GRID_X
+        y = row * GRID_Y
+        after[nid] = (x, y)
+
+        col += 1
+        if col >= MAX_COL:
+            col = 0
+            row += 1
+
+    before = {nid: (float(node.x), float(node.y)) for nid, node in nodes.items()}
+
+    if before == after:
+        return False
+
+    if not view.history.push(MoveNodesCommand(before, after)):
+        return False
+
+    view.fit_all_nodes()
+    return True
+
+
+# ---------------------------------------------------------------------------
+# DAG layered layout
+# ---------------------------------------------------------------------------
+
+def organize_graph_dag_layered(view: NodeGraphView) -> bool:
+    """Classic DAG layered layout (Graphviz DOT style)."""
+
+    project = view.project
+    nodes = project.nodes
+    connections = project.connections
+
+    if not nodes:
+        return False
+
+    adjacency: Dict[str, List[str]] = {nid: [] for nid in nodes}
+    indegree: Dict[str, int] = {nid: 0 for nid in nodes}
+
+    for c in connections:
+        adjacency[c.output_node_id].append(c.input_node_id)
+        indegree[c.input_node_id] += 1
+
+    queue: List[str] = [nid for nid in nodes if indegree[nid] == 0]
+    topo: List[str] = []
+
+    while queue:
+        nid = queue.pop(0)
+        topo.append(nid)
+        for child in adjacency[nid]:
+            indegree[child] -= 1
+            if indegree[child] == 0:
+                queue.append(child)
+
+    depth: Dict[str, int] = {nid: 0 for nid in nodes}
+    for nid in topo:
+        for child in adjacency[nid]:
+            depth[child] = max(depth[child], depth[nid] + 1)
+
+    layers: Dict[int, List[str]] = {}
+    for nid, d in depth.items():
+        layers.setdefault(d, []).append(nid)
+
+    LAYER_X = 260.0
+    LAYER_Y = 160.0
+
+    after: Dict[str, Tuple[float, float]] = {}
+    for d, group in layers.items():
+        for i, nid in enumerate(group):
+            x = d * LAYER_X
+            y = i * LAYER_Y
+            after[nid] = (x, y)
+
     before = {nid: (float(node.x), float(node.y)) for nid, node in nodes.items()}
 
     if before == after:
