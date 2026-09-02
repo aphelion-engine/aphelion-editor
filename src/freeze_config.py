@@ -27,7 +27,6 @@ APP_PACKAGES: Final[list[str]] = [
     "timeline",
     "ui",
     "utils",
-    "aphelion-plugin-sdk",
 ]
 
 THIRD_PARTY_PACKAGES: Final[list[str]] = [

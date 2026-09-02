@@ -12,23 +12,8 @@ from config.constants import DEFAULT_FPS, DEFAULT_HEIGHT, DEFAULT_WIDTH
 from core.animation import AnimationCurve
 from core.audio import AudioData, FrameWithAudio
 
-# A node output is an image-like buffer (Frame/Mask sockets), a scalar
-# (Number sockets, e.g. math/value nodes feeding modulated properties), a frame
-# with audio (FrameWithAudio), or — for nodes with more than one Number output
-# (e.g. a Tracker's x/y) — a dict keyed by output slot name. ``Project.evaluate_node``
-# extracts the slot the caller actually asked for; single-output nodes are unaffected.
 NodeValue = np.ndarray | float | AudioData | FrameWithAudio | dict[str, float | AudioData | FrameWithAudio]
-
-# Resolves an arbitrary absolute frame number against a node's connected
-# "frame" upstream, bypassing the current evaluation's own ``frame_num``.
-# Bound per-evaluation by ``Project.evaluate_node``; used by retiming nodes
-# (Time Remap, Frame Hold) to resample their source at a different frame.
 TimeResampler = Callable[[int], Any]
-
-# Resolves another node's (possibly keyframed) property by node name and
-# property key, at the resolving node's current evaluation frame. Bound
-# per-evaluation by ``Project.evaluate_node``; used by ``PropertyLinkNode``
-# to "extract" a property value as a graph-native Number output.
 PropertyResolver = Callable[[str, str], "float | None"]
 NodePropertyResolver = Callable[[str, str], "float | None"]
 PropertyDriveLookup = Callable[[str], "float | None"]
@@ -39,12 +24,11 @@ class NodeSocketType(IntEnum):
     Mask = auto()
     Number = auto()
     Color = auto()
-    Node = auto()
+    Node = auto()   # Legacy node-reference socket
     Audio = auto()
+    Any = auto()    # NEW: Accept ANY output type (used for PropertyDrive/Link)
 
 
-# Canonical in-graph frame dtype: HxWx3 float32, nominal range [0.0, 1.0].
-# See ``effects.frame_ops`` for the conversion boundary to/from 8-bit media.
 FRAME_DTYPE: np.dtype = np.dtype(np.float32)
 
 
@@ -55,15 +39,11 @@ class VideoFrameErrorMethod(IntEnum):
 
 
 class MediaLoopMode(IntEnum):
-    """Legacy clamp/loop mode (prefer ``MediaEdgeMode`` on new nodes)."""
-
     Clamp = auto()
     Loop = auto()
 
 
 class MediaEdgeMode(IntEnum):
-    """What to show when sampling outside the active media range."""
-
     Black = auto()
     Hold = auto()
     Loop = auto()
@@ -80,14 +60,10 @@ class NodePropertyInputType(IntEnum):
     NodeSocketType = auto()
     Text = auto()
     NodePropertyChoice = auto()
-    # Distinct from ``File`` only so the Properties panel's browse dialog
-    # can show an image-specific filter instead of the video one.
     ImageFile = auto()
     Custom = auto()
 
 
-
-# RGB color property values are ``tuple[int, int, int]`` in 0–255.
 ColorRgb = tuple[int, int, int]
 NEUTRAL_COLOR_RGB: ColorRgb = (128, 128, 128)
 WHITE_COLOR_RGB: ColorRgb = (255, 255, 255)
@@ -95,23 +71,15 @@ WHITE_COLOR_RGB: ColorRgb = (255, 255, 255)
 
 @dataclass
 class NodeProperty:
-    """Editable node value plus presentation metadata.
-
-    ``group`` / ``label`` / ``description`` / ``suffix`` are schema metadata
-    rebuilt by the node class. Only ``value`` is persisted in project files.
-    """
-
     input_type: NodePropertyInputType
     value: Any | None
     slider_min_value: int | float = 0.0
     slider_max_value: int | float = 0.0
-    # Lower numbers appear first in the properties panel.
     priority: int = 100
     group: str = "General"
     label: str | None = None
     description: str = ""
     suffix: str = ""
-    # DialogWidget id on the parent plugin, used when ``input_type`` is Custom.
     custom_widget_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -134,15 +102,14 @@ class NodeProperty:
 class NodeSocket:
     """Input / output socket for nodes."""
 
-    def __init__(
-        self,
-        name: str,
-        socket_type: NodeSocketType,
-        is_input: bool = False,
-    ) -> None:
+    def __init__(self, name: str, socket_type: NodeSocketType, is_input: bool = False) -> None:
         self.name = name
         self.socket_type = socket_type
         self.is_input = is_input
+
+    def is_node_reference_socket(self) -> bool:
+        """Node and Any both behave as node-reference sockets."""
+        return self.socket_type in (NodeSocketType.Node, NodeSocketType.Any)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -170,8 +137,6 @@ class Node(ABC):
         self.inputs: dict[str, NodeSocket] = {}
         self.outputs: dict[str, NodeSocket] = {}
         self.properties: dict[str, NodeProperty] = {}
-        # Optional per-property keyframe curves. Only numeric (Slider/Number)
-        # properties are animatable; see ``resolve_animation``.
         self.animated_properties: dict[str, AnimationCurve] = {}
         self._input_values: dict[str, Any] = {}
         self._eval_width: int = DEFAULT_WIDTH
@@ -192,17 +157,15 @@ class Node(ABC):
         return
 
     def add_input(self, name: str, socket_type: NodeSocketType) -> None:
+        """Allow Any to accept ANY output type."""
+        if socket_type == NodeSocketType.Node:
+            socket_type = NodeSocketType.Any
         self.inputs[name] = NodeSocket(name, socket_type, is_input=True)
 
     def add_output(self, name: str, socket_type: NodeSocketType) -> None:
         self.outputs[name] = NodeSocket(name, socket_type, is_input=False)
 
-    def set_property(
-        self,
-        key: str,
-        value: Any | NodeProperty,
-        input_type: NodePropertyInputType | None = None,
-    ) -> None:
+    def set_property(self, key: str, value: Any | NodeProperty, input_type: NodePropertyInputType | None = None) -> None:
         if isinstance(value, NodeProperty):
             self.properties[key] = value
         elif key in self.properties:
@@ -223,7 +186,6 @@ class Node(ABC):
         return self._input_values.get(slot)
 
     def clear_input_values(self) -> None:
-        """Clear transient values before evaluating current graph inputs."""
         self._input_values.clear()
 
     def prepare_evaluation(
@@ -235,7 +197,6 @@ class Node(ABC):
         frame_num: int = 0,
         project_max_frame: int = 0,
     ) -> None:
-        """Prepare per-evaluation size; ``preview_max_width`` is used by decoders."""
         self._eval_width = width
         self._eval_height = height
         self._preview_max_width = max(0, int(preview_max_width))
@@ -245,65 +206,38 @@ class Node(ABC):
         self._current_frame_num = int(frame_num)
 
     def set_time_resampler(self, resampler: TimeResampler | None) -> None:
-        """Bind (or clear) the resampler for this evaluation's "frame" input.
-
-        Called by ``Project.evaluate_node`` before ``evaluate`` runs. Nodes
-        that retime (Time Remap, Frame Hold) call ``resample_frame`` instead
-        of relying on the eagerly-resolved current-frame input value.
-        """
         self._time_resampler = resampler
 
     def resample_frame(self, frame_num: int) -> Any | None:
-        """Pull the connected "frame" upstream at an arbitrary ``frame_num``.
-
-        Returns ``None`` when no "frame" input is connected (no resampler
-        bound for this evaluation).
-        """
         if self._time_resampler is None:
             return None
         return self._time_resampler(int(frame_num))
 
     def set_property_resolver(self, resolver: PropertyResolver | None) -> None:
-        """Bind (or clear) this evaluation's cross-node property lookup by name.
-
-        Legacy path for older Property Link documents that stored a node name.
-        """
         self._property_resolver = resolver
 
-    def set_node_property_resolver(
-        self,
-        resolver: NodePropertyResolver | None,
-    ) -> None:
-        """Bind (or clear) property lookup by stable node id."""
+    def set_node_property_resolver(self, resolver: NodePropertyResolver | None) -> None:
         self._node_property_resolver = resolver
 
-    def set_property_drive_lookup(
-        self,
-        lookup: PropertyDriveLookup | None,
-    ) -> None:
-        """Bind (or clear) cross-node property overrides for this evaluation."""
+    def set_property_drive_lookup(self, lookup: PropertyDriveLookup | None) -> None:
         self._property_drive_lookup = lookup
 
     def property_drive_value(self, key: str) -> float | None:
-        """Return a Property Drive override for ``key``, if active."""
         if self._property_drive_lookup is None:
             return None
         return self._property_drive_lookup(key)
 
     def resolve_named_property(self, node_name: str, property_key: str) -> float | None:
-        """Look up another node's resolved property value by name and key."""
         if self._property_resolver is None:
             return None
         return self._property_resolver(node_name, property_key)
 
     def resolve_node_property(self, node_id: str, property_key: str) -> float | None:
-        """Look up another node's resolved property value by id and key."""
         if self._node_property_resolver is None:
             return None
         return self._node_property_resolver(node_id, property_key)
 
     def evaluation_frame_size(self) -> tuple[int, int]:
-        """Return ``(width, height)`` respecting the active preview proxy."""
         width: int = max(1, self._eval_width)
         height: int = max(1, self._eval_height)
         if self._preview_max_width <= 0 or width <= self._preview_max_width:
@@ -315,7 +249,6 @@ class Node(ABC):
         return np.zeros((self._eval_height, self._eval_width, 3), dtype=FRAME_DTYPE)
 
     def log_exception(self, e: Exception) -> None:
-        """Record ``e`` on the node and emit it to the app logger."""
         from utils.logging_setup import get_logger
 
         self.exception_log.append(e)
@@ -332,11 +265,6 @@ class Node(ABC):
         raise NotImplementedError
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize this node for project documents (``.aph``).
-
-        Sockets are omitted — they are reconstructed from the node class.
-        Property values use stable enum encoding via ``core.serialization``.
-        """
         from core.serialization import encode_value
 
         properties: dict[str, Any] = {}
@@ -362,13 +290,12 @@ class Node(ABC):
         }
 
     def apply_document(self, data: dict[str, Any]) -> None:
-        """Apply serialized name, position, and property values onto this instance."""
         from core.serialization import decode_properties
 
         self.name = str(data.get("name", self.name))
         self.x = float(data.get("x", self.x))
         self.y = float(data.get("y", self.y))
-        # Legacy documents may store position as a pair.
+
         position = data.get("position")
         if isinstance(position, (list, tuple)) and len(position) >= 2:
             self.x = float(position[0])

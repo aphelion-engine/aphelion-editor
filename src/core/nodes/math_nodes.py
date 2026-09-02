@@ -248,32 +248,48 @@ class RemapNode(FrameNode):
         self.set_property(
             "in_min",
             number_property(
-                0.0, -1_000_000.0, 1_000_000.0,
-                priority=10, group="Remap", label="In Min",
+                0.0,
+                -1_000_000.0,
+                1_000_000.0,
+                priority=10,
+                group="Remap",
+                label="In Min",
                 description="Source range lower bound.",
             ),
         )
         self.set_property(
             "in_max",
             number_property(
-                1.0, -1_000_000.0, 1_000_000.0,
-                priority=11, group="Remap", label="In Max",
+                1.0,
+                -1_000_000.0,
+                1_000_000.0,
+                priority=11,
+                group="Remap",
+                label="In Max",
                 description="Source range upper bound.",
             ),
         )
         self.set_property(
             "out_min",
             number_property(
-                0.0, -1_000_000.0, 1_000_000.0,
-                priority=12, group="Remap", label="Out Min",
+                0.0,
+                -1_000_000.0,
+                1_000_000.0,
+                priority=12,
+                group="Remap",
+                label="Out Min",
                 description="Destination range lower bound.",
             ),
         )
         self.set_property(
             "out_max",
             number_property(
-                1.0, -1_000_000.0, 1_000_000.0,
-                priority=13, group="Remap", label="Out Max",
+                1.0,
+                -1_000_000.0,
+                1_000_000.0,
+                priority=13,
+                group="Remap",
+                label="Out Max",
                 description="Destination range upper bound.",
             ),
         )
@@ -343,16 +359,23 @@ class PropertyLinkNode(FrameNode):
         if not property_key:
             return fallback
 
+        def _coerce_numeric(value: Any, default: float) -> float:
+            if isinstance(value, (int, float)):
+                v = float(value)
+                return v if math.isfinite(v) else default
+            return default
+
         source_id = self.get_input_value(PROPERTY_LINK_SOURCE_SLOT)
         if isinstance(source_id, str) and source_id:
             resolved = self.resolve_node_property(source_id, property_key)
-            return fallback if resolved is None else resolved
+            return _coerce_numeric(resolved, fallback)
 
         # Legacy documents may still store a node name instead of a wire.
         legacy_name = self._legacy_source_node.strip()
         if legacy_name:
             resolved = self.resolve_named_property(legacy_name, property_key)
-            return fallback if resolved is None else resolved
+            return _coerce_numeric(resolved, fallback)
+
         return fallback
 
     def apply_document(self, data: dict[str, Any]) -> None:
@@ -420,7 +443,10 @@ class PropertyDriveNode(FrameNode):
     def evaluate(self, frame_num: int) -> NodeValue:
         """Return the resolved drive value for debugging and chaining."""
         del frame_num
-        return self.input_number("value", self.float_value("fallback", 0.0))
+        value = self.input_number("value", self.float_value("fallback", 0.0))
+        if not math.isfinite(value):
+            value = self._raw_float_fallback()
+        return value
 
     def drive_target_id(self) -> str | None:
         """Return the wired target node id, if any."""
@@ -438,14 +464,18 @@ class PropertyDriveNode(FrameNode):
     def resolved_drive_value(self, frame_num: int) -> float:
         """Resolve the Number fed into this drive at ``frame_num``."""
         del frame_num
-        return self.input_number("value", self._raw_float_fallback())
+        value = self.input_number("value", self._raw_float_fallback())
+        if not math.isfinite(value):
+            value = self._raw_float_fallback()
+        return value
 
     def _raw_float_fallback(self) -> float:
         """Read the fallback without applying drive overrides to this node."""
         prop = self.get_property("fallback")
         if prop is None or not isinstance(prop.value, (int, float)):
             return 0.0
-        return float(prop.value)
+        v = float(prop.value)
+        return v if math.isfinite(v) else 0.0
 
 
 def _apply_math_operation(operation: MathOperation, a: float, b: float) -> float:

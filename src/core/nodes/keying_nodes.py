@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import cv2
 
 from core.nodes.base import NodeSocketType
 from core.nodes.enums import CombineMaskMode
@@ -237,6 +238,12 @@ class CombineMasksNode(FrameNode):
         if mask_b is None:
             return mask_a
 
+        # --- AUTO RESIZE PATCH ---
+        if mask_a.shape != mask_b.shape:
+            h, w, _ = mask_a.shape
+            mask_b = cv2.resize(mask_b, (w, h), interpolation=cv2.INTER_NEAREST)
+        # --------------------------
+
         mode: CombineMaskMode = self.enum_value(
             "mode", CombineMaskMode, CombineMaskMode.Intersect
         )
@@ -248,4 +255,5 @@ class CombineMasksNode(FrameNode):
             result = np.maximum(mask_a, mask_b)
         else:
             result = mask_a * mask_b
+
         return np.clip(result, 0.0, 1.0).astype(np.float32, copy=False)

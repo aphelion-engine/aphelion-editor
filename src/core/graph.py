@@ -42,26 +42,11 @@ class DependencyGraph:
         self.connections = connections
         self.cache = cache or FrameCache()
 
-        self._downstream: dict[
-            str,
-            list[str],
-        ] = {}
-
-        self._upstream_inputs: dict[
-            str,
-            list[Connection],
-        ] = {}
-
-        self._input_by_slot: dict[
-            str,
-            dict[str, Connection],
-        ] = {}
-
+        self._downstream: dict[str, list[str]] = {}
+        self._upstream_inputs: dict[str, list[Connection]] = {}
+        self._input_by_slot: dict[str, dict[str, Connection]] = {}
         self._topological_order: list[str] = []
-        self._topological_index: dict[
-            str,
-            int,
-        ] = {}
+        self._topological_index: dict[str, int] = {}
 
         self._rebuild_adjacency()
 
@@ -72,50 +57,23 @@ class DependencyGraph:
     def _rebuild_adjacency(self) -> None:
         """Build all runtime lookup tables in one pass."""
 
-        downstream: dict[
-            str,
-            list[str],
-        ] = defaultdict(list)
-
-        upstream: dict[
-            str,
-            list[Connection],
-        ] = defaultdict(list)
-
-        input_by_slot: dict[
-            str,
-            dict[str, Connection],
-        ] = defaultdict(dict)
+        downstream: dict[str, list[str]] = defaultdict(list)
+        upstream: dict[str, list[Connection]] = defaultdict(list)
+        input_by_slot: dict[str, dict[str, Connection]] = defaultdict(dict)
 
         for conn in self.connections:
             output_id = conn.output_node_id
             input_id = conn.input_node_id
             input_slot = conn.input_slot
 
-            downstream[output_id].append(
-                input_id
-            )
+            downstream[output_id].append(input_id)
+            upstream[input_id].append(conn)
+            input_by_slot[input_id][input_slot] = conn
 
-            upstream[input_id].append(
-                conn
-            )
-
-            input_by_slot[input_id][
-                input_slot
-            ] = conn
-
-        self._downstream = dict(
-            downstream
-        )
-
-        self._upstream_inputs = dict(
-            upstream
-        )
-
+        self._downstream = dict(downstream)
+        self._upstream_inputs = dict(upstream)
         self._input_by_slot = {
-            node_id: dict(slots)
-            for node_id, slots
-            in input_by_slot.items()
+            node_id: dict(slots) for node_id, slots in input_by_slot.items()
         }
 
         self._build_topological_order()
@@ -148,10 +106,7 @@ class DependencyGraph:
         nodes = self.nodes
         downstream = self._downstream
 
-        indegree: dict[str, int] = {
-            node_id: 0
-            for node_id in nodes
-        }
+        indegree: dict[str, int] = {node_id: 0 for node_id in nodes}
 
         for output_id, children in downstream.items():
             if output_id not in nodes:
@@ -161,11 +116,7 @@ class DependencyGraph:
                 if child_id in indegree:
                     indegree[child_id] += 1
 
-        queue = [
-            node_id
-            for node_id, degree in indegree.items()
-            if degree == 0
-        ]
+        queue = [node_id for node_id, degree in indegree.items() if degree == 0]
 
         order: list[str] = []
 
@@ -201,8 +152,7 @@ class DependencyGraph:
         self._topological_order = order
 
         self._topological_index = {
-            node_id: index
-            for index, node_id in enumerate(order)
+            node_id: index for index, node_id in enumerate(order)
         }
 
     def get_topological_order(
@@ -210,9 +160,7 @@ class DependencyGraph:
     ) -> tuple[str, ...]:
         """Return the precomputed graph execution order."""
 
-        return tuple(
-            self._topological_order
-        )
+        return tuple(self._topological_order)
 
     def get_topological_index(
         self,
@@ -266,6 +214,21 @@ class DependencyGraph:
 
         return result
 
+    def get_upstream_nodes(
+        self,
+        node_id: str,
+    ) -> list[str]:
+        """Return all direct upstream node ids for a given node.
+
+        This is useful for nodes that need to reason about evaluation
+        order relative to their inputs (e.g. property link/drive nodes).
+        """
+        upstream_conns = self._upstream_inputs.get(
+            node_id,
+            (),
+        )
+        return [conn.output_node_id for conn in upstream_conns]
+
     def get_input_connections(
         self,
         node_id: str,
@@ -284,11 +247,7 @@ class DependencyGraph:
     ) -> Connection | None:
         """Return one input connection directly by socket name."""
 
-        return (
-            self._input_by_slot
-            .get(node_id, {})
-            .get(input_slot)
-        )
+        return self._input_by_slot.get(node_id, {}).get(input_slot)
 
     # ==================================================================
     # Cache
@@ -378,9 +337,7 @@ class DependencyGraph:
 
         cache = self.cache
 
-        cache.invalidate_node(
-            node_id
-        )
+        cache.invalidate_node(node_id)
 
         downstream = self._downstream
 
@@ -400,9 +357,7 @@ class DependencyGraph:
 
             visited.add(current)
 
-            cache.invalidate_node(
-                current
-            )
+            cache.invalidate_node(current)
 
             stack.extend(
                 downstream.get(

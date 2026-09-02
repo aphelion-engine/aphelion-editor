@@ -14,6 +14,8 @@ from app_io.plugin_loader import PluginLoader
 from core.boot.request import BootMode, BootRequest
 from core.nodes.base import Node, NodeSocketType
 from core.nodes.video_input import VideoInputNode
+from core.nodes.property_link import sockets_compatible
+
 from core.preferences.models import PluginSettings
 from core.preferences.store import PreferencesStore
 from core.project import Project
@@ -715,7 +717,7 @@ def _validate_raw_connections(
             continue
 
         # Instantiate temporary nodes only when the registry allows it.
-        #
+
         # This is intentionally best-effort. The actual loader remains
         # authoritative for constructor-specific requirements.
         try:
@@ -757,7 +759,7 @@ def _validate_raw_connections(
                 f"is not an input socket"
             )
 
-        if output_socket.socket_type != input_socket.socket_type:
+        if not sockets_compatible(output_socket.socket_type, input_socket.socket_type):
             errors.append(
                 f"{prefix}: incompatible socket types: "
                 f"{output_type}.{output_slot} "
@@ -873,7 +875,7 @@ def validate_loaded_project(
                 f"is marked as an output socket"
             )
 
-        if output_socket.socket_type != input_socket.socket_type:
+        if not sockets_compatible(output_socket.socket_type, input_socket.socket_type):
             errors.append(
                 f"incompatible connection: "
                 f"{output_node_id}.{output_slot} "
