@@ -8,7 +8,7 @@ Version **0.1.0**. Python **3.11+**.
 
 ## Features
 
-- **77 built-in nodes** — input/output, generators, color, filters, compositing, transform, keying, roto, tracking, timing, distort, stylize, math
+- **90+ built-in nodes** — input/output, generators, color, filters, compositing, transform, keying, roto, tracking, timing, distort, stylize, math
 - **Real-time preview** — decode-time proxy (default 960px), optional 640px playback proxy, frame cache and prefetch
 - **Compositing** — chroma key, matte edge, spill suppress, bezier roto, point and planar tracking, corner pin, merge/dissolve
 - **Color** — grading, exposure, hue/saturation, white balance, levels, vibrance, shadows/highlights, creative looks
