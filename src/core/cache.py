@@ -12,10 +12,8 @@ import numpy as np
 
 def _estimate_bytes(value: Any) -> int:
     """Estimate the memory consumed by a cached value."""
-
     if isinstance(value, np.ndarray):
         return int(value.nbytes)
-
     return sys.getsizeof(value)
 
 
@@ -41,15 +39,8 @@ class FrameCache:
         self._max_bytes = max(1, int(max_mb)) * 1024 * 1024
         self._current_bytes = 0
 
-        self._entries: OrderedDict[
-            tuple[str, int, str],
-            Any,
-        ] = OrderedDict()
-
-        self._sizes: dict[
-            tuple[str, int, str],
-            int,
-        ] = {}
+        self._entries: OrderedDict[tuple[str, int, str], Any] = OrderedDict()
+        self._sizes: dict[tuple[str, int, str], int] = {}
 
         self._lock = threading.RLock()
 
@@ -57,18 +48,11 @@ class FrameCache:
     # Normal thread-safe API
     # ------------------------------------------------------------------
 
-    def get(
-        self,
-        key: tuple[str, int, str],
-    ) -> Any | None:
+    def get(self, key: tuple[str, int, str]) -> Any | None:
         with self._lock:
             return self._get_unlocked(key)
 
-    def set(
-        self,
-        key: tuple[str, int, str],
-        value: Any,
-    ) -> None:
+    def set(self, key: tuple[str, int, str], value: Any) -> None:
         with self._lock:
             self._set_unlocked(key, value)
 
@@ -82,27 +66,17 @@ class FrameCache:
     # every node/cache access is unnecessary overhead.
     # ------------------------------------------------------------------
 
-    def get_fast(
-        self,
-        key: tuple[str, int, str],
-    ) -> Any | None:
+    def get_fast(self, key: tuple[str, int, str]) -> Any | None:
         return self._get_unlocked(key)
 
-    def set_fast(
-        self,
-        key: tuple[str, int, str],
-        value: Any,
-    ) -> None:
+    def set_fast(self, key: tuple[str, int, str], value: Any) -> None:
         self._set_unlocked(key, value)
 
     # ------------------------------------------------------------------
     # Internal unlocked implementation
     # ------------------------------------------------------------------
 
-    def _get_unlocked(
-        self,
-        key: tuple[str, int, str],
-    ) -> Any | None:
+    def _get_unlocked(self, key: tuple[str, int, str]) -> Any | None:
         entries = self._entries
 
         try:
@@ -113,11 +87,7 @@ class FrameCache:
         entries.move_to_end(key)
         return value
 
-    def _set_unlocked(
-        self,
-        key: tuple[str, int, str],
-        value: Any,
-    ) -> None:
+    def _set_unlocked(self, key: tuple[str, int, str], value: Any) -> None:
         size = _estimate_bytes(value)
 
         entries = self._entries
@@ -140,10 +110,7 @@ class FrameCache:
         current_bytes = self._current_bytes
         max_bytes = self._max_bytes
 
-        while (
-            current_bytes + size > max_bytes
-            and entries
-        ):
+        while current_bytes + size > max_bytes and entries:
             oldest_key, _ = entries.popitem(last=False)
             current_bytes -= sizes.pop(oldest_key)
 
@@ -156,27 +123,32 @@ class FrameCache:
     # Invalidation
     # ------------------------------------------------------------------
 
-    def invalidate_node(
-        self,
-        node_id: str,
-    ) -> None:
+    def invalidate_node(self, node_id: str) -> None:
+        """Remove all cache entries for a given node id.
+
+        Fixed to avoid mutating the OrderedDict while iterating.
+        """
         with self._lock:
             entries = self._entries
             sizes = self._sizes
 
-            # Avoid allocating a list when the cache is empty.
             if not entries:
                 return
 
+            # Iterate over a snapshot of keys to avoid mutation-during-iteration.
             remove = [
                 key
-                for key in entries
+                for key in list(entries.keys())
                 if key[0] == node_id
             ]
 
             for key in remove:
-                self._current_bytes -= sizes.pop(key)
-                del entries[key]
+                size = sizes.pop(key, 0)
+                if key in entries:
+                    del entries[key]
+                self._current_bytes -= size
+                if self._current_bytes < 0:
+                    self._current_bytes = 0
 
     def clear(self) -> None:
         with self._lock:
@@ -188,33 +160,19 @@ class FrameCache:
     # Budget
     # ------------------------------------------------------------------
 
-    def set_max_mb(
-        self,
-        max_mb: int,
-    ) -> None:
+    def set_max_mb(self, max_mb: int) -> None:
         """Resize the memory budget."""
-
         with self._lock:
-            self._max_bytes = (
-                max(1, int(max_mb))
-                * 1024
-                * 1024
-            )
+            self._max_bytes = max(1, int(max_mb)) * 1024 * 1024
 
             entries = self._entries
             sizes = self._sizes
 
-            while (
-                self._current_bytes > self._max_bytes
-                and entries
-            ):
-                oldest_key, _ = entries.popitem(
-                    last=False
-                )
-
-                self._current_bytes -= sizes.pop(
-                    oldest_key
-                )
+            while self._current_bytes > self._max_bytes and entries:
+                oldest_key, _ = entries.popitem(last=False)
+                self._current_bytes -= sizes.pop(oldest_key, 0)
+                if self._current_bytes < 0:
+                    self._current_bytes = 0
 
     # ------------------------------------------------------------------
     # Statistics
@@ -222,7 +180,6 @@ class FrameCache:
 
     @property
     def size_mb(self) -> float:
-        # Reading an integer is effectively atomic under CPython.
         return self._current_bytes / (1024 * 1024)
 
     @property
