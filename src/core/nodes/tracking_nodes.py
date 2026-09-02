@@ -28,8 +28,15 @@ _PLANAR_CORNERS: tuple[tuple[str, float, float], ...] = (
     ("bottom_left", 0.0, 100.0),
 )
 
+TRACKER_NODES = []
+class Tracker:
+    """Base class for all tracker nodes."""
+    pass
 
-class TrackerNode(FrameNode):
+    def __init_subclass__(cls, **kwargs) -> None:
+        TRACKER_NODES.append(cls)
+
+class TrackerNode(FrameNode, Tracker):
     """Track one 2D point across a frame range via template matching."""
 
     node_type: str = "Tracker"
@@ -52,7 +59,12 @@ class TrackerNode(FrameNode):
         self.set_property(
             "center_x",
             number_property(
-                50.0, 0.0, 100.0, priority=0, group="Seed", label="Center X",
+                50.0,
+                0.0,
+                100.0,
+                priority=0,
+                group="Seed",
+                label="Center X",
                 description="Seed X position (percent of frame width) before tracking.",
                 suffix="%",
             ),
@@ -60,7 +72,12 @@ class TrackerNode(FrameNode):
         self.set_property(
             "center_y",
             number_property(
-                50.0, 0.0, 100.0, priority=1, group="Seed", label="Center Y",
+                50.0,
+                0.0,
+                100.0,
+                priority=1,
+                group="Seed",
+                label="Center Y",
                 description="Seed Y position (percent of frame height) before tracking.",
                 suffix="%",
             ),
@@ -68,7 +85,12 @@ class TrackerNode(FrameNode):
         self.set_property(
             "region_size",
             number_property(
-                8.0, 1.0, 50.0, priority=10, group="Pattern", label="Pattern Size",
+                8.0,
+                1.0,
+                50.0,
+                priority=10,
+                group="Pattern",
+                label="Pattern Size",
                 description="Tracked patch size (percent of frame width).",
                 suffix="%",
             ),
@@ -76,7 +98,12 @@ class TrackerNode(FrameNode):
         self.set_property(
             "search_radius",
             number_property(
-                15.0, 1.0, 100.0, priority=11, group="Pattern", label="Search Radius",
+                15.0,
+                1.0,
+                100.0,
+                priority=11,
+                group="Pattern",
+                label="Search Radius",
                 description="Max per-frame search distance (percent of frame width).",
                 suffix="%",
             ),
@@ -122,7 +149,7 @@ class TrackerNode(FrameNode):
         self.track_y = AnimationCurve.from_dict(data.get("track_y") or {})
 
 
-class PlanarTrackerNode(FrameNode):
+class PlanarTrackerNode(FrameNode, Tracker):
     """Track four corner points across a frame range for perspective inserts.
 
     Wire its eight outputs directly into a ``CornerPinNode``'s eight
@@ -138,7 +165,8 @@ class PlanarTrackerNode(FrameNode):
 
     def __init__(self, name: str | None = None) -> None:
         self.corner_curves: dict[str, tuple[AnimationCurve, AnimationCurve]] = {
-            corner: (AnimationCurve(), AnimationCurve()) for corner, _, _ in _PLANAR_CORNERS
+            corner: (AnimationCurve(), AnimationCurve())
+            for corner, _, _ in _PLANAR_CORNERS
         }
         super().__init__(name)
 
@@ -152,23 +180,38 @@ class PlanarTrackerNode(FrameNode):
             self.set_property(
                 f"{corner}_seed_x",
                 number_property(
-                    seed_x, -50.0, 150.0, priority=0, group="Seed",
-                    label=f"{label} X", description=f"Seed X for {label} (percent).",
+                    seed_x,
+                    -50.0,
+                    150.0,
+                    priority=0,
+                    group="Seed",
+                    label=f"{label} X",
+                    description=f"Seed X for {label} (percent).",
                     suffix="%",
                 ),
             )
             self.set_property(
                 f"{corner}_seed_y",
                 number_property(
-                    seed_y, -50.0, 150.0, priority=1, group="Seed",
-                    label=f"{label} Y", description=f"Seed Y for {label} (percent).",
+                    seed_y,
+                    -50.0,
+                    150.0,
+                    priority=1,
+                    group="Seed",
+                    label=f"{label} Y",
+                    description=f"Seed Y for {label} (percent).",
                     suffix="%",
                 ),
             )
         self.set_property(
             "region_size",
             number_property(
-                6.0, 1.0, 50.0, priority=10, group="Pattern", label="Pattern Size",
+                6.0,
+                1.0,
+                50.0,
+                priority=10,
+                group="Pattern",
+                label="Pattern Size",
                 description="Tracked patch size per corner (percent of frame width).",
                 suffix="%",
             ),
@@ -176,7 +219,12 @@ class PlanarTrackerNode(FrameNode):
         self.set_property(
             "search_radius",
             number_property(
-                12.0, 1.0, 100.0, priority=11, group="Pattern", label="Search Radius",
+                12.0,
+                1.0,
+                100.0,
+                priority=11,
+                group="Pattern",
+                label="Search Radius",
                 description="Max per-frame search distance (percent of frame width).",
                 suffix="%",
             ),
@@ -185,7 +233,10 @@ class PlanarTrackerNode(FrameNode):
     def seed_corners(
         self,
     ) -> tuple[
-        tuple[float, float], tuple[float, float], tuple[float, float], tuple[float, float]
+        tuple[float, float],
+        tuple[float, float],
+        tuple[float, float],
+        tuple[float, float],
     ]:
         """Return the four normalized seed corner positions."""
         positions: list[tuple[float, float]] = [
@@ -218,6 +269,333 @@ class PlanarTrackerNode(FrameNode):
                 x_norm = curve_x.value_at(frame_num)
                 y_norm = curve_y.value_at(frame_num)
             # Match ``CornerPinNode`` corner properties (0–100 percent of frame).
+            result[f"{corner}_x"] = x_norm * 100.0
+            result[f"{corner}_y"] = y_norm * 100.0
+        return result
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize base node data plus every corner's tracked curves."""
+        data = super().to_dict()
+        data["corner_curves"] = {
+            corner: {"x": curve_x.to_dict(), "y": curve_y.to_dict()}
+            for corner, (curve_x, curve_y) in self.corner_curves.items()
+        }
+        return data
+
+    def apply_document(self, data: dict[str, Any]) -> None:
+        """Restore base node data plus every corner's tracked curves."""
+        super().apply_document(data)
+        raw = data.get("corner_curves")
+        if not isinstance(raw, dict):
+            return
+        for corner, _, _ in _PLANAR_CORNERS:
+            entry = raw.get(corner)
+            if not isinstance(entry, dict):
+                continue
+            curve_x = AnimationCurve.from_dict(entry.get("x") or {})
+            curve_y = AnimationCurve.from_dict(entry.get("y") or {})
+            self.corner_curves[corner] = (curve_x, curve_y)
+
+
+class PlanarHomographyTrackerNode(FrameNode, Tracker):
+    """Planar tracker backed by homography estimation over many points.
+
+    This node is intended for more robust match-moved inserts than simple
+    per-corner template tracking. The tracking worker can sample features
+    inside the planar region, estimate a homography per frame, and derive
+    the four output corners from that homography.
+    """
+
+    node_type: str = "Planar Homography Tracker"
+    node_category: str = TRACKING_CATEGORY
+    node_description: str = (
+        "Track a planar surface via homography; outputs four Corner Pin corners"
+    )
+    node_color: tuple[int, int, int] = (176, 80, 150)
+
+    def __init__(self, name: str | None = None) -> None:
+        # Each corner still stores its own X/Y curves, but the tracking backend
+        # is expected to drive them using a homography fit instead of four
+        # independent template matches.
+        self.corner_curves: dict[str, tuple[AnimationCurve, AnimationCurve]] = {
+            corner: (AnimationCurve(), AnimationCurve())
+            for corner, _, _ in _PLANAR_CORNERS
+        }
+        super().__init__(name)
+
+    def _setup_sockets(self) -> None:
+        """Register the tracked plate input, corner outputs, and seed positions."""
+        self.add_input("frame", NodeSocketType.Frame)
+        for corner, seed_x, seed_y in _PLANAR_CORNERS:
+            self.add_output(f"{corner}_x", NodeSocketType.Number)
+            self.add_output(f"{corner}_y", NodeSocketType.Number)
+            label = corner.replace("_", " ").title()
+            self.set_property(
+                f"{corner}_seed_x",
+                number_property(
+                    seed_x,
+                    -50.0,
+                    150.0,
+                    priority=0,
+                    group="Seed",
+                    label=f"{label} X",
+                    description=(
+                        f"Seed X for {label} (percent). Used as the initial "
+                        f"planar corner before homography tracking."
+                    ),
+                    suffix="%",
+                ),
+            )
+            self.set_property(
+                f"{corner}_seed_y",
+                number_property(
+                    seed_y,
+                    -50.0,
+                    150.0,
+                    priority=1,
+                    group="Seed",
+                    label=f"{label} Y",
+                    description=(
+                        f"Seed Y for {label} (percent). Used as the initial "
+                        f"planar corner before homography tracking."
+                    ),
+                    suffix="%",
+                ),
+            )
+        # Slightly smaller default pattern size; homography tracking typically
+        # uses many points inside the region rather than large single patches.
+        self.set_property(
+            "region_size",
+            number_property(
+                5.0,
+                1.0,
+                50.0,
+                priority=10,
+                group="Pattern",
+                label="Planar Region Size",
+                description=(
+                    "Approximate planar region size (percent of frame width). "
+                    "Tracking worker can use this to define the feature search area."
+                ),
+                suffix="%",
+            ),
+        )
+        self.set_property(
+            "search_radius",
+            number_property(
+                15.0,
+                1.0,
+                100.0,
+                priority=11,
+                group="Pattern",
+                label="Search Radius",
+                description=(
+                    "Max per-frame motion (percent of frame width) for homography "
+                    "feature search and matching."
+                ),
+                suffix="%",
+            ),
+        )
+
+    def seed_corners(
+        self,
+    ) -> tuple[
+        tuple[float, float],
+        tuple[float, float],
+        tuple[float, float],
+        tuple[float, float],
+    ]:
+        """Return the four normalized seed corner positions."""
+        positions: list[tuple[float, float]] = [
+            (
+                self.float_value(f"{corner}_seed_x", 0.0) / 100.0,
+                self.float_value(f"{corner}_seed_y", 0.0) / 100.0,
+            )
+            for corner, _, _ in _PLANAR_CORNERS
+        ]
+        return positions[0], positions[1], positions[2], positions[3]
+
+    def region_size_normalized(self) -> tuple[float, float]:
+        """Return the planar region size as normalized ``(w, h)`` (square)."""
+        size = self.float_value("region_size", 5.0) / 100.0
+        return size, size
+
+    def search_radius_normalized(self) -> float:
+        """Return the search radius as a normalized fraction of frame width."""
+        return self.float_value("search_radius", 15.0) / 100.0
+
+    def evaluate(self, frame_num: int) -> NodeValue:
+        """Resolve every corner's tracked (or seed) X/Y at ``frame_num`` as percents."""
+        seeds = self.seed_corners()
+        result: dict[str, float] = {}
+        for (corner, _, _), seed in zip(_PLANAR_CORNERS, seeds):
+            curve_x, curve_y = self.corner_curves[corner]
+            if curve_x.is_empty or curve_y.is_empty:
+                x_norm, y_norm = seed
+            else:
+                x_norm = curve_x.value_at(frame_num)
+                y_norm = curve_y.value_at(frame_num)
+            result[f"{corner}_x"] = x_norm * 100.0
+            result[f"{corner}_y"] = y_norm * 100.0
+        return result
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize base node data plus every corner's tracked curves."""
+        data = super().to_dict()
+        data["corner_curves"] = {
+            corner: {"x": curve_x.to_dict(), "y": curve_y.to_dict()}
+            for corner, (curve_x, curve_y) in self.corner_curves.items()
+        }
+        return data
+
+    def apply_document(self, data: dict[str, Any]) -> None:
+        """Restore base node data plus every corner's tracked curves."""
+        super().apply_document(data)
+        raw = data.get("corner_curves")
+        if not isinstance(raw, dict):
+            return
+        for corner, _, _ in _PLANAR_CORNERS:
+            entry = raw.get(corner)
+            if not isinstance(entry, dict):
+                continue
+            curve_x = AnimationCurve.from_dict(entry.get("x") or {})
+            curve_y = AnimationCurve.from_dict(entry.get("y") or {})
+            self.corner_curves[corner] = (curve_x, curve_y)
+
+
+class SurfaceTrackerNode(FrameNode, Tracker):
+    """General quadrilateral surface tracker backed by homography.
+
+    This node is conceptually similar to ``PlanarHomographyTrackerNode`` but
+    is intended for more free-form surfaces: signs, screens, walls, or any
+    four-corner region that should be match-moved. It exposes the same eight
+    corner outputs so it can drive a ``CornerPinNode`` directly.
+    """
+
+    node_type: str = "Surface Tracker"
+    node_category: str = TRACKING_CATEGORY
+    node_description: str = (
+        "Track a quadrilateral surface via homography; outputs four Corner Pin corners"
+    )
+    node_color: tuple[int, int, int] = (160, 70, 160)
+
+    def __init__(self, name: str | None = None) -> None:
+        self.corner_curves: dict[str, tuple[AnimationCurve, AnimationCurve]] = {
+            corner: (AnimationCurve(), AnimationCurve())
+            for corner, _, _ in _PLANAR_CORNERS
+        }
+        super().__init__(name)
+
+    def _setup_sockets(self) -> None:
+        """Register the tracked plate input, corner outputs, and seed positions."""
+        self.add_input("frame", NodeSocketType.Frame)
+        for corner, seed_x, seed_y in _PLANAR_CORNERS:
+            self.add_output(f"{corner}_x", NodeSocketType.Number)
+            self.add_output(f"{corner}_y", NodeSocketType.Number)
+            label = corner.replace("_", " ").title()
+            self.set_property(
+                f"{corner}_seed_x",
+                number_property(
+                    seed_x,
+                    -100.0,
+                    200.0,
+                    priority=0,
+                    group="Seed",
+                    label=f"{label} X",
+                    description=(
+                        f"Seed X for {label} (percent). Can extend beyond the frame "
+                        f"for off-screen surfaces."
+                    ),
+                    suffix="%",
+                ),
+            )
+            self.set_property(
+                f"{corner}_seed_y",
+                number_property(
+                    seed_y,
+                    -100.0,
+                    200.0,
+                    priority=1,
+                    group="Seed",
+                    label=f"{label} Y",
+                    description=(
+                        f"Seed Y for {label} (percent). Can extend beyond the frame "
+                        f"for off-screen surfaces."
+                    ),
+                    suffix="%",
+                ),
+            )
+        self.set_property(
+            "region_size",
+            number_property(
+                10.0,
+                1.0,
+                100.0,
+                priority=10,
+                group="Pattern",
+                label="Surface Region Size",
+                description=(
+                    "Approximate surface size (percent of frame width). Used by the "
+                    "tracking worker to define the homography feature search area."
+                ),
+                suffix="%",
+            ),
+        )
+        self.set_property(
+            "search_radius",
+            number_property(
+                20.0,
+                1.0,
+                200.0,
+                priority=11,
+                group="Pattern",
+                label="Search Radius",
+                description=(
+                    "Max per-frame motion (percent of frame width) for surface "
+                    "feature search and homography estimation."
+                ),
+                suffix="%",
+            ),
+        )
+
+    def seed_corners(
+        self,
+    ) -> tuple[
+        tuple[float, float],
+        tuple[float, float],
+        tuple[float, float],
+        tuple[float, float],
+    ]:
+        """Return the four normalized seed corner positions."""
+        positions: list[tuple[float, float]] = [
+            (
+                self.float_value(f"{corner}_seed_x", 0.0) / 100.0,
+                self.float_value(f"{corner}_seed_y", 0.0) / 100.0,
+            )
+            for corner, _, _ in _PLANAR_CORNERS
+        ]
+        return positions[0], positions[1], positions[2], positions[3]
+
+    def region_size_normalized(self) -> tuple[float, float]:
+        """Return the surface region size as normalized ``(w, h)`` (square)."""
+        size = self.float_value("region_size", 10.0) / 100.0
+        return size, size
+
+    def search_radius_normalized(self) -> float:
+        """Return the search radius as a normalized fraction of frame width."""
+        return self.float_value("search_radius", 20.0) / 100.0
+
+    def evaluate(self, frame_num: int) -> NodeValue:
+        """Resolve every corner's tracked (or seed) X/Y at ``frame_num`` as percents."""
+        seeds = self.seed_corners()
+        result: dict[str, float] = {}
+        for (corner, _, _), seed in zip(_PLANAR_CORNERS, seeds):
+            curve_x, curve_y = self.corner_curves[corner]
+            if curve_x.is_empty or curve_y.is_empty:
+                x_norm, y_norm = seed
+            else:
+                x_norm = curve_x.value_at(frame_num)
+                y_norm = curve_y.value_at(frame_num)
             result[f"{corner}_x"] = x_norm * 100.0
             result[f"{corner}_y"] = y_norm * 100.0
         return result

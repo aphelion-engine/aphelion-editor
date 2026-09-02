@@ -1,5 +1,4 @@
 """Authoritative built-in node catalog grouped by editor purpose."""
-
 from __future__ import annotations
 
 from core.nodes.advanced_color_nodes import (
@@ -71,6 +70,9 @@ from core.nodes.keying_nodes import (
     CombineMasksNode,
     MatteEdgeNode,
     SpillSuppressNode,
+    PremultNode,
+    CleanPlateNode,
+    DespillProNode,
 )
 from core.nodes.math_nodes import (
     ClampNode,
@@ -97,12 +99,18 @@ from core.nodes.timing_nodes import (
     StrobeNode,
     TimeRemapNode,
 )
-from core.nodes.tracking_nodes import PlanarTrackerNode, TrackerNode
+from core.nodes.tracking_nodes import (
+    PlanarTrackerNode,
+    TrackerNode,
+    SurfaceTrackerNode,
+    PlanarHomographyTrackerNode,
+)
+
 from core.nodes.transform_nodes import (
     CornerPinMaskNode,
     CornerPinNode,
     CropNode,
-    Transform2DNode,
+    Transform2DNode
 )
 from core.nodes.utility_nodes import ChannelMaskNode, FrameSwitchNode, InvertMaskNode
 from core.nodes.video_input import VideoInputNode
@@ -198,11 +206,17 @@ BUILTIN_NODE_TYPES: tuple[type[Node], ...] = (
     SpillSuppressNode,
     MatteEdgeNode,
     CombineMasksNode,
+    PremultNode,
+    CleanPlateNode,
+
     # Roto
     RotoNode,
     # Tracking
     TrackerNode,
     PlanarTrackerNode,
+    # SurfaceTrackerNode,
+    # PlanarHomographyTrackerNode,
+
     # Math / values
     ValueNode,
     TimelineFrameNode,

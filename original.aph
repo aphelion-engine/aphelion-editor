@@ -1,0 +1,87 @@
+{
+  "format": "aphelion-project",
+  "version": 1,
+  "name": "original",
+  "timeline": {
+    "fps": 24,
+    "width": 2048,
+    "height": 1080,
+    "duration": 11.219541666666666,
+    "current_frame": 163
+  },
+  "active_viewer": "node_2_1788322242951",
+  "nodes": {
+    "node_0_1788322233840": {
+      "node_type": "Video Input",
+      "node_category": "Input/Output",
+      "name": "Video Input",
+      "x": 32.044417789664294,
+      "y": 21.36294519310968,
+      "properties": {
+        "file_path": "C:/Users/jackw/Downloads/PF0047-04_Clip-4_REC709_2K.mp4",
+        "enabled": true,
+        "start_frame": 0,
+        "end_frame": -1,
+        "frame_offset": 0,
+        "fps": 0.0,
+        "speed": 1.0,
+        "reverse": false,
+        "before_start": {
+          "__enum__": "MediaEdgeMode",
+          "name": "Black"
+        },
+        "after_end": {
+          "__enum__": "MediaEdgeMode",
+          "name": "Hold"
+        },
+        "on_error": {
+          "__enum__": "VideoFrameErrorMethod",
+          "name": "Black"
+        },
+        "auto_sync_timeline": true,
+        "audio_enabled": true,
+        "audio_volume": 100,
+        "audio_channel_mode": {
+          "__enum__": "AudioChannelMode",
+          "name": "Stereo"
+        }
+      },
+      "animated_properties": {}
+    },
+    "node_2_1788322242951": {
+      "node_type": "Viewer",
+      "node_category": "Input/Output",
+      "name": "Viewer",
+      "x": 239.03271360969939,
+      "y": 158.23821163957888,
+      "properties": {
+        "enabled": true,
+        "fit_mode": {
+          "__enum__": "ViewportFitMode",
+          "name": "Fit"
+        },
+        "preview_max_width": 439,
+        "apply_exposure": true,
+        "exposure": 123,
+        "flip_horizontal": false,
+        "flip_vertical": false,
+        "background": {
+          "__enum__": "ViewerBackground",
+          "name": "Black"
+        },
+        "prefetch_frames": 6,
+        "audio_enabled": true,
+        "audio_volume": 100
+      },
+      "animated_properties": {}
+    }
+  },
+  "connections": [
+    {
+      "output_node_id": "node_0_1788322233840",
+      "output_slot": "frame",
+      "input_node_id": "node_2_1788322242951",
+      "input_slot": "frame"
+    }
+  ]
+}

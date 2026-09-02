@@ -38,7 +38,8 @@ import numpy as np
 # Configuration
 # ---------------------------------------------------------------------------
 
-_MATCH_CONFIDENCE_FLOOR: float = 0.35
+# Slightly higher floor for more reliable matches.
+_MATCH_CONFIDENCE_FLOOR: float = 0.45
 
 _MIN_HALF_EXTENT_PX: int = 4
 
@@ -190,6 +191,9 @@ def track_point_range(
             on_progress(0, total)
 
         return {}
+
+    # Pre-filter template to reduce noise and improve correlation stability.
+    template = _preprocess_template(template)
 
     # Seed is always considered tracked because the user explicitly placed
     # the initial point there.
@@ -661,6 +665,27 @@ def _template_is_degenerate(
     )
 
 
+def _preprocess_template(
+    template_u8: np.ndarray,
+) -> np.ndarray:
+    """Apply light denoising to the template to improve matching stability."""
+
+    if template_u8.size == 0:
+        return template_u8
+
+    # Small Gaussian blur to suppress pixel noise while preserving structure.
+    # Kernel size is kept minimal to avoid oversmoothing small templates.
+    try:
+        return cv2.GaussianBlur(
+            template_u8,
+            (3, 3),
+            0.0,
+        )
+    except cv2.error:
+        # Fall back to original if OpenCV fails for any reason.
+        return template_u8
+
+
 # ---------------------------------------------------------------------------
 # Matching
 # ---------------------------------------------------------------------------
@@ -710,14 +735,15 @@ def _match_patch(
     # Calculate search region
     # ---------------------------------------------------------------
 
+    # Slightly more generous margin to better handle fast motion.
     margin_x = max(
         _MIN_HALF_EXTENT_PX,
-        int(round(abs(search_radius) * width)),
+        int(round(abs(search_radius) * width * 1.25)),
     )
 
     margin_y = max(
         _MIN_HALF_EXTENT_PX,
-        int(round(abs(search_radius) * height)),
+        int(round(abs(search_radius) * height * 1.25)),
     )
 
     cx = int(round(
@@ -782,6 +808,17 @@ def _match_patch(
     if window_u8.shape[0] < template_height:
         return None
 
+    # Light denoising of the search window to stabilize correlation.
+    try:
+        window_u8 = cv2.GaussianBlur(
+            window_u8,
+            (3, 3),
+            0.0,
+        )
+    except cv2.error:
+        # If blur fails, keep the original window.
+        pass
+
     # ---------------------------------------------------------------
     # Perform normalized cross-correlation
     # ---------------------------------------------------------------
@@ -817,18 +854,27 @@ def _match_patch(
         return None
 
     # ---------------------------------------------------------------
+    # Subpixel refinement of the correlation peak
+    # ---------------------------------------------------------------
+
+    refined_x, refined_y = _refine_peak_subpixel(
+        correlation,
+        max_location,
+    )
+
+    # ---------------------------------------------------------------
     # Convert match location to template center
     # ---------------------------------------------------------------
 
     match_x = (
         x0
-        + max_location[0]
+        + refined_x
         + template_width * 0.5
     )
 
     match_y = (
         y0
-        + max_location[1]
+        + refined_y
         + template_height * 0.5
     )
 
@@ -841,6 +887,46 @@ def _match_patch(
             normalized_y,
         )
     )
+
+
+def _refine_peak_subpixel(
+    correlation: np.ndarray,
+    max_location: tuple[int, int],
+) -> tuple[float, float]:
+    """Refine the correlation peak to subpixel precision via quadratic fitting.
+
+    Uses a simple 1D parabola fit in X and Y around the discrete maximum.
+    """
+
+    x, y = max_location
+    h, w = correlation.shape[:2]
+
+    # If we don't have neighbors on both sides, just return the integer peak.
+    if x <= 0 or x >= w - 1 or y <= 0 or y >= h - 1:
+        return float(x), float(y)
+
+    # Extract 3-point neighborhoods.
+    center = float(correlation[y, x])
+
+    left = float(correlation[y, x - 1])
+    right = float(correlation[y, x + 1])
+
+    top = float(correlation[y - 1, x])
+    bottom = float(correlation[y + 1, x])
+
+    # Quadratic offset: 0.5 * (v_-1 - v_+1) / (v_-1 - 2*v0 + v_+1)
+    def _parabolic_offset(vm1: float, v0: float, vp1: float) -> float:
+        denom = (vm1 - 2.0 * v0 + vp1)
+        if abs(denom) < 1e-12:
+            return 0.0
+        offset = 0.5 * (vm1 - vp1) / denom
+        # Clamp to a reasonable range to avoid wild jumps.
+        return float(np.clip(offset, -1.0, 1.0))
+
+    offset_x = _parabolic_offset(left, center, right)
+    offset_y = _parabolic_offset(top, center, bottom)
+
+    return float(x) + offset_x, float(y) + offset_y
 
 
 # ---------------------------------------------------------------------------

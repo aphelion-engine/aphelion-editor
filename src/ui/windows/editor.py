@@ -31,7 +31,7 @@ from core.events import DOCUMENT_DIRTY_EVENTS, ObserverEvent
 from core.history import HistoryStack
 from core.history.commands import SetProjectSettingsCommand
 from core.nodes.roto_nodes import RotoNode
-from core.nodes.tracking_nodes import PlanarTrackerNode, TrackerNode
+from core.nodes.tracking_nodes import TRACKER_NODES
 from core.project import Project
 from ui.dialogs import (
     AboutDialog,
@@ -134,7 +134,7 @@ class Editor(QMainWindow):
         self.viewport = ViewportWidget(self.project, self.history)
         self.timeline = TimelineWidget(self.project, self.keybinds)
         self.node_graph = NodeGraphView(self.project, self.history, self.keybinds)
-        
+
         self.properties = PropertiesPanel(self.project, self.history)
         self.keyframes = KeyframesPanelWidget(self.project, self.history)
         self.log_viewer = LogViewerWidget()
@@ -258,7 +258,8 @@ class Editor(QMainWindow):
         # Roto and Tracker/Planar Tracker each get their own interactive
         # viewport overlay; ViewportWidget.set_edit_target fans this out to
         # both and each one ignores node types that aren't its own.
-        editable = isinstance(node, (RotoNode, TrackerNode, PlanarTrackerNode))
+        print("Tracker nodes: ", TRACKER_NODES)
+        editable = isinstance(node, tuple(TRACKER_NODES))
         self.viewport.set_edit_target(item.node_id if editable else None)
         if node.node_type == "Viewer":
             self.project.set_active_viewer(item.node_id)

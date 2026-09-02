@@ -257,3 +257,140 @@ class CombineMasksNode(FrameNode):
             result = mask_a * mask_b
 
         return np.clip(result, 0.0, 1.0).astype(np.float32, copy=False)
+
+class PremultNode(FrameNode):
+    node_type = "Premult"
+    node_category = "Keying"
+    node_description = "Multiply RGB by alpha"
+    node_color = (120, 120, 160)
+
+    def _setup_sockets(self):
+        self.add_input("frame", NodeSocketType.Frame)
+        self.add_output("frame", NodeSocketType.Frame)
+
+    def evaluate(self, frame_num: int):
+        del frame_num
+        frame = self.input_frame()
+        if frame is None:
+            return self.blank_frame()
+
+        if frame.shape[2] < 4:
+            return frame
+
+        rgb = frame[..., :3].astype(np.float32)
+        a = frame[..., 3:4].astype(np.float32)
+        out = np.concatenate([rgb * a, a], axis=2)
+        return out
+
+class CleanPlateNode(FrameNode):
+    node_type = "Clean Plate"
+    node_category = "Keying"
+    node_description = "Generate a clean background plate for keying"
+    node_color = (100, 180, 140)
+
+    def _setup_sockets(self):
+        self.add_input("frame", NodeSocketType.Frame)
+        self.add_output("frame", NodeSocketType.Frame)
+
+        self.set_property(
+            "blur",
+            slider_property(
+                20, 0, 200,
+                priority=0,
+                group="Plate",
+                label="Blur",
+                description="Large blur to remove foreground",
+                suffix=" px",
+            ),
+        )
+
+    def evaluate(self, frame_num: int):
+        del frame_num
+        frame = self.input_frame()
+        if frame is None:
+            return self.blank_frame()
+
+        blur = int(self.float_value("blur", 20.0))
+        return cv2.GaussianBlur(frame, (0, 0), blur)
+
+class DespillProNode(FrameEffectNode):
+    node_type = "Despill Pro"
+    node_category = "Keying"
+    node_description = "Advanced despill using hue bias and luminance preservation"
+    node_color = (110, 170, 130)
+
+    def setup_effect_properties(self):
+        self.set_property(
+            "key_color",
+            color_property(
+                _DEFAULT_KEY_GREEN,
+                priority=0,
+                group="Despill",
+                label="Key Color",
+                description="Screen color to remove",
+            ),
+        )
+        self.set_property(
+            "strength",
+            slider_property(
+                100, 0, 200,
+                priority=1,
+                group="Despill",
+                label="Strength",
+                description="Despill intensity",
+                suffix="%",
+            ),
+        )
+
+    def process_frame(self, frame: np.ndarray, frame_num: int) -> np.ndarray:
+        del frame_num
+        key = np.array(self.color_value("key_color", _DEFAULT_KEY_GREEN), np.float32)
+        strength = self.float_value("strength", 100.0) / 100.0
+
+        rgb = frame[..., :3].astype(np.float32)
+        a = frame[..., 3:4] if frame.shape[2] == 4 else None
+
+        key_norm = key / np.linalg.norm(key)
+        dot = np.sum(rgb * key_norm, axis=2, keepdims=True)
+        despill = rgb - key_norm * dot * strength
+
+        if a is not None:
+            return np.concatenate([despill, a], axis=2)
+        return despill
+
+class EdgeExtendNode(FrameNode):
+    node_type = "Edge Extend"
+    node_category = "Keying"
+    node_description = "Extend foreground colors into semi-transparent edge regions"
+    node_color = (130, 150, 110)
+
+    def _setup_sockets(self):
+        self.add_input("frame", NodeSocketType.Frame)
+        self.add_output("frame", NodeSocketType.Frame)
+
+        self.set_property(
+            "radius",
+            slider_property(
+                6, 1, 64,
+                priority=0,
+                group="Extend",
+                label="Radius",
+                description="Edge extension blur radius",
+                suffix=" px",
+            ),
+        )
+
+    def evaluate(self, frame_num: int) -> np.ndarray:
+        del frame_num
+        frame = self.input_frame()
+        if frame is None or frame.shape[2] < 4:
+            # pyrefly: ignore [bad-return]
+            return frame
+
+        radius = int(self.float_value("radius", 6.0))
+        rgb = frame[..., :3].astype(np.float32)
+        a = frame[..., 3:4].astype(np.float32)
+
+        extended = cv2.GaussianBlur(rgb, (0, 0), radius)
+        out_rgb = rgb * a + extended * (1.0 - a)
+        return np.concatenate([out_rgb, a], axis=2)
