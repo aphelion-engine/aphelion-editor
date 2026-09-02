@@ -13789,3 +13789,307 @@ SyntaxError: keyword argument repeated: stdin
 2026-09-01 17:27:20 | INFO     | aphelion.editor | Closing editor for project 'test project'
 2026-09-01 17:27:20 | INFO     | aphelion.session | Editor destroyed — quitting application
 2026-09-01 17:27:20 | INFO     | aphelion.runtime | Event loop exited with code 0
+2026-09-01 18:14:05 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-09-01 18:14:05 | INFO     | aphelion | Log file: C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\logs\aphelion.log
+2026-09-01 18:14:05 | INFO     | aphelion.runtime | Runtime ready — starting session
+2026-09-01 18:14:05 | INFO     | aphelion.session | Session start → project launcher
+2026-09-01 18:14:05 | INFO     | aphelion.runtime | Entering Qt event loop
+2026-09-01 18:14:05 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(680, 291, 560, 480))
+2026-09-01 18:14:07 | INFO     | aphelion.session | Project chosen (mode=new, path=(untitled))
+2026-09-01 18:14:07 | INFO     | aphelion.session | Opening bootloader
+2026-09-01 18:14:07 | INFO     | aphelion.boot.driver | Running boot stage 1/6: Runtime
+2026-09-01 18:14:07 | INFO     | aphelion.boot.driver | [Runtime] Boot request accepted (new project)
+2026-09-01 18:14:07 | INFO     | aphelion.boot.driver | Running boot stage 2/6: Node registry
+2026-09-01 18:14:07 | INFO     | aphelion.boot.driver | [Node registry] Registered 92 built-in node type(s)
+2026-09-01 18:14:07 | INFO     | aphelion.boot.driver | Running boot stage 3/6: Plugins
+2026-09-01 18:14:07 | INFO     | aphelion.boot.driver | [Plugins] Registered 0 plugin node type(s)
+2026-09-01 18:14:07 | INFO     | aphelion.boot.driver | Running boot stage 4/6: Project document
+2026-09-01 18:14:07 | INFO     | aphelion.boot.driver | [Project document] Created blank project document
+2026-09-01 18:14:07 | INFO     | aphelion.boot.driver | Running boot stage 5/6: Graph validation
+2026-09-01 18:14:07 | ERROR    | aphelion.boot.driver | [Graph validation] Loaded graph is invalid (1 error(s))
+2026-09-01 18:14:07 | ERROR    | aphelion.session | Boot failed: Loaded graph is invalid (1 error(s))
+2026-09-01 18:14:08 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(680, 291, 560, 480))
+2026-09-01 18:14:09 | INFO     | aphelion.session | Project chosen (mode=new, path=(untitled))
+2026-09-01 18:14:09 | INFO     | aphelion.session | Opening bootloader
+2026-09-01 18:14:10 | INFO     | aphelion.boot.driver | Running boot stage 1/6: Runtime
+2026-09-01 18:14:10 | INFO     | aphelion.boot.driver | [Runtime] Boot request accepted (new project)
+2026-09-01 18:14:10 | INFO     | aphelion.boot.driver | Running boot stage 2/6: Node registry
+2026-09-01 18:14:10 | INFO     | aphelion.boot.driver | [Node registry] Registered 92 built-in node type(s)
+2026-09-01 18:14:10 | INFO     | aphelion.boot.driver | Running boot stage 3/6: Plugins
+2026-09-01 18:14:10 | INFO     | aphelion.boot.driver | [Plugins] Registered 0 plugin node type(s)
+2026-09-01 18:14:10 | INFO     | aphelion.boot.driver | Running boot stage 4/6: Project document
+2026-09-01 18:14:10 | INFO     | aphelion.boot.driver | [Project document] Created blank project document
+2026-09-01 18:14:10 | INFO     | aphelion.boot.driver | Running boot stage 5/6: Graph validation
+2026-09-01 18:14:10 | ERROR    | aphelion.boot.driver | [Graph validation] Loaded graph is invalid (1 error(s))
+2026-09-01 18:14:10 | ERROR    | aphelion.session | Boot failed: Loaded graph is invalid (1 error(s))
+2026-09-01 18:14:13 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(680, 291, 560, 480))
+2026-09-01 18:14:14 | INFO     | aphelion.session | Project chosen (mode=new, path=(untitled))
+2026-09-01 18:14:14 | INFO     | aphelion.session | Opening bootloader
+2026-09-01 18:14:14 | INFO     | aphelion.boot.driver | Running boot stage 1/6: Runtime
+2026-09-01 18:14:14 | INFO     | aphelion.boot.driver | [Runtime] Boot request accepted (new project)
+2026-09-01 18:14:14 | INFO     | aphelion.boot.driver | Running boot stage 2/6: Node registry
+2026-09-01 18:14:14 | INFO     | aphelion.boot.driver | [Node registry] Registered 92 built-in node type(s)
+2026-09-01 18:14:14 | INFO     | aphelion.boot.driver | Running boot stage 3/6: Plugins
+2026-09-01 18:14:14 | INFO     | aphelion.boot.driver | [Plugins] Registered 0 plugin node type(s)
+2026-09-01 18:14:14 | INFO     | aphelion.boot.driver | Running boot stage 4/6: Project document
+2026-09-01 18:14:14 | INFO     | aphelion.boot.driver | [Project document] Created blank project document
+2026-09-01 18:14:14 | INFO     | aphelion.boot.driver | Running boot stage 5/6: Graph validation
+2026-09-01 18:14:14 | ERROR    | aphelion.boot.driver | [Graph validation] Loaded graph is invalid (1 error(s))
+2026-09-01 18:14:14 | ERROR    | aphelion.session | Boot failed: Loaded graph is invalid (1 error(s))
+2026-09-01 18:14:18 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(680, 291, 560, 480))
+2026-09-01 18:14:19 | INFO     | aphelion.session | Launcher closed without a project — quitting
+2026-09-01 18:14:19 | INFO     | aphelion.runtime | Event loop exited with code 0
+2026-09-01 18:15:00 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-09-01 18:15:00 | INFO     | aphelion | Log file: C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\logs\aphelion.log
+2026-09-01 18:15:00 | INFO     | aphelion.runtime | Runtime ready — starting session
+2026-09-01 18:15:00 | INFO     | aphelion.session | Session start → project launcher
+2026-09-01 18:15:00 | INFO     | aphelion.runtime | Entering Qt event loop
+2026-09-01 18:15:00 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(680, 291, 560, 480))
+2026-09-01 18:15:01 | INFO     | aphelion.session | Project chosen (mode=new, path=(untitled))
+2026-09-01 18:15:01 | INFO     | aphelion.session | Opening bootloader
+2026-09-01 18:15:01 | INFO     | aphelion.boot.driver | Running boot stage 1/6: Runtime
+2026-09-01 18:15:01 | INFO     | aphelion.boot.driver | [Runtime] Boot request accepted (new project)
+2026-09-01 18:15:01 | INFO     | aphelion.boot.driver | Running boot stage 2/6: Node registry
+2026-09-01 18:15:01 | INFO     | aphelion.boot.driver | [Node registry] Registered 92 built-in node type(s)
+2026-09-01 18:15:01 | INFO     | aphelion.boot.driver | Running boot stage 3/6: Plugins
+2026-09-01 18:15:01 | INFO     | aphelion.boot.driver | [Plugins] Registered 0 plugin node type(s)
+2026-09-01 18:15:01 | INFO     | aphelion.boot.driver | Running boot stage 4/6: Project document
+2026-09-01 18:15:01 | INFO     | aphelion.boot.driver | [Project document] Created blank project document
+2026-09-01 18:15:02 | INFO     | aphelion.boot.driver | Running boot stage 5/6: Graph validation
+2026-09-01 18:15:02 | INFO     | aphelion.boot.driver | [Graph validation] Validated project graph
+2026-09-01 18:15:02 | INFO     | aphelion.boot.driver | Running boot stage 6/6: Media sources
+2026-09-01 18:15:02 | INFO     | aphelion.boot.driver | [Media sources] Probed media sources (0 ok, 0 unavailable)
+2026-09-01 18:15:02 | INFO     | aphelion.session | Constructing editor for project 'Untitled Project'
+2026-09-01 18:15:03 | INFO     | aphelion.session | Editor shown for 'Untitled Project'
+2026-09-01 18:15:07 | INFO     | aphelion.editor | Closing editor for project 'Untitled Project'
+2026-09-01 18:15:07 | INFO     | aphelion.session | Editor destroyed — quitting application
+2026-09-01 18:15:07 | INFO     | aphelion.runtime | Event loop exited with code 0
+2026-09-01 19:32:01 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-09-01 19:32:01 | INFO     | aphelion | Log file: C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\logs\aphelion.log
+2026-09-01 19:32:01 | INFO     | aphelion.runtime | Runtime ready — starting session
+2026-09-01 19:32:01 | INFO     | aphelion.session | Session start → project launcher
+2026-09-01 19:32:01 | INFO     | aphelion.runtime | Entering Qt event loop
+2026-09-01 19:32:02 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(680, 291, 560, 480))
+2026-09-01 19:32:36 | INFO     | aphelion.session | Project chosen (mode=open, path=C:\Users\jackw\OneDrive\Desktop\dist\Untitled Project.aph)
+2026-09-01 19:32:36 | INFO     | aphelion.session | Opening bootloader
+2026-09-01 19:32:37 | INFO     | aphelion.boot.driver | Running boot stage 1/6: Runtime
+2026-09-01 19:32:37 | INFO     | aphelion.boot.driver | [Runtime] Boot request accepted (open project)
+2026-09-01 19:32:37 | INFO     | aphelion.boot.driver | Running boot stage 2/6: Node registry
+2026-09-01 19:32:37 | INFO     | aphelion.boot.driver | [Node registry] Registered 92 built-in node type(s)
+2026-09-01 19:32:37 | INFO     | aphelion.boot.driver | Running boot stage 3/6: Plugins
+2026-09-01 19:32:37 | INFO     | aphelion.boot.driver | [Plugins] Registered 0 plugin node type(s)
+2026-09-01 19:32:37 | INFO     | aphelion.boot.driver | Running boot stage 4/6: Project document
+2026-09-01 19:32:37 | INFO     | aphelion.boot.driver | [Project document] Loaded project 'Untitled Project'
+2026-09-01 19:32:38 | INFO     | aphelion.boot.driver | Running boot stage 5/6: Graph validation
+2026-09-01 19:32:38 | INFO     | aphelion.boot.driver | [Graph validation] Validated project graph
+2026-09-01 19:32:38 | INFO     | aphelion.boot.driver | Running boot stage 6/6: Media sources
+2026-09-01 19:32:39 | INFO     | aphelion.audio.decode | No ffprobe binary found next to bundled ffmpeg; using decode-only audio detection
+2026-09-01 19:32:39 | INFO     | aphelion.audio.decode | Decoded audio for C:/Users/jackw/OneDrive/Desktop/git-projects/aphelion-engine/aphelion-editor/samples/source.mp4: has_audio=True sample_rate=48000 channels=2 samples=806940 duration=16.811s
+2026-09-01 19:32:39 | INFO     | aphelion.boot.driver | [Media sources] Probed media sources (1 ok, 0 unavailable)
+2026-09-01 19:32:39 | INFO     | aphelion.session | Constructing editor for project 'Untitled Project'
+2026-09-01 19:32:39 | INFO     | aphelion.audio.decode | Audio slice frame=0 start_time=0.000000 duration=0.040000 actual=1920 silent=True
+2026-09-01 19:32:40 | INFO     | aphelion.session | Editor shown for 'Untitled Project'
+2026-09-01 19:33:10 | INFO     | aphelion.editor | Closing editor for project 'Untitled Project'
+2026-09-01 19:33:10 | INFO     | aphelion.session | Editor destroyed — quitting application
+2026-09-01 19:33:10 | INFO     | aphelion.runtime | Event loop exited with code 0
+2026-09-01 19:34:06 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-09-01 19:34:06 | INFO     | aphelion | Log file: C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\logs\aphelion.log
+2026-09-01 19:34:06 | INFO     | aphelion.runtime | Runtime ready — starting session
+2026-09-01 19:34:06 | INFO     | aphelion.session | Session start → project launcher
+2026-09-01 19:34:06 | INFO     | aphelion.runtime | Entering Qt event loop
+2026-09-01 19:34:06 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(680, 291, 560, 480))
+2026-09-01 19:34:08 | INFO     | aphelion.session | Project chosen (mode=open, path=C:\Users\jackw\OneDrive\Desktop\dist\Untitled Project.aph)
+2026-09-01 19:34:08 | INFO     | aphelion.session | Opening bootloader
+2026-09-01 19:34:08 | INFO     | aphelion.boot.driver | Running boot stage 1/6: Runtime
+2026-09-01 19:34:08 | INFO     | aphelion.boot.driver | [Runtime] Boot request accepted (open project)
+2026-09-01 19:34:08 | INFO     | aphelion.boot.driver | Running boot stage 2/6: Node registry
+2026-09-01 19:34:08 | INFO     | aphelion.boot.driver | [Node registry] Registered 92 built-in node type(s)
+2026-09-01 19:34:08 | INFO     | aphelion.boot.driver | Running boot stage 3/6: Plugins
+2026-09-01 19:34:08 | INFO     | aphelion.boot.driver | [Plugins] Registered 0 plugin node type(s)
+2026-09-01 19:34:08 | INFO     | aphelion.boot.driver | Running boot stage 4/6: Project document
+2026-09-01 19:34:08 | INFO     | aphelion.boot.driver | [Project document] Loaded project 'Untitled Project'
+2026-09-01 19:34:08 | INFO     | aphelion.boot.driver | Running boot stage 5/6: Graph validation
+2026-09-01 19:34:08 | INFO     | aphelion.boot.driver | [Graph validation] Validated project graph
+2026-09-01 19:34:09 | INFO     | aphelion.boot.driver | Running boot stage 6/6: Media sources
+2026-09-01 19:34:09 | INFO     | aphelion.audio.decode | No ffprobe binary found next to bundled ffmpeg; using decode-only audio detection
+2026-09-01 19:34:09 | INFO     | aphelion.audio.decode | Decoded audio for C:/Users/jackw/OneDrive/Desktop/git-projects/aphelion-engine/aphelion-editor/samples/source.mp4: has_audio=True sample_rate=48000 channels=2 samples=806940 duration=16.811s
+2026-09-01 19:34:09 | INFO     | aphelion.boot.driver | [Media sources] Probed media sources (1 ok, 0 unavailable)
+2026-09-01 19:34:09 | INFO     | aphelion.session | Constructing editor for project 'Untitled Project'
+2026-09-01 19:34:09 | INFO     | aphelion.audio.decode | Audio slice frame=0 start_time=0.000000 duration=0.040000 actual=1920 silent=True
+2026-09-01 19:34:10 | INFO     | aphelion.session | Editor shown for 'Untitled Project'
+2026-09-01 19:34:18 | INFO     | aphelion.editor | Closing editor for project 'Untitled Project'
+2026-09-01 19:34:18 | INFO     | aphelion.session | Editor destroyed — quitting application
+2026-09-01 19:34:18 | INFO     | aphelion.runtime | Event loop exited with code 0
+2026-09-01 19:34:58 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-09-01 19:34:58 | INFO     | aphelion | Log file: C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\logs\aphelion.log
+2026-09-01 19:34:59 | INFO     | aphelion.runtime | Runtime ready — starting session
+2026-09-01 19:34:59 | INFO     | aphelion.session | Session start → project launcher
+2026-09-01 19:34:59 | INFO     | aphelion.runtime | Entering Qt event loop
+2026-09-01 19:35:00 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(680, 291, 560, 480))
+2026-09-01 19:35:01 | INFO     | aphelion.session | Project chosen (mode=open, path=C:\Users\jackw\OneDrive\Desktop\dist\Untitled Project.aph)
+2026-09-01 19:35:01 | INFO     | aphelion.session | Opening bootloader
+2026-09-01 19:35:02 | INFO     | aphelion.boot.driver | Running boot stage 1/6: Runtime
+2026-09-01 19:35:02 | INFO     | aphelion.boot.driver | [Runtime] Boot request accepted (open project)
+2026-09-01 19:35:02 | INFO     | aphelion.boot.driver | Running boot stage 2/6: Node registry
+2026-09-01 19:35:02 | INFO     | aphelion.boot.driver | [Node registry] Registered 92 built-in node type(s)
+2026-09-01 19:35:02 | INFO     | aphelion.boot.driver | Running boot stage 3/6: Plugins
+2026-09-01 19:35:02 | INFO     | aphelion.boot.driver | [Plugins] Registered 0 plugin node type(s)
+2026-09-01 19:35:02 | INFO     | aphelion.boot.driver | Running boot stage 4/6: Project document
+2026-09-01 19:35:02 | INFO     | aphelion.boot.driver | [Project document] Loaded project 'Untitled Project'
+2026-09-01 19:35:02 | INFO     | aphelion.boot.driver | Running boot stage 5/6: Graph validation
+2026-09-01 19:35:02 | INFO     | aphelion.boot.driver | [Graph validation] Validated project graph
+2026-09-01 19:35:02 | INFO     | aphelion.boot.driver | Running boot stage 6/6: Media sources
+2026-09-01 19:35:02 | INFO     | aphelion.audio.decode | No ffprobe binary found next to bundled ffmpeg; using decode-only audio detection
+2026-09-01 19:35:03 | INFO     | aphelion.audio.decode | Decoded audio for C:/Users/jackw/OneDrive/Desktop/git-projects/aphelion-engine/aphelion-editor/samples/source.mp4: has_audio=True sample_rate=48000 channels=2 samples=806940 duration=16.811s
+2026-09-01 19:35:03 | INFO     | aphelion.boot.driver | [Media sources] Probed media sources (1 ok, 0 unavailable)
+2026-09-01 19:35:03 | INFO     | aphelion.session | Constructing editor for project 'Untitled Project'
+2026-09-01 19:35:03 | INFO     | aphelion.audio.decode | Audio slice frame=0 start_time=0.000000 duration=0.040000 actual=1920 silent=True
+2026-09-01 19:35:04 | INFO     | aphelion.session | Editor shown for 'Untitled Project'
+2026-09-01 19:35:09 | INFO     | aphelion.editor | Closing editor for project 'Untitled Project'
+2026-09-01 19:35:10 | INFO     | aphelion.session | Editor destroyed — quitting application
+2026-09-01 19:35:10 | INFO     | aphelion.runtime | Event loop exited with code 0
+2026-09-01 19:35:32 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-09-01 19:35:32 | INFO     | aphelion | Log file: C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\logs\aphelion.log
+2026-09-01 19:35:32 | INFO     | aphelion.runtime | Runtime ready — starting session
+2026-09-01 19:35:32 | INFO     | aphelion.session | Session start → project launcher
+2026-09-01 19:35:32 | INFO     | aphelion.runtime | Entering Qt event loop
+2026-09-01 19:35:33 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(680, 291, 560, 480))
+2026-09-01 19:35:34 | INFO     | aphelion.session | Project chosen (mode=open, path=C:\Users\jackw\OneDrive\Desktop\dist\Untitled Project.aph)
+2026-09-01 19:35:34 | INFO     | aphelion.session | Opening bootloader
+2026-09-01 19:35:34 | INFO     | aphelion.boot.driver | Running boot stage 1/6: Runtime
+2026-09-01 19:35:34 | INFO     | aphelion.boot.driver | [Runtime] Boot request accepted (open project)
+2026-09-01 19:35:34 | INFO     | aphelion.boot.driver | Running boot stage 2/6: Node registry
+2026-09-01 19:35:34 | INFO     | aphelion.boot.driver | [Node registry] Registered 92 built-in node type(s)
+2026-09-01 19:35:35 | INFO     | aphelion.boot.driver | Running boot stage 3/6: Plugins
+2026-09-01 19:35:35 | INFO     | aphelion.boot.driver | [Plugins] Registered 0 plugin node type(s)
+2026-09-01 19:35:35 | INFO     | aphelion.boot.driver | Running boot stage 4/6: Project document
+2026-09-01 19:35:35 | INFO     | aphelion.boot.driver | [Project document] Loaded project 'Untitled Project'
+2026-09-01 19:35:35 | INFO     | aphelion.boot.driver | Running boot stage 5/6: Graph validation
+2026-09-01 19:35:35 | INFO     | aphelion.boot.driver | [Graph validation] Validated project graph
+2026-09-01 19:35:35 | INFO     | aphelion.boot.driver | Running boot stage 6/6: Media sources
+2026-09-01 19:35:35 | INFO     | aphelion.audio.decode | No ffprobe binary found next to bundled ffmpeg; using decode-only audio detection
+2026-09-01 19:35:35 | INFO     | aphelion.audio.decode | Decoded audio for C:/Users/jackw/OneDrive/Desktop/git-projects/aphelion-engine/aphelion-editor/samples/source.mp4: has_audio=True sample_rate=48000 channels=2 samples=806940 duration=16.811s
+2026-09-01 19:35:35 | INFO     | aphelion.boot.driver | [Media sources] Probed media sources (1 ok, 0 unavailable)
+2026-09-01 19:35:35 | INFO     | aphelion.session | Constructing editor for project 'Untitled Project'
+2026-09-01 19:35:35 | INFO     | aphelion.audio.decode | Audio slice frame=0 start_time=0.000000 duration=0.040000 actual=1920 silent=True
+2026-09-01 19:35:36 | INFO     | aphelion.session | Editor shown for 'Untitled Project'
+2026-09-01 19:35:43 | INFO     | aphelion.editor | Closing editor for project 'Untitled Project'
+2026-09-01 19:35:43 | INFO     | aphelion.session | Editor destroyed — quitting application
+2026-09-01 19:35:43 | INFO     | aphelion.runtime | Event loop exited with code 0
+2026-09-01 19:37:22 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-09-01 19:37:22 | INFO     | aphelion | Log file: C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\logs\aphelion.log
+2026-09-01 19:37:22 | INFO     | aphelion.runtime | Runtime ready — starting session
+2026-09-01 19:37:22 | INFO     | aphelion.session | Session start → project launcher
+2026-09-01 19:37:22 | INFO     | aphelion.runtime | Entering Qt event loop
+2026-09-01 19:37:23 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(680, 291, 560, 480))
+2026-09-01 19:37:24 | INFO     | aphelion.session | Project chosen (mode=open, path=C:\Users\jackw\OneDrive\Desktop\dist\Untitled Project.aph)
+2026-09-01 19:37:24 | INFO     | aphelion.session | Opening bootloader
+2026-09-01 19:37:24 | INFO     | aphelion.boot.driver | Running boot stage 1/6: Runtime
+2026-09-01 19:37:24 | INFO     | aphelion.boot.driver | [Runtime] Boot request accepted (open project)
+2026-09-01 19:37:24 | INFO     | aphelion.boot.driver | Running boot stage 2/6: Node registry
+2026-09-01 19:37:24 | INFO     | aphelion.boot.driver | [Node registry] Registered 92 built-in node type(s)
+2026-09-01 19:37:24 | INFO     | aphelion.boot.driver | Running boot stage 3/6: Plugins
+2026-09-01 19:37:24 | INFO     | aphelion.boot.driver | [Plugins] Registered 0 plugin node type(s)
+2026-09-01 19:37:24 | INFO     | aphelion.boot.driver | Running boot stage 4/6: Project document
+2026-09-01 19:37:24 | INFO     | aphelion.boot.driver | [Project document] Loaded project 'Untitled Project'
+2026-09-01 19:37:25 | INFO     | aphelion.boot.driver | Running boot stage 5/6: Graph validation
+2026-09-01 19:37:25 | INFO     | aphelion.boot.driver | [Graph validation] Validated project graph
+2026-09-01 19:37:25 | INFO     | aphelion.boot.driver | Running boot stage 6/6: Media sources
+2026-09-01 19:37:25 | INFO     | aphelion.audio.decode | No ffprobe binary found next to bundled ffmpeg; using decode-only audio detection
+2026-09-01 19:37:25 | INFO     | aphelion.audio.decode | Decoded audio for C:/Users/jackw/OneDrive/Desktop/git-projects/aphelion-engine/aphelion-editor/samples/source.mp4: has_audio=True sample_rate=48000 channels=2 samples=806940 duration=16.811s
+2026-09-01 19:37:25 | INFO     | aphelion.boot.driver | [Media sources] Probed media sources (1 ok, 0 unavailable)
+2026-09-01 19:37:25 | INFO     | aphelion.session | Constructing editor for project 'Untitled Project'
+2026-09-01 19:37:26 | INFO     | aphelion.audio.decode | Audio slice frame=0 start_time=0.000000 duration=0.040000 actual=1920 silent=True
+2026-09-01 19:37:27 | INFO     | aphelion.session | Editor shown for 'Untitled Project'
+2026-09-01 19:37:34 | INFO     | aphelion.editor | Closing editor for project 'Untitled Project'
+2026-09-01 19:37:34 | INFO     | aphelion.session | Editor destroyed — quitting application
+2026-09-01 19:37:35 | INFO     | aphelion.runtime | Event loop exited with code 0
+2026-09-01 19:38:51 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-09-01 19:38:51 | INFO     | aphelion | Log file: C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\logs\aphelion.log
+2026-09-01 19:38:51 | INFO     | aphelion.runtime | Runtime ready — starting session
+2026-09-01 19:38:51 | INFO     | aphelion.session | Session start → project launcher
+2026-09-01 19:38:51 | INFO     | aphelion.runtime | Entering Qt event loop
+2026-09-01 19:38:51 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(680, 291, 560, 480))
+2026-09-01 19:38:52 | INFO     | aphelion.session | Project chosen (mode=open, path=C:\Users\jackw\OneDrive\Desktop\dist\Untitled Project.aph)
+2026-09-01 19:38:52 | INFO     | aphelion.session | Opening bootloader
+2026-09-01 19:38:52 | INFO     | aphelion.boot.driver | Running boot stage 1/6: Runtime
+2026-09-01 19:38:52 | INFO     | aphelion.boot.driver | [Runtime] Boot request accepted (open project)
+2026-09-01 19:38:52 | INFO     | aphelion.boot.driver | Running boot stage 2/6: Node registry
+2026-09-01 19:38:52 | INFO     | aphelion.boot.driver | [Node registry] Registered 92 built-in node type(s)
+2026-09-01 19:38:52 | INFO     | aphelion.boot.driver | Running boot stage 3/6: Plugins
+2026-09-01 19:38:52 | INFO     | aphelion.boot.driver | [Plugins] Registered 0 plugin node type(s)
+2026-09-01 19:38:52 | INFO     | aphelion.boot.driver | Running boot stage 4/6: Project document
+2026-09-01 19:38:52 | INFO     | aphelion.boot.driver | [Project document] Loaded project 'Untitled Project'
+2026-09-01 19:38:53 | INFO     | aphelion.boot.driver | Running boot stage 5/6: Graph validation
+2026-09-01 19:38:53 | INFO     | aphelion.boot.driver | [Graph validation] Validated project graph
+2026-09-01 19:38:53 | INFO     | aphelion.boot.driver | Running boot stage 6/6: Media sources
+2026-09-01 19:38:53 | INFO     | aphelion.audio.decode | No ffprobe binary found next to bundled ffmpeg; using decode-only audio detection
+2026-09-01 19:38:53 | INFO     | aphelion.audio.decode | Decoded audio for C:/Users/jackw/OneDrive/Desktop/git-projects/aphelion-engine/aphelion-editor/samples/source.mp4: has_audio=True sample_rate=48000 channels=2 samples=806940 duration=16.811s
+2026-09-01 19:38:53 | INFO     | aphelion.boot.driver | [Media sources] Probed media sources (1 ok, 0 unavailable)
+2026-09-01 19:38:53 | INFO     | aphelion.session | Constructing editor for project 'Untitled Project'
+2026-09-01 19:38:53 | INFO     | aphelion.audio.decode | Audio slice frame=0 start_time=0.000000 duration=0.040000 actual=1920 silent=True
+2026-09-01 19:38:54 | INFO     | aphelion.session | Editor shown for 'Untitled Project'
+2026-09-01 19:40:20 | INFO     | aphelion.editor | Closing editor for project 'Untitled Project'
+2026-09-01 19:40:20 | INFO     | aphelion.session | Editor destroyed — quitting application
+2026-09-01 19:40:20 | INFO     | aphelion.runtime | Event loop exited with code 0
+2026-09-01 19:40:23 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-09-01 19:40:23 | INFO     | aphelion | Log file: C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\logs\aphelion.log
+2026-09-01 19:40:23 | INFO     | aphelion.runtime | Runtime ready — starting session
+2026-09-01 19:40:23 | INFO     | aphelion.session | Session start → project launcher
+2026-09-01 19:40:23 | INFO     | aphelion.runtime | Entering Qt event loop
+2026-09-01 19:40:23 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(680, 291, 560, 480))
+2026-09-01 19:40:24 | INFO     | aphelion.session | Project chosen (mode=open, path=C:\Users\jackw\OneDrive\Desktop\dist\Untitled Project.aph)
+2026-09-01 19:40:24 | INFO     | aphelion.session | Opening bootloader
+2026-09-01 19:40:25 | INFO     | aphelion.boot.driver | Running boot stage 1/6: Runtime
+2026-09-01 19:40:25 | INFO     | aphelion.boot.driver | [Runtime] Boot request accepted (open project)
+2026-09-01 19:40:25 | INFO     | aphelion.boot.driver | Running boot stage 2/6: Node registry
+2026-09-01 19:40:25 | INFO     | aphelion.boot.driver | [Node registry] Registered 92 built-in node type(s)
+2026-09-01 19:40:25 | INFO     | aphelion.boot.driver | Running boot stage 3/6: Plugins
+2026-09-01 19:40:25 | INFO     | aphelion.boot.driver | [Plugins] Registered 0 plugin node type(s)
+2026-09-01 19:40:25 | INFO     | aphelion.boot.driver | Running boot stage 4/6: Project document
+2026-09-01 19:40:25 | INFO     | aphelion.boot.driver | [Project document] Loaded project 'Untitled Project'
+2026-09-01 19:40:25 | INFO     | aphelion.boot.driver | Running boot stage 5/6: Graph validation
+2026-09-01 19:40:25 | INFO     | aphelion.boot.driver | [Graph validation] Validated project graph
+2026-09-01 19:40:25 | INFO     | aphelion.boot.driver | Running boot stage 6/6: Media sources
+2026-09-01 19:40:25 | INFO     | aphelion.audio.decode | No ffprobe binary found next to bundled ffmpeg; using decode-only audio detection
+2026-09-01 19:40:25 | INFO     | aphelion.audio.decode | Decoded audio for C:/Users/jackw/OneDrive/Desktop/git-projects/aphelion-engine/aphelion-editor/samples/source.mp4: has_audio=True sample_rate=48000 channels=2 samples=806940 duration=16.811s
+2026-09-01 19:40:25 | INFO     | aphelion.boot.driver | [Media sources] Probed media sources (1 ok, 0 unavailable)
+2026-09-01 19:40:25 | INFO     | aphelion.session | Constructing editor for project 'Untitled Project'
+2026-09-01 19:40:26 | INFO     | aphelion.audio.decode | Audio slice frame=0 start_time=0.000000 duration=0.040000 actual=1920 silent=True
+2026-09-01 19:40:26 | INFO     | aphelion.session | Editor shown for 'Untitled Project'
+2026-09-01 19:40:34 | INFO     | aphelion.editor | Closing editor for project 'Untitled Project'
+2026-09-01 19:40:34 | INFO     | aphelion.session | Editor destroyed — quitting application
+2026-09-01 19:40:34 | INFO     | aphelion.runtime | Event loop exited with code 0
+2026-09-01 19:41:18 | INFO     | aphelion | Aphelion v0.1.0 starting
+2026-09-01 19:41:18 | INFO     | aphelion | Log file: C:\Users\jackw\OneDrive\Desktop\git-projects\aphelion-engine\aphelion-editor\logs\aphelion.log
+2026-09-01 19:41:19 | INFO     | aphelion.runtime | Runtime ready — starting session
+2026-09-01 19:41:19 | INFO     | aphelion.session | Session start → project launcher
+2026-09-01 19:41:19 | INFO     | aphelion.runtime | Entering Qt event loop
+2026-09-01 19:41:19 | INFO     | aphelion.session | Launcher presented (visible=True, geo=(680, 291, 560, 480))
+2026-09-01 19:41:21 | INFO     | aphelion.session | Project chosen (mode=open, path=C:\Users\jackw\OneDrive\Desktop\dist\Untitled Project.aph)
+2026-09-01 19:41:21 | INFO     | aphelion.session | Opening bootloader
+2026-09-01 19:41:21 | INFO     | aphelion.boot.driver | Running boot stage 1/6: Runtime
+2026-09-01 19:41:21 | INFO     | aphelion.boot.driver | [Runtime] Boot request accepted (open project)
+2026-09-01 19:41:21 | INFO     | aphelion.boot.driver | Running boot stage 2/6: Node registry
+2026-09-01 19:41:21 | INFO     | aphelion.boot.driver | [Node registry] Registered 92 built-in node type(s)
+2026-09-01 19:41:21 | INFO     | aphelion.boot.driver | Running boot stage 3/6: Plugins
+2026-09-01 19:41:21 | INFO     | aphelion.boot.driver | [Plugins] Registered 0 plugin node type(s)
+2026-09-01 19:41:21 | INFO     | aphelion.boot.driver | Running boot stage 4/6: Project document
+2026-09-01 19:41:21 | INFO     | aphelion.boot.driver | [Project document] Loaded project 'Untitled Project'
+2026-09-01 19:41:21 | INFO     | aphelion.boot.driver | Running boot stage 5/6: Graph validation
+2026-09-01 19:41:21 | INFO     | aphelion.boot.driver | [Graph validation] Validated project graph
+2026-09-01 19:41:21 | INFO     | aphelion.boot.driver | Running boot stage 6/6: Media sources
+2026-09-01 19:41:22 | INFO     | aphelion.audio.decode | No ffprobe binary found next to bundled ffmpeg; using decode-only audio detection
+2026-09-01 19:41:22 | INFO     | aphelion.audio.decode | Decoded audio for C:/Users/jackw/OneDrive/Desktop/git-projects/aphelion-engine/aphelion-editor/samples/source.mp4: has_audio=True sample_rate=48000 channels=2 samples=806940 duration=16.811s
+2026-09-01 19:41:22 | INFO     | aphelion.boot.driver | [Media sources] Probed media sources (1 ok, 0 unavailable)
+2026-09-01 19:41:22 | INFO     | aphelion.session | Constructing editor for project 'Untitled Project'
+2026-09-01 19:41:22 | INFO     | aphelion.audio.decode | Audio slice frame=0 start_time=0.000000 duration=0.040000 actual=1920 silent=True
+2026-09-01 19:41:22 | INFO     | aphelion.session | Editor shown for 'Untitled Project'
+2026-09-01 19:41:24 | INFO     | aphelion.audio.decode | Audio slice frame=1 start_time=0.040000 duration=0.040000 actual=1920 silent=True
+2026-09-01 19:41:24 | INFO     | aphelion.audio.decode | Audio slice frame=2 start_time=0.080000 duration=0.040000 actual=1920 silent=True
+2026-09-01 19:41:30 | INFO     | aphelion.audio | Audio playback engine started
+2026-09-01 19:41:31 | INFO     | aphelion.audio | Opened audio output stream device=default rate=48000 channels=2 blocksize=1024 latency=high
+2026-09-01 19:41:33 | INFO     | aphelion.audio | Audio playback engine stopped
+2026-09-01 19:41:37 | INFO     | aphelion.editor | Closing editor for project 'Untitled Project'
+2026-09-01 19:41:37 | INFO     | aphelion.session | Editor destroyed — quitting application
+2026-09-01 19:41:37 | INFO     | aphelion.runtime | Event loop exited with code 0

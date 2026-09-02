@@ -1,0 +1,7 @@
+{
+  "product": "Aphelion Editor",
+  "version": "0.1.0",
+  "install_root": "C:\\Users\\jackw\\OneDrive\\Desktop\\git-projects\\aphelion-engine\\aphelion-editor\\dist",
+  "executable": "C:\\Users\\jackw\\OneDrive\\Desktop\\git-projects\\aphelion-engine\\aphelion-editor\\dist\\AphelionEditor.exe",
+  "userdata_plugins": "C:\\Users\\jackw\\OneDrive\\Desktop\\git-projects\\aphelion-engine\\aphelion-editor\\dist\\userdata\\plugins"
+}
