@@ -42,7 +42,7 @@ Full install notes: [docs/getting-started.md](docs/getting-started.md).
 | [Architecture](docs/architecture.md) | Packages, boot, frame pipeline |
 | [Packaging](docs/packaging.md) | Wheels, freeze, Windows MSI |
 | [Development](docs/development.md) | Tests, typing, logging |
-| [Plugin SDK](../aphelion-sdk/README.md) | Writing and shipping plugins |
+
 
 ## CLI
 
