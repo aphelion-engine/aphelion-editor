@@ -1,11 +1,13 @@
 """Spatial distortion effect nodes."""
 
 from __future__ import annotations
+from core.nodes import NodeSocketType
 
 import numpy as np
+import cv2
 
 from core.nodes.base import NodeProperty
-from core.nodes.frame_base import FrameEffectNode
+from core.nodes.frame_base import FrameEffectNode, FrameNode
 from core.nodes.property_factory import slider_property, toggle_property
 from effects.distort import bulge, tile, twirl, wave_warp
 
@@ -136,3 +138,106 @@ def _distort_slider(
         description=f"Adjust {label.lower()}.",
         suffix=suffix,
     )
+
+class DisplaceNode(FrameNode):
+    """Warp an image using a displacement map."""
+
+    node_type = "Displace"
+    node_category = "Distort"
+    node_description = "Warp an image using a displacement map"
+    node_color = (180, 120, 80)
+
+    def _setup_sockets(self):
+        self.add_input("frame", NodeSocketType.Frame)
+        self.add_input("displace", NodeSocketType.Frame)
+        self.add_output("frame", NodeSocketType.Frame)
+
+        self.set_property(
+            "strength",
+            slider_property(
+                20, 0, 200,
+                priority=0,
+                group="Displace",
+                label="Strength",
+                description="Displacement intensity",
+                suffix=" px",
+            ),
+        )
+
+    def evaluate(self, frame_num):
+        del frame_num
+        frame = self.input_frame("frame")
+        disp = self.input_frame("displace")
+
+        if frame is None or disp is None:
+            return self.blank_frame()
+
+        h, w = frame.shape[:2]
+        strength = self.float_value("strength", 20.0)
+
+        dx = disp[..., 0].astype(np.float32) * strength
+        dy = disp[..., 1].astype(np.float32) * strength
+
+        xx, yy = np.meshgrid(np.arange(w), np.arange(h))
+        map_x = (xx + dx).astype(np.float32)
+        map_y = (yy + dy).astype(np.float32)
+
+        warped = cv2.remap(frame, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+        return warped
+
+class DirectionalDisplaceNode(FrameNode):
+    """Directional displacement using a grayscale map."""
+
+    node_type = "Directional Displace"
+    node_category = "Distort"
+    node_description = "Displace image in one direction using a grayscale map"
+    node_color = (160, 100, 60)
+
+    def _setup_sockets(self):
+        self.add_input("frame", NodeSocketType.Frame)
+        self.add_input("map", NodeSocketType.Frame)
+        self.add_output("frame", NodeSocketType.Frame)
+
+        self.set_property(
+            "angle",
+            slider_property(
+                0, 0, 360,
+                priority=0,
+                group="Displace",
+                label="Angle",
+                description="Displacement direction",
+                suffix="°",
+            ),
+        )
+        self.set_property(
+            "strength",
+            slider_property(
+                20, 0, 200,
+                priority=1,
+                group="Displace",
+                label="Strength",
+                description="Displacement intensity",
+                suffix=" px",
+            ),
+        )
+
+    def evaluate(self, frame_num):
+        del frame_num
+        frame = self.input_frame("frame")
+        m = self.input_frame("map")
+
+        if frame is None or m is None:
+            return self.blank_frame()
+
+        h, w = frame.shape[:2]
+        strength = self.float_value("strength", 20.0)
+        angle = np.deg2rad(self.float_value("angle", 0.0))
+
+        dx = np.cos(angle) * m[..., 0] * strength
+        dy = np.sin(angle) * m[..., 0] * strength
+
+        xx, yy = np.meshgrid(np.arange(w), np.arange(h))
+        map_x = (xx + dx).astype(np.float32)
+        map_y = (yy + dy).astype(np.float32)
+
+        return cv2.remap(frame, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)

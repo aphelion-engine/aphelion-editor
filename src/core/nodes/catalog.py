@@ -48,7 +48,14 @@ from core.nodes.creative_nodes import (
     RippleNode,
     Transform3DNode,
 )
-from core.nodes.distort_nodes import BulgeNode, TileNode, TwirlNode, WaveWarpNode
+from core.nodes.distort_nodes import (
+    BulgeNode,
+    TileNode,
+    TwirlNode,
+    WaveWarpNode,
+    DisplaceNode,
+    DirectionalDisplaceNode
+)
 from core.nodes.filter_effects import (
     DenoiseNode,
     EdgeDetectNode,
@@ -63,6 +70,14 @@ from core.nodes.generator_nodes import (
     ColorBarsNode,
     GradientNode,
     SolidColorNode,
+    RampNode,
+    UVMapNode,
+    LensFlareNode,
+    HeatDistortionNode,
+    FogNode,
+    NoiseNode,
+    VolumetricLightNode,
+    ZFogNode
 )
 from core.nodes.image_input import ImageInputNode
 from core.nodes.keying_nodes import (
@@ -142,6 +157,15 @@ BUILTIN_NODE_TYPES: tuple[type[Node], ...] = (
     GradientNode,
     CheckerboardNode,
     ColorBarsNode,
+    RampNode,
+    UVMapNode,
+    LensFlareNode,
+    HeatDistortionNode,
+    FogNode,
+    NoiseNode,
+    VolumetricLightNode,
+    ZFogNode,
+
     # Color
     ColorGradingNode,
     ExposureContrastNode,
@@ -193,6 +217,8 @@ BUILTIN_NODE_TYPES: tuple[type[Node], ...] = (
     BulgeNode,
     WaveWarpNode,
     TileNode,
+    DisplaceNode,
+    DirectionalDisplaceNode,
     # Effects / stylize
     FilmGrainNode,
     ScanlinesNode,
@@ -208,6 +234,7 @@ BUILTIN_NODE_TYPES: tuple[type[Node], ...] = (
     CombineMasksNode,
     PremultNode,
     CleanPlateNode,
+    DespillProNode,
 
     # Roto
     RotoNode,

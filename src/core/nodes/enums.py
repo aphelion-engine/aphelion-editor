@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
-from enum import IntEnum, auto
+from enum import IntEnum, auto, Enum
 
+class NoiseType(Enum):
+    PERLIN = "perlin"
+    SIMPLEX = "simplex"
+    FBM = "fbm"
 
 class BlendMode(IntEnum):
     """Pixel combination used by compositing nodes."""
