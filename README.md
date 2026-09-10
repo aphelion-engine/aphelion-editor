@@ -71,4 +71,4 @@ UI stays in `ui/`. Core logic is Qt-free. Frames are `float32` RGB in `[0, 1]`.
 
 ## License
 
-Proprietary. Same for the plugin SDK; see `../aphelion-sdk/pyproject.toml`.
+[LICENSE](/LICENSE)
