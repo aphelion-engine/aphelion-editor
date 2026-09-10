@@ -25,7 +25,9 @@ def transform_3d(
     height: int
     width: int
     height, width = source.shape[:2]
+    # pyrefly: ignore [bad-assignment]
     corners: np.ndarray = np.float32(
+        # pyrefly: ignore [bad-argument-type]
         [[0.0, 0.0], [float(width), 0.0], [float(width), float(height)], [0.0, float(height)]]
     )
     center: np.ndarray = np.array([width * 0.5, height * 0.5], dtype=np.float32)
@@ -139,8 +141,13 @@ def chromatic_aberration(
     *,
     amount: float,
     angle_degrees: float,
+    radial: float = 0.0,
 ) -> np.ndarray:
-    """Shift red and blue channels in opposite directions."""
+    """Shift red and blue channels in opposite directions.
+
+    ``radial`` blends in a scale-based fringe, which is how real lens
+    dispersion behaves: negligible in the center, strongest at the edges.
+    """
     source: np.ndarray = ensure_rgb_f32(frame)
     height: int
     width: int
@@ -150,10 +157,35 @@ def chromatic_aberration(
     shift_y: float = math.sin(radians) * amount * height * 0.02
     red: np.ndarray = _shift_channel(source[:, :, 0], shift_x, shift_y)
     blue: np.ndarray = _shift_channel(source[:, :, 2], -shift_x, -shift_y)
+
+    radial_amount: float = float(radial)
+    if abs(radial_amount) > 1e-6:
+        center: tuple[float, float] = (width * 0.5, height * 0.5)
+        spread: float = 1.0 + radial_amount * 0.02
+        red = _scale_channel(red, center, spread, (width, height))
+        blue = _scale_channel(blue, center, 1.0 / max(1e-3, spread), (width, height))
+
     merged: np.ndarray = source.copy()
     merged[:, :, 0] = red
     merged[:, :, 2] = blue
     return merged
+
+
+def _scale_channel(
+    channel: np.ndarray,
+    center: tuple[float, float],
+    scale: float,
+    size: tuple[int, int],
+) -> np.ndarray:
+    """Scale one channel about ``center`` to emulate radial dispersion."""
+    matrix: np.ndarray = cv2.getRotationMatrix2D(center, 0.0, scale)
+    return cv2.warpAffine(
+        channel,
+        matrix,
+        size,
+        flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_REPLICATE,
+    )
 
 
 def rgb_split(
@@ -246,6 +278,7 @@ def ripple(
 
 def _shift_channel(channel: np.ndarray, shift_x: float, shift_y: float) -> np.ndarray:
     """Translate a single channel with zero border fill."""
+    # pyrefly: ignore [bad-assignment]
     matrix: np.ndarray = np.float32([[1.0, 0.0, shift_x], [0.0, 1.0, shift_y]])
     return cv2.warpAffine(
         channel,

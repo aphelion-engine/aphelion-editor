@@ -7,9 +7,11 @@ from enum import IntEnum, auto
 import numpy as np
 
 from core.audio import AudioData, FrameWithAudio
-from core.nodes.base import NodeProperty, NodePropertyInputType, NodeSocketType, NodeValue
+from core.nodes.base import (NodeProperty, NodePropertyInputType,
+                             NodeSocketType, NodeValue)
 from core.nodes.frame_base import FrameNode
-from core.nodes.property_factory import choice_property, number_property, slider_property, toggle_property
+from core.nodes.property_factory import (choice_property, number_property,
+                                         slider_property, toggle_property)
 from utils.logging_setup import get_logger
 
 AUDIO_CATEGORY: str = "Audio"
@@ -63,7 +65,8 @@ def _moving_average(samples: np.ndarray, radius: int) -> np.ndarray:
     kernel = np.ones(radius, dtype=np.float32) / float(radius)
     filtered = np.empty_like(samples)
     for channel in range(samples.shape[1]):
-        filtered[:, channel] = np.convolve(samples[:, channel], kernel, mode="same")
+        filtered[:, channel] = np.convolve(
+            samples[:, channel], kernel, mode="same")
     return filtered
 
 
@@ -81,8 +84,10 @@ def _apply_peaking_eq(samples: np.ndarray, sample_rate: int, bands: list[dict[st
         q = max(0.2, min(10.0, float(band.get("q", 1.0))))
         width = max(0.08, 1.25 / q)
         shape = np.exp(-0.5 * ((log_freqs - np.log2(center)) / width) ** 2)
-        response *= np.power(np.float32(_db_to_gain(gain_db)), shape, dtype=np.float32)
-    wet = np.fft.irfft(spectrum * response[:, np.newaxis], n=source.shape[0], axis=0)
+        response *= np.power(np.float32(_db_to_gain(gain_db)),
+                             shape, dtype=np.float32)
+    wet = np.fft.irfft(
+        spectrum * response[:, np.newaxis], n=source.shape[0], axis=0)
     return np.clip(wet.astype(np.float32, copy=False), -1.0, 1.0)
 
 
@@ -111,23 +116,28 @@ def _resample_audio_to(samples: np.ndarray, source_rate: int, target_rate: int, 
         return samples
     samples_2d = _ensure_2d(samples)
     source_len = samples_2d.shape[0]
-    target_len = max(1, int(round(source_len * float(target_rate) / float(source_rate))))
+    target_len = max(
+        1, int(round(source_len * float(target_rate) / float(source_rate))))
     if target_len == source_len:
         return samples_2d
     src_positions = np.arange(source_len, dtype=np.float32)
-    dst_positions = np.linspace(0.0, max(0.0, float(source_len - 1)), target_len, dtype=np.float32)
+    dst_positions = np.linspace(
+        0.0, max(0.0, float(source_len - 1)), target_len, dtype=np.float32)
     if quality == AudioMixQuality.Fast:
-        indices = np.clip(np.rint(dst_positions).astype(np.int32), 0, source_len - 1)
+        indices = np.clip(np.rint(dst_positions).astype(
+            np.int32), 0, source_len - 1)
         return samples_2d[indices]
     out = np.empty((target_len, samples_2d.shape[1]), dtype=np.float32)
     for channel in range(samples_2d.shape[1]):
-        out[:, channel] = np.interp(dst_positions, src_positions, samples_2d[:, channel]).astype(np.float32, copy=False)
+        out[:, channel] = np.interp(
+            dst_positions, src_positions, samples_2d[:, channel]).astype(np.float32, copy=False)
     if quality == AudioMixQuality.High and target_len >= 8:
         kernel = np.array([1.0, 4.0, 6.0, 4.0, 1.0], dtype=np.float32)
         kernel /= np.sum(kernel)
         smoothed = np.empty_like(out)
         for channel in range(out.shape[1]):
-            smoothed[:, channel] = np.convolve(out[:, channel], kernel, mode="same")
+            smoothed[:, channel] = np.convolve(
+                out[:, channel], kernel, mode="same")
         return smoothed
     return out
 
@@ -135,14 +145,16 @@ def _resample_audio_to(samples: np.ndarray, source_rate: int, target_rate: int, 
 def _match_audio_layout(audio: AudioData, sample_rate: int, channels: int, quality: AudioMixQuality = AudioMixQuality.Balanced) -> np.ndarray:
     samples = _ensure_2d(np.asarray(audio.samples, dtype=np.float32))
     if audio.sample_rate != sample_rate:
-        samples = _resample_audio_to(samples, int(audio.sample_rate), int(sample_rate), quality)
+        samples = _resample_audio_to(samples, int(
+            audio.sample_rate), int(sample_rate), quality)
     if samples.shape[1] > channels:
         samples = samples[:, :channels]
     elif samples.shape[1] < channels:
         if samples.shape[1] == 1 and channels == 2:
             samples = np.repeat(samples, 2, axis=1)
         else:
-            samples = np.concatenate((samples, np.zeros((samples.shape[0], channels - samples.shape[1]), dtype=np.float32)), axis=1)
+            samples = np.concatenate((samples, np.zeros(
+                (samples.shape[0], channels - samples.shape[1]), dtype=np.float32)), axis=1)
     return samples
 
 
@@ -203,9 +215,12 @@ def _effect_levels(node: FrameNode, group: str, default_wet: float = 100.0) -> t
 
 
 def _add_standard_effect_mix(node: FrameNode, *, group: str, wet_default: int = 100, output_priority: int = 99) -> None:
-    node.set_property("dry", slider_property(100, 0, 200, priority=90, group=group, label="Dry", description="Dry/original signal level.", suffix="%"))
-    node.set_property("wet", slider_property(wet_default, 0, 200, priority=91, group=group, label="Wet", description="Processed signal level.", suffix="%"))
-    node.set_property("output_gain", slider_property(100, 0, 200, priority=output_priority, group=group, label="Output", description="Final output level after dry/wet mix.", suffix="%"))
+    node.set_property("dry", slider_property(100, 0, 200, priority=90, group=group,
+                      label="Dry", description="Dry/original signal level.", suffix="%"))
+    node.set_property("wet", slider_property(wet_default, 0, 200, priority=91,
+                      group=group, label="Wet", description="Processed signal level.", suffix="%"))
+    node.set_property("output_gain", slider_property(100, 0, 200, priority=output_priority,
+                      group=group, label="Output", description="Final output level after dry/wet mix.", suffix="%"))
 
 
 class AudioExtractNode(FrameNode):
@@ -225,7 +240,8 @@ class AudioExtractNode(FrameNode):
         if payload is not None:
             audio = payload.audio
             if audio is None:
-                audio = AudioData.silence(duration=1.0 / max(self._project_fps, 1.0))
+                audio = AudioData.silence(
+                    duration=1.0 / max(self._project_fps, 1.0))
             silent = AudioData.silence(
                 duration=audio.duration,
                 sample_rate=audio.sample_rate,
@@ -269,7 +285,8 @@ class AudioAttachNode(FrameNode):
     def evaluate(self, frame_num: int) -> np.ndarray | FrameWithAudio:
         del frame_num
         payload = self.input_frame_with_audio("frame")
-        frame = payload.frame if payload is not None else self.input_frame("frame")
+        frame = payload.frame if payload is not None else self.input_frame(
+            "frame")
         if frame is None:
             return self.blank_frame()
         audio_input = self.get_input_value("audio")
@@ -292,22 +309,27 @@ class AudioGainNode(FrameNode):
     def _setup_sockets(self) -> None:
         self.add_input("audio", NodeSocketType.Audio)
         self.add_output("audio", NodeSocketType.Audio)
-        self.set_property("enabled", toggle_property(True, priority=0, group="Gain", label="Enabled", description="Bypass this node without removing it."))
-        self.set_property("gain", slider_property(100, 0, 300, priority=10, group="Gain", label="Gain", description="Linear output gain.", suffix="%"))
-        self.set_property("mute", toggle_property(False, priority=11, group="Gain", label="Mute", description="Silence the output."))
+        self.set_property("enabled", toggle_property(True, priority=0, group="Gain",
+                          label="Enabled", description="Bypass this node without removing it."))
+        self.set_property("gain", slider_property(100, 0, 300, priority=10,
+                          group="Gain", label="Gain", description="Linear output gain.", suffix="%"))
+        self.set_property("mute", toggle_property(
+            False, priority=11, group="Gain", label="Mute", description="Silence the output."))
 
     def evaluate(self, frame_num: int) -> NodeValue:
         del frame_num
         audio, frame = _input_audio_payload(self, "audio")
         if audio is None:
-            silent = AudioData.silence(duration=1.0 / max(self._project_fps, 1.0))
+            silent = AudioData.silence(
+                duration=1.0 / max(self._project_fps, 1.0))
             return _effect_result(silent, frame)
         if not self.bool_value("enabled", True):
             return _effect_result(audio, frame)
         if self.bool_value("mute", False):
             return _effect_result(AudioData.silence(duration=audio.duration, sample_rate=audio.sample_rate, channels=audio.num_channels), frame)
         gain = self.float_value("gain", 100.0) / 100.0
-        samples = np.clip(np.asarray(audio.samples, dtype=np.float32) * gain, -1.0, 1.0)
+        samples = np.clip(np.asarray(
+            audio.samples, dtype=np.float32) * gain, -1.0, 1.0)
         return _effect_result(AudioData(samples=np.ascontiguousarray(samples), sample_rate=audio.sample_rate), frame)
 
 
@@ -321,12 +343,18 @@ class AudioMixNode(FrameNode):
         self.add_input("a", NodeSocketType.Audio)
         self.add_input("b", NodeSocketType.Audio)
         self.add_output("audio", NodeSocketType.Audio)
-        self.set_property("mix", slider_property(50, 0, 100, priority=0, group="Mix", label="Balance", description="Crossfade between A and B.", suffix="%"))
-        self.set_property("a_level", slider_property(100, 0, 200, priority=1, group="Mix", label="A Level", description="Level applied to input A.", suffix="%"))
-        self.set_property("b_level", slider_property(100, 0, 200, priority=2, group="Mix", label="B Level", description="Level applied to input B.", suffix="%"))
-        self.set_property("quality", choice_property(AudioMixQuality.Balanced, priority=3, group="Mix", label="Quality", description="Resampling quality used when inputs differ."))
-        self.set_property("normalize", toggle_property(True, priority=4, group="Mix", label="Normalize", description="Prevent clipping by normalizing the mixed output."))
-        self.set_property("output_gain", slider_property(100, 0, 200, priority=5, group="Mix", label="Output", description="Final output level.", suffix="%"))
+        self.set_property("mix", slider_property(50, 0, 100, priority=0, group="Mix",
+                          label="Balance", description="Crossfade between A and B.", suffix="%"))
+        self.set_property("a_level", slider_property(100, 0, 200, priority=1, group="Mix",
+                          label="A Level", description="Level applied to input A.", suffix="%"))
+        self.set_property("b_level", slider_property(100, 0, 200, priority=2, group="Mix",
+                          label="B Level", description="Level applied to input B.", suffix="%"))
+        self.set_property("quality", choice_property(AudioMixQuality.Balanced, priority=3,
+                          group="Mix", label="Quality", description="Resampling quality used when inputs differ."))
+        self.set_property("normalize", toggle_property(True, priority=4, group="Mix",
+                          label="Normalize", description="Prevent clipping by normalizing the mixed output."))
+        self.set_property("output_gain", slider_property(100, 0, 200, priority=5,
+                          group="Mix", label="Output", description="Final output level.", suffix="%"))
 
     def evaluate(self, frame_num: int) -> AudioData:
         del frame_num
@@ -336,7 +364,8 @@ class AudioMixNode(FrameNode):
             return audio_b if audio_b is not None else AudioData.silence(duration=1.0 / max(self._project_fps, 1.0))
         if audio_b is None:
             return audio_a
-        quality = self.enum_value("quality", AudioMixQuality, AudioMixQuality.Balanced)
+        quality = self.enum_value(
+            "quality", AudioMixQuality, AudioMixQuality.Balanced)
         sample_rate = max(audio_a.sample_rate, audio_b.sample_rate)
         channels = max(audio_a.num_channels, audio_b.num_channels)
         a = _match_audio_layout(audio_a, sample_rate, channels, quality)
@@ -365,18 +394,22 @@ class AudioDelayNode(FrameNode):
     def _setup_sockets(self) -> None:
         self.add_input("audio", NodeSocketType.Audio)
         self.add_output("audio", NodeSocketType.Audio)
-        self.set_property("delay_ms", number_property(120.0, 1.0, 2000.0, priority=0, group="Delay", label="Delay", description="Delay time in milliseconds.", suffix=" ms"))
-        self.set_property("feedback", slider_property(35, 0, 95, priority=1, group="Delay", label="Feedback", description="Amount of delayed signal fed back.", suffix="%"))
+        self.set_property("delay_ms", number_property(120.0, 1.0, 2000.0, priority=0, group="Delay",
+                          label="Delay", description="Delay time in milliseconds.", suffix=" ms"))
+        self.set_property("feedback", slider_property(35, 0, 95, priority=1, group="Delay",
+                          label="Feedback", description="Amount of delayed signal fed back.", suffix="%"))
         _add_standard_effect_mix(self, group="Delay", wet_default=70)
 
     def evaluate(self, frame_num: int) -> NodeValue:
         del frame_num
         audio, frame = _input_audio_payload(self, "audio")
         if audio is None:
-            silent = AudioData.silence(duration=1.0 / max(self._project_fps, 1.0))
+            silent = AudioData.silence(
+                duration=1.0 / max(self._project_fps, 1.0))
             return _effect_result(silent, frame)
         samples = _ensure_2d(np.asarray(audio.samples, dtype=np.float32))
-        delay_samples = max(1, int(audio.sample_rate * self.float_value("delay_ms", 120.0) / 1000.0))
+        delay_samples = max(
+            1, int(audio.sample_rate * self.float_value("delay_ms", 120.0) / 1000.0))
         feedback = self.float_value("feedback", 35.0) / 100.0
         wet = np.zeros_like(samples)
         wet += samples * 0.2
@@ -384,8 +417,10 @@ class AudioDelayNode(FrameNode):
             wet[i] += samples[i - delay_samples]
             if i >= delay_samples * 2:
                 wet[i] += wet[i - delay_samples] * feedback
-        dry_level, wet_level, output_gain = _effect_levels(self, "Delay", default_wet=70.0)
-        out = _apply_output_gain(_blend_dry_wet(samples, wet, dry_level, wet_level), output_gain)
+        dry_level, wet_level, output_gain = _effect_levels(
+            self, "Delay", default_wet=70.0)
+        out = _apply_output_gain(_blend_dry_wet(
+            samples, wet, dry_level, wet_level), output_gain)
         return _effect_result(_wrap_audio(out, audio.sample_rate, audio.num_channels), frame)
 
 
@@ -398,16 +433,20 @@ class AudioReverbNode(FrameNode):
     def _setup_sockets(self) -> None:
         self.add_input("audio", NodeSocketType.Audio)
         self.add_output("audio", NodeSocketType.Audio)
-        self.set_property("decay", slider_property(55, 0, 95, priority=0, group="Reverb", label="Decay", description="Strength of successive reflections.", suffix="%"))
-        self.set_property("pre_delay_ms", number_property(35.0, 0.0, 250.0, priority=1, group="Reverb", label="Pre-Delay", description="Gap before the first reflection.", suffix=" ms"))
-        self.set_property("reflections", slider_property(4, 1, 8, priority=2, group="Reverb", label="Reflections", description="Number of simulated reflections."))
+        self.set_property("decay", slider_property(55, 0, 95, priority=0, group="Reverb",
+                          label="Decay", description="Strength of successive reflections.", suffix="%"))
+        self.set_property("pre_delay_ms", number_property(35.0, 0.0, 250.0, priority=1, group="Reverb",
+                          label="Pre-Delay", description="Gap before the first reflection.", suffix=" ms"))
+        self.set_property("reflections", slider_property(4, 1, 8, priority=2, group="Reverb",
+                          label="Reflections", description="Number of simulated reflections."))
         _add_standard_effect_mix(self, group="Reverb", wet_default=70)
 
     def evaluate(self, frame_num: int) -> NodeValue:
         del frame_num
         audio, frame = _input_audio_payload(self, "audio")
         if audio is None:
-            silent = AudioData.silence(duration=1.0 / max(self._project_fps, 1.0))
+            silent = AudioData.silence(
+                duration=1.0 / max(self._project_fps, 1.0))
             return _effect_result(silent, frame)
         samples = _ensure_2d(np.asarray(audio.samples, dtype=np.float32))
         wet = _simple_reverb(
@@ -417,8 +456,10 @@ class AudioReverbNode(FrameNode):
             self.float_value("pre_delay_ms", 35.0),
             self.int_value("reflections", 4),
         )
-        dry_level, wet_level, output_gain = _effect_levels(self, "Reverb", default_wet=70.0)
-        out = _apply_output_gain(_blend_dry_wet(samples, wet, dry_level, wet_level), output_gain)
+        dry_level, wet_level, output_gain = _effect_levels(
+            self, "Reverb", default_wet=70.0)
+        out = _apply_output_gain(_blend_dry_wet(
+            samples, wet, dry_level, wet_level), output_gain)
         return _effect_result(_wrap_audio(out, audio.sample_rate, audio.num_channels), frame)
 
 
@@ -431,18 +472,24 @@ class AudioEqNode(FrameNode):
     def _setup_sockets(self) -> None:
         self.add_input("audio", NodeSocketType.Audio)
         self.add_output("audio", NodeSocketType.Audio)
-        self.set_property("preset", choice_property(EqBandMode.Balanced, priority=0, group="EQ", label="Preset", description="Quick tone-shaping preset."))
-        self.set_property("low_gain", slider_property(0, -24, 24, priority=1, group="EQ", label="Low", description="Low band gain.", suffix=" dB"))
-        self.set_property("mid_gain", slider_property(0, -24, 24, priority=2, group="EQ", label="Mid", description="Mid band gain.", suffix=" dB"))
-        self.set_property("high_gain", slider_property(0, -24, 24, priority=3, group="EQ", label="High", description="High band gain.", suffix=" dB"))
-        self.set_property("eq_curve", NodeProperty(input_type=NodePropertyInputType.Custom, value={"low": 0, "mid": 0, "high": 0}, priority=4, group="EQ", label="EQ Curve", description="Visual EQ editor."))
+        self.set_property("preset", choice_property(EqBandMode.Balanced, priority=0,
+                          group="EQ", label="Preset", description="Quick tone-shaping preset."))
+        self.set_property("low_gain", slider_property(0, -24, 24, priority=1,
+                          group="EQ", label="Low", description="Low band gain.", suffix=" dB"))
+        self.set_property("mid_gain", slider_property(0, -24, 24, priority=2,
+                          group="EQ", label="Mid", description="Mid band gain.", suffix=" dB"))
+        self.set_property("high_gain", slider_property(0, -24, 24, priority=3,
+                          group="EQ", label="High", description="High band gain.", suffix=" dB"))
+        self.set_property("eq_curve", NodeProperty(input_type=NodePropertyInputType.Custom, value={
+                          "low": 0, "mid": 0, "high": 0}, priority=4, group="EQ", label="EQ Curve", description="Visual EQ editor."))
         _add_standard_effect_mix(self, group="EQ", wet_default=100)
 
     def evaluate(self, frame_num: int) -> NodeValue:
         del frame_num
         audio, frame = _input_audio_payload(self, "audio")
         if audio is None:
-            silent = AudioData.silence(duration=1.0 / max(self._project_fps, 1.0))
+            silent = AudioData.silence(
+                duration=1.0 / max(self._project_fps, 1.0))
             return _effect_result(silent, frame)
         samples = _ensure_2d(np.asarray(audio.samples, dtype=np.float32))
         preset = self.enum_value("preset", EqBandMode, EqBandMode.Balanced)
@@ -460,25 +507,33 @@ class AudioEqNode(FrameNode):
             EqBandMode.Air: (0.0, -1.0, 5.0),
             EqBandMode.Custom: (low_db, mid_db, high_db),
         }
-        low_db, mid_db, high_db = preset_map.get(preset, (low_db, mid_db, high_db))
+        low_db, mid_db, high_db = preset_map.get(
+            preset, (low_db, mid_db, high_db))
         eq_curve_prop = self.get_property("eq_curve")
         custom_bands: list[dict[str, float]] = []
         if isinstance(eq_curve_prop.value if eq_curve_prop else None, dict):
             raw_bands = eq_curve_prop.value.get("bands")
             if isinstance(raw_bands, list):
-                custom_bands = [dict(item) for item in raw_bands if isinstance(item, dict)]
+                custom_bands = [dict(item)
+                                for item in raw_bands if isinstance(item, dict)]
         if preset == EqBandMode.Custom and custom_bands:
             wet = _apply_peaking_eq(samples, audio.sample_rate, custom_bands)
         else:
-            low = _moving_average(samples, max(3, int(audio.sample_rate * 0.002)))
-            high = samples - _moving_average(samples, max(3, int(audio.sample_rate * 0.0005)))
+            low = _moving_average(samples, max(
+                3, int(audio.sample_rate * 0.002)))
+            high = samples - \
+                _moving_average(samples, max(
+                    3, int(audio.sample_rate * 0.0005)))
             mid = samples - low - high
             low_gain = 10.0 ** (low_db / 20.0)
             mid_gain = 10.0 ** (mid_db / 20.0)
             high_gain = 10.0 ** (high_db / 20.0)
-            wet = np.clip(low * low_gain + mid * mid_gain + high * high_gain, -1.0, 1.0)
-        dry_level, wet_level, output_gain = _effect_levels(self, "EQ", default_wet=100.0)
-        out = _apply_output_gain(_blend_dry_wet(samples, wet, dry_level, wet_level), output_gain)
+            wet = np.clip(low * low_gain + mid * mid_gain +
+                          high * high_gain, -1.0, 1.0)
+        dry_level, wet_level, output_gain = _effect_levels(
+            self, "EQ", default_wet=100.0)
+        out = _apply_output_gain(_blend_dry_wet(
+            samples, wet, dry_level, wet_level), output_gain)
         return _effect_result(_wrap_audio(out, audio.sample_rate, audio.num_channels), frame)
 
 
@@ -491,14 +546,16 @@ class AudioPanNode(FrameNode):
     def _setup_sockets(self) -> None:
         self.add_input("audio", NodeSocketType.Audio)
         self.add_output("audio", NodeSocketType.Audio)
-        self.set_property("pan", slider_property(0, -100, 100, priority=0, group="Pan", label="Pan", description="Left/right stereo placement.", suffix="%"))
+        self.set_property("pan", slider_property(0, -100, 100, priority=0, group="Pan",
+                          label="Pan", description="Left/right stereo placement.", suffix="%"))
         _add_standard_effect_mix(self, group="Pan", wet_default=100)
 
     def evaluate(self, frame_num: int) -> NodeValue:
         del frame_num
         audio, frame = _input_audio_payload(self, "audio")
         if audio is None:
-            silent = AudioData.silence(duration=1.0 / max(self._project_fps, 1.0), channels=2)
+            silent = AudioData.silence(
+                duration=1.0 / max(self._project_fps, 1.0), channels=2)
             return _effect_result(silent, frame)
         samples = _ensure_2d(np.asarray(audio.samples, dtype=np.float32))
         if samples.shape[1] == 1:
@@ -509,8 +566,10 @@ class AudioPanNode(FrameNode):
         wet = np.empty_like(samples)
         wet[:, 0] = samples[:, 0] * left
         wet[:, 1] = samples[:, 1] * right
-        dry_level, wet_level, output_gain = _effect_levels(self, "Pan", default_wet=100.0)
-        out = _apply_output_gain(_blend_dry_wet(samples, wet, dry_level, wet_level), output_gain)
+        dry_level, wet_level, output_gain = _effect_levels(
+            self, "Pan", default_wet=100.0)
+        out = _apply_output_gain(_blend_dry_wet(
+            samples, wet, dry_level, wet_level), output_gain)
         return _effect_result(_wrap_audio(out, audio.sample_rate, 2), frame)
 
 
@@ -523,16 +582,20 @@ class AudioCompressorNode(FrameNode):
     def _setup_sockets(self) -> None:
         self.add_input("audio", NodeSocketType.Audio)
         self.add_output("audio", NodeSocketType.Audio)
-        self.set_property("threshold", slider_property(70, 1, 100, priority=0, group="Compressor", label="Threshold", description="Compression threshold.", suffix="%"))
-        self.set_property("ratio", number_property(4.0, 1.0, 20.0, priority=1, group="Compressor", label="Ratio", description="Compression ratio above threshold.", suffix=":1"))
-        self.set_property("makeup_gain", slider_property(100, 0, 200, priority=2, group="Compressor", label="Makeup", description="Output gain after compression.", suffix="%"))
+        self.set_property("threshold", slider_property(70, 1, 100, priority=0, group="Compressor",
+                          label="Threshold", description="Compression threshold.", suffix="%"))
+        self.set_property("ratio", number_property(4.0, 1.0, 20.0, priority=1, group="Compressor",
+                          label="Ratio", description="Compression ratio above threshold.", suffix=":1"))
+        self.set_property("makeup_gain", slider_property(100, 0, 200, priority=2, group="Compressor",
+                          label="Makeup", description="Output gain after compression.", suffix="%"))
         _add_standard_effect_mix(self, group="Compressor", wet_default=100)
 
     def evaluate(self, frame_num: int) -> NodeValue:
         del frame_num
         audio, frame = _input_audio_payload(self, "audio")
         if audio is None:
-            silent = AudioData.silence(duration=1.0 / max(self._project_fps, 1.0))
+            silent = AudioData.silence(
+                duration=1.0 / max(self._project_fps, 1.0))
             return _effect_result(silent, frame)
         samples = np.asarray(audio.samples, dtype=np.float32)
         threshold = self.float_value("threshold", 70.0) / 100.0
@@ -544,8 +607,10 @@ class AudioCompressorNode(FrameNode):
         compressed = np.copy(magnitude)
         compressed[over] = threshold + (compressed[over] - threshold) / ratio
         wet = np.clip(sign * compressed * makeup, -1.0, 1.0)
-        dry_level, wet_level, output_gain = _effect_levels(self, "Compressor", default_wet=100.0)
-        out = _apply_output_gain(_blend_dry_wet(_ensure_2d(samples), _ensure_2d(wet), dry_level, wet_level), output_gain)
+        dry_level, wet_level, output_gain = _effect_levels(
+            self, "Compressor", default_wet=100.0)
+        out = _apply_output_gain(_blend_dry_wet(_ensure_2d(
+            samples), _ensure_2d(wet), dry_level, wet_level), output_gain)
         return _effect_result(_wrap_audio(out, audio.sample_rate, audio.num_channels), frame)
 
 
@@ -558,20 +623,24 @@ class AudioLimiterNode(FrameNode):
     def _setup_sockets(self) -> None:
         self.add_input("audio", NodeSocketType.Audio)
         self.add_output("audio", NodeSocketType.Audio)
-        self.set_property("ceiling", slider_property(95, 1, 100, priority=0, group="Limiter", label="Ceiling", description="Maximum allowed peak level.", suffix="%"))
+        self.set_property("ceiling", slider_property(95, 1, 100, priority=0, group="Limiter",
+                          label="Ceiling", description="Maximum allowed peak level.", suffix="%"))
         _add_standard_effect_mix(self, group="Limiter", wet_default=100)
 
     def evaluate(self, frame_num: int) -> NodeValue:
         del frame_num
         audio, frame = _input_audio_payload(self, "audio")
         if audio is None:
-            silent = AudioData.silence(duration=1.0 / max(self._project_fps, 1.0))
+            silent = AudioData.silence(
+                duration=1.0 / max(self._project_fps, 1.0))
             return _effect_result(silent, frame)
         ceiling = self.float_value("ceiling", 95.0) / 100.0
         samples = _ensure_2d(np.asarray(audio.samples, dtype=np.float32))
         wet = np.clip(samples, -ceiling, ceiling)
-        dry_level, wet_level, output_gain = _effect_levels(self, "Limiter", default_wet=100.0)
-        out = _apply_output_gain(_blend_dry_wet(samples, wet, dry_level, wet_level), output_gain)
+        dry_level, wet_level, output_gain = _effect_levels(
+            self, "Limiter", default_wet=100.0)
+        out = _apply_output_gain(_blend_dry_wet(
+            samples, wet, dry_level, wet_level), output_gain)
         return _effect_result(_wrap_audio(out, audio.sample_rate, audio.num_channels), frame)
 
 
@@ -584,22 +653,27 @@ class AudioGateNode(FrameNode):
     def _setup_sockets(self) -> None:
         self.add_input("audio", NodeSocketType.Audio)
         self.add_output("audio", NodeSocketType.Audio)
-        self.set_property("threshold", slider_property(4, 0, 40, priority=0, group="Gate", label="Threshold", description="Signals below this level are attenuated.", suffix="%"))
-        self.set_property("reduction", slider_property(0, 0, 100, priority=1, group="Gate", label="Reduction", description="Remaining level below the threshold.", suffix="%"))
+        self.set_property("threshold", slider_property(4, 0, 40, priority=0, group="Gate",
+                          label="Threshold", description="Signals below this level are attenuated.", suffix="%"))
+        self.set_property("reduction", slider_property(0, 0, 100, priority=1, group="Gate",
+                          label="Reduction", description="Remaining level below the threshold.", suffix="%"))
         _add_standard_effect_mix(self, group="Gate", wet_default=100)
 
     def evaluate(self, frame_num: int) -> NodeValue:
         del frame_num
         audio, frame = _input_audio_payload(self, "audio")
         if audio is None:
-            silent = AudioData.silence(duration=1.0 / max(self._project_fps, 1.0))
+            silent = AudioData.silence(
+                duration=1.0 / max(self._project_fps, 1.0))
             return _effect_result(silent, frame)
         samples = _ensure_2d(np.asarray(audio.samples, dtype=np.float32))
         threshold = self.float_value("threshold", 4.0) / 100.0
         reduction = self.float_value("reduction", 0.0) / 100.0
         wet = _apply_audio_gate(samples, threshold, reduction)
-        dry_level, wet_level, output_gain = _effect_levels(self, "Gate", default_wet=100.0)
-        out = _apply_output_gain(_blend_dry_wet(samples, wet, dry_level, wet_level), output_gain)
+        dry_level, wet_level, output_gain = _effect_levels(
+            self, "Gate", default_wet=100.0)
+        out = _apply_output_gain(_blend_dry_wet(
+            samples, wet, dry_level, wet_level), output_gain)
         return _effect_result(_wrap_audio(out, audio.sample_rate, audio.num_channels), frame)
 
 
@@ -612,14 +686,16 @@ class AudioNormalizeNode(FrameNode):
     def _setup_sockets(self) -> None:
         self.add_input("audio", NodeSocketType.Audio)
         self.add_output("audio", NodeSocketType.Audio)
-        self.set_property("target_peak", slider_property(95, 1, 100, priority=0, group="Normalize", label="Target Peak", description="Desired peak output level.", suffix="%"))
+        self.set_property("target_peak", slider_property(95, 1, 100, priority=0, group="Normalize",
+                          label="Target Peak", description="Desired peak output level.", suffix="%"))
         _add_standard_effect_mix(self, group="Normalize", wet_default=100)
 
     def evaluate(self, frame_num: int) -> NodeValue:
         del frame_num
         audio, frame = _input_audio_payload(self, "audio")
         if audio is None:
-            silent = AudioData.silence(duration=1.0 / max(self._project_fps, 1.0))
+            silent = AudioData.silence(
+                duration=1.0 / max(self._project_fps, 1.0))
             return _effect_result(silent, frame)
         samples = _ensure_2d(np.asarray(audio.samples, dtype=np.float32))
         peak = float(np.max(np.abs(samples))) if samples.size else 0.0
@@ -627,8 +703,10 @@ class AudioNormalizeNode(FrameNode):
             return _effect_result(audio, frame)
         target = self.float_value("target_peak", 95.0) / 100.0
         wet = np.clip(samples * (target / peak), -1.0, 1.0)
-        dry_level, wet_level, output_gain = _effect_levels(self, "Normalize", default_wet=100.0)
-        out = _apply_output_gain(_blend_dry_wet(samples, wet, dry_level, wet_level), output_gain)
+        dry_level, wet_level, output_gain = _effect_levels(
+            self, "Normalize", default_wet=100.0)
+        out = _apply_output_gain(_blend_dry_wet(
+            samples, wet, dry_level, wet_level), output_gain)
         return _effect_result(_wrap_audio(out, audio.sample_rate, audio.num_channels), frame)
 
 
@@ -641,14 +719,16 @@ class AudioStereoWidthNode(FrameNode):
     def _setup_sockets(self) -> None:
         self.add_input("audio", NodeSocketType.Audio)
         self.add_output("audio", NodeSocketType.Audio)
-        self.set_property("width", slider_property(100, 0, 200, priority=0, group="Stereo", label="Width", description="0 collapses to mono, 200 exaggerates side information.", suffix="%"))
+        self.set_property("width", slider_property(100, 0, 200, priority=0, group="Stereo", label="Width",
+                          description="0 collapses to mono, 200 exaggerates side information.", suffix="%"))
         _add_standard_effect_mix(self, group="Stereo", wet_default=100)
 
     def evaluate(self, frame_num: int) -> NodeValue:
         del frame_num
         audio, frame = _input_audio_payload(self, "audio")
         if audio is None:
-            silent = AudioData.silence(duration=1.0 / max(self._project_fps, 1.0), channels=2)
+            silent = AudioData.silence(
+                duration=1.0 / max(self._project_fps, 1.0), channels=2)
             return _effect_result(silent, frame)
         samples = _ensure_2d(np.asarray(audio.samples, dtype=np.float32))
         if samples.shape[1] == 1:
@@ -659,8 +739,10 @@ class AudioStereoWidthNode(FrameNode):
         left = np.clip(mid + side * width, -1.0, 1.0)
         right = np.clip(mid - side * width, -1.0, 1.0)
         wet = np.column_stack((left, right)).astype(np.float32, copy=False)
-        dry_level, wet_level, output_gain = _effect_levels(self, "Stereo", default_wet=100.0)
-        out = _apply_output_gain(_blend_dry_wet(samples, wet, dry_level, wet_level), output_gain)
+        dry_level, wet_level, output_gain = _effect_levels(
+            self, "Stereo", default_wet=100.0)
+        out = _apply_output_gain(_blend_dry_wet(
+            samples, wet, dry_level, wet_level), output_gain)
         return _effect_result(_wrap_audio(out, audio.sample_rate, 2), frame)
 
 
@@ -674,17 +756,25 @@ class AudioAdvancedMixerNode(FrameNode):
         for slot in ("a", "b", "c", "d"):
             self.add_input(slot, NodeSocketType.Audio)
         self.add_output("audio", NodeSocketType.Audio)
-        self.set_property("quality", choice_property(AudioMixQuality.High, priority=0, group="Mixer", label="Quality", description="Resampling quality used to align all inputs."))
-        self.set_property("normalize", toggle_property(True, priority=1, group="Mixer", label="Normalize", description="Prevent clipping by reducing summed peaks when needed."))
-        self.set_property("master_gain", slider_property(100, 0, 200, priority=2, group="Mixer", label="Master", description="Master output level.", suffix="%"))
-        self.set_property("stereo_pan_law", slider_property(100, 50, 150, priority=3, group="Mixer", label="Pan Law", description="How strongly panning attenuates the opposite side.", suffix="%"))
+        self.set_property("quality", choice_property(AudioMixQuality.High, priority=0, group="Mixer",
+                          label="Quality", description="Resampling quality used to align all inputs."))
+        self.set_property("normalize", toggle_property(True, priority=1, group="Mixer",
+                          label="Normalize", description="Prevent clipping by reducing summed peaks when needed."))
+        self.set_property("master_gain", slider_property(100, 0, 200, priority=2,
+                          group="Mixer", label="Master", description="Master output level.", suffix="%"))
+        self.set_property("stereo_pan_law", slider_property(100, 50, 150, priority=3, group="Mixer",
+                          label="Pan Law", description="How strongly panning attenuates the opposite side.", suffix="%"))
         priority = 10
         for slot in ("a", "b", "c", "d"):
             group = f"Input {slot.upper()}"
-            self.set_property(f"{slot}_level", slider_property(100, 0, 200, priority=priority, group=group, label="Level", description=f"Level for input {slot.upper()}.", suffix="%"))
-            self.set_property(f"{slot}_pan", slider_property(0, -100, 100, priority=priority + 1, group=group, label="Pan", description=f"Stereo pan for input {slot.upper()}.", suffix="%"))
-            self.set_property(f"{slot}_mute", toggle_property(False, priority=priority + 2, group=group, label="Mute", description=f"Mute input {slot.upper()}."))
-            self.set_property(f"{slot}_solo", toggle_property(False, priority=priority + 3, group=group, label="Solo", description=f"Solo input {slot.upper()}."))
+            self.set_property(f"{slot}_level", slider_property(100, 0, 200, priority=priority,
+                              group=group, label="Level", description=f"Level for input {slot.upper()}.", suffix="%"))
+            self.set_property(f"{slot}_pan", slider_property(0, -100, 100, priority=priority + 1,
+                              group=group, label="Pan", description=f"Stereo pan for input {slot.upper()}.", suffix="%"))
+            self.set_property(f"{slot}_mute", toggle_property(
+                False, priority=priority + 2, group=group, label="Mute", description=f"Mute input {slot.upper()}."))
+            self.set_property(f"{slot}_solo", toggle_property(
+                False, priority=priority + 3, group=group, label="Solo", description=f"Solo input {slot.upper()}."))
             priority += 10
 
     def evaluate(self, frame_num: int) -> AudioData:
@@ -696,15 +786,18 @@ class AudioAdvancedMixerNode(FrameNode):
                 inputs[slot] = audio
         if not inputs:
             return AudioData.silence(duration=1.0 / max(self._project_fps, 1.0), channels=2)
-        quality = self.enum_value("quality", AudioMixQuality, AudioMixQuality.High)
+        quality = self.enum_value(
+            "quality", AudioMixQuality, AudioMixQuality.High)
         sample_rate = max(audio.sample_rate for audio in inputs.values())
         channels = max(2, max(audio.num_channels for audio in inputs.values()))
-        solo_slots = {slot for slot in inputs if self.bool_value(f"{slot}_solo", False)}
+        solo_slots = {slot for slot in inputs if self.bool_value(
+            f"{slot}_solo", False)}
         active_slots = solo_slots if solo_slots else set(inputs)
         target_length = 0
         prepared: dict[str, np.ndarray] = {}
         for slot, audio in inputs.items():
-            prepared_samples = _match_audio_layout(audio, sample_rate, channels, quality)
+            prepared_samples = _match_audio_layout(
+                audio, sample_rate, channels, quality)
             prepared[slot] = prepared_samples
             target_length = max(target_length, prepared_samples.shape[0])
         mix = np.zeros((target_length, channels), dtype=np.float32)
@@ -716,7 +809,8 @@ class AudioAdvancedMixerNode(FrameNode):
             channel_audio = np.copy(channel_audio)
             channel_audio *= self.float_value(f"{slot}_level", 100.0) / 100.0
             if channels >= 2:
-                pan = np.clip(self.float_value(f"{slot}_pan", 0.0) / 100.0, -1.0, 1.0)
+                pan = np.clip(self.float_value(
+                    f"{slot}_pan", 0.0) / 100.0, -1.0, 1.0)
                 left = np.cos((pan + 1.0) * np.pi / 4.0)
                 right = np.sin((pan + 1.0) * np.pi / 4.0)
                 left = 1.0 - ((1.0 - left) * pan_law)
@@ -746,7 +840,8 @@ class AudioToMonoNode(FrameNode):
         del frame_num
         audio, frame = _input_audio_payload(self, "audio")
         if audio is None:
-            silent = AudioData.silence(duration=1.0 / max(self._project_fps, 1.0), channels=1)
+            silent = AudioData.silence(
+                duration=1.0 / max(self._project_fps, 1.0), channels=1)
             return _effect_result(silent, frame)
         samples = np.asarray(audio.samples, dtype=np.float32)
         if samples.ndim == 1:

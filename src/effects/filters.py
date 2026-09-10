@@ -6,20 +6,45 @@ from functools import lru_cache
 
 import cv2
 import numpy as np
-
 from core.nodes.base import ColorRgb
 from core.nodes.enums import EdgeDisplayMode
 from effects.frame_ops import color01, ensure_rgb_f32
 
 
-def gaussian_blur(frame: np.ndarray, *, radius: int, sigma: float) -> np.ndarray:
-    """Apply Gaussian blur; radius zero is a no-op."""
+def gaussian_blur(
+    frame: np.ndarray,
+    *,
+    radius: int,
+    sigma: float,
+    edge: int = cv2.BORDER_DEFAULT,
+    passes: int = 1,
+) -> np.ndarray:
+    """Apply Gaussian blur; radius zero is a no-op.
+
+    ``edge`` selects how the kernel treats the frame border (clamp, reflect,
+    replicate, wrap), and ``passes`` repeats the blur to approximate a wider
+    kernel cheaply at small radii.
+    """
     source: np.ndarray = ensure_rgb_f32(frame)
     safe_radius: int = max(0, min(100, radius))
     if safe_radius == 0:
         return source
     kernel: int = safe_radius * 2 + 1
-    return cv2.GaussianBlur(source, (kernel, kernel), max(0.0, sigma))
+    result: np.ndarray = cv2.GaussianBlur(
+        source,
+        (kernel, kernel),
+        max(0.0, sigma),
+        borderType=int(edge),
+    )
+    remaining: int = max(0, min(4, passes) - 1)
+    for _ in range(remaining):
+        result = cv2.GaussianBlur(
+            result,
+            (kernel, kernel),
+            max(0.0, sigma),
+            borderType=int(edge),
+        )
+    return result
 
 
 def unsharp_mask(
@@ -130,13 +155,27 @@ def vignette(
     amount: float,
     softness: float,
     color: ColorRgb,
+    roundness: float = 0.0,
+    center_x: float = 0.5,
+    center_y: float = 0.5,
 ) -> np.ndarray:
-    """Blend a configurable color toward frame edges."""
+    """Blend a configurable color toward frame edges.
+
+    ``roundness`` shapes the falloff ellipse (negative is taller, positive
+    is wider) and the center offsets let the darkened region sit off-axis.
+    """
     source: np.ndarray = ensure_rgb_f32(frame)
     height: int
     width: int
     height, width = source.shape[:2]
-    mask: np.ndarray = _vignette_mask(height, width, round(softness, 2))
+    mask: np.ndarray = _vignette_mask(
+        height,
+        width,
+        round(softness, 2),
+        round(roundness, 2),
+        round(center_x, 3),
+        round(center_y, 3),
+    )
     alpha: np.ndarray = mask * np.float32(np.clip(amount, 0.0, 1.0))
     output: np.ndarray = source.copy()
     color_array: np.ndarray = color01(color).reshape(1, 1, 3)
@@ -145,15 +184,27 @@ def vignette(
     return output
 
 
-@lru_cache(maxsize=12)
-def _vignette_mask(height: int, width: int, softness: float) -> np.ndarray:
+@lru_cache(maxsize=32)
+def _vignette_mask(
+    height: int,
+    width: int,
+    softness: float,
+    roundness: float = 0.0,
+    center_x: float = 0.5,
+    center_y: float = 0.5,
+) -> np.ndarray:
     """Build and cache a normalized radial edge mask."""
     y_axis: np.ndarray = np.linspace(-1.0, 1.0, height, dtype=np.float32)
     x_axis: np.ndarray = np.linspace(-1.0, 1.0, width, dtype=np.float32)
     xx: np.ndarray
     yy: np.ndarray
     xx, yy = np.meshgrid(x_axis, y_axis)
-    radius: np.ndarray = np.sqrt(xx * xx + yy * yy)
+    # Shift the falloff center away from the frame middle when requested.
+    dx: np.ndarray = xx - (float(center_x) * 2.0 - 1.0)
+    dy: np.ndarray = yy - (float(center_y) * 2.0 - 1.0)
+    # Squash/stretch the vertical axis to control the ellipse aspect.
+    squash: float = 1.0 + float(np.clip(roundness, -0.95, 1.0))
+    radius: np.ndarray = np.sqrt(dx * dx + (dy * squash) * (dy * squash))
     start: float = 1.0 - float(np.clip(softness, 0.05, 1.0))
     mask: np.ndarray = np.clip((radius - start) / max(1e-6, 1.0 - start), 0.0, 1.0)
     return mask[..., None]

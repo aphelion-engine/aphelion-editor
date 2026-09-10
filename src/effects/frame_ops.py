@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
-
 from core.nodes.base import ColorRgb
 
 FRAME_DTYPE: np.dtype = np.dtype(np.float32)
@@ -38,9 +37,18 @@ def from_source_u8(frame_u8: np.ndarray) -> np.ndarray:
 
 
 def to_display_u8(frame_f32: np.ndarray) -> np.ndarray:
-    """Quantize a float32 pipeline frame for Qt display or 8-bit export."""
+    """Quantize a float32 pipeline frame for Qt display or 8-bit export.
+
+    This sits on the per-frame display *and* export hot path, so it is
+    deliberately allocation-light: one clamp pass followed by a single
+    SIMD-accelerated ``cv2.convertScaleAbs`` pass that saturates and
+    rounds in one go (instead of a separate multiply + rint + astype
+    chain, which allocated three temporaries per frame).
+    """
     clamped: np.ndarray = np.clip(frame_f32, 0.0, 1.0)
-    return np.rint(clamped * np.float32(255.0)).astype(np.uint8)
+    if clamped.dtype != np.float32:
+        clamped = clamped.astype(np.float32, copy=False)
+    return cv2.convertScaleAbs(clamped, alpha=255.0)
 
 
 def color01(rgb: ColorRgb) -> np.ndarray:

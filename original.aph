@@ -7,7 +7,7 @@
     "width": 640,
     "height": 302,
     "duration": 11.208333333333334,
-    "current_frame": 179
+    "current_frame": 212
   },
   "active_viewer": "node_2_1788322242951",
   "nodes": {
@@ -68,7 +68,10 @@
         "auto_sync_timeline": true,
         "audio_enabled": true,
         "audio_volume": 100,
-        "audio_channel_mode": "Stereo"
+        "audio_channel_mode": {
+          "__enum__": "AudioChannelMode",
+          "name": "Stereo"
+        }
       },
       "animated_properties": {}
     },
@@ -145,7 +148,7 @@
       "node_type": "Shadows / Highlights",
       "node_category": "Color",
       "name": "Shadows / Highlights",
-      "x": 678.0521784834016,
+      "x": 679.9842890617703,
       "y": 72.88823061012658,
       "properties": {
         "enabled": true,

@@ -32,10 +32,8 @@ from types import TracebackType
 
 import imageio_ffmpeg
 import numpy as np
-
 from core.audio import AudioData
 from render.audio_playback import _resample_audio
-
 
 # ============================================================================
 # Export quality
@@ -58,6 +56,49 @@ _EXPORT_PROFILE_SETTINGS: dict[
     ExportQuality.BALANCED: ("veryfast", 20),
     ExportQuality.HIGH_QUALITY: ("medium", 18),
 }
+
+# Hardware encoders expose their own preset vocabularies. Mapping the
+# shared ExportQuality enum onto each one means the quality slider keeps
+# meaning something after AUTO selects a GPU encoder, instead of always
+# pinning NVENC to "p1" and QSV to "veryfast".
+_HW_PRESET_SETTINGS: dict[
+    str,
+    dict[ExportQuality, str],
+] = {
+    "h264_nvenc": {
+        ExportQuality.DRAFT: "p1",
+        ExportQuality.FAST: "p3",
+        ExportQuality.BALANCED: "p5",
+        ExportQuality.HIGH_QUALITY: "p7",
+    },
+    "h264_qsv": {
+        ExportQuality.DRAFT: "veryfast",
+        ExportQuality.FAST: "veryfast",
+        ExportQuality.BALANCED: "faster",
+        ExportQuality.HIGH_QUALITY: "medium",
+    },
+    "h264_amf": {
+        ExportQuality.DRAFT: "speed",
+        ExportQuality.FAST: "speed",
+        ExportQuality.BALANCED: "balanced",
+        ExportQuality.HIGH_QUALITY: "quality",
+    },
+}
+
+
+def _hw_preset(
+    encoder: str,
+    quality: ExportQuality,
+    fallback: str,
+) -> str:
+    """Return the hardware-encoder preset for ``quality``."""
+    return _HW_PRESET_SETTINGS.get(encoder, {}).get(quality, fallback)
+
+
+# How many decoded/encoded frames the writer may buffer ahead of FFmpeg.
+# A deeper queue hides encoder hiccups and keeps the evaluator feeling
+# serial, which matters most for long exports.
+_DEFAULT_QUEUE_SIZE: int = 24
 
 
 # ============================================================================
@@ -244,7 +285,7 @@ class Mp4VideoWriter:
         audio_channels: int = 2,
         include_audio: bool = True,
         quality: ExportQuality = ExportQuality.FAST,
-        queue_size: int = 12,
+        queue_size: int = _DEFAULT_QUEUE_SIZE,
         encoder: VideoEncoder = VideoEncoder.AUTO,
     ) -> None:
         output_path = Path(output_path)
@@ -427,7 +468,7 @@ class Mp4VideoWriter:
             cmd.extend(
                 (
                     "-preset",
-                    "veryfast",
+                    _hw_preset(self._encoder, quality, "veryfast"),
                     "-global_quality",
                     str(
                         max(
@@ -443,21 +484,24 @@ class Mp4VideoWriter:
         # --------------------------------------------------------------
 
         elif self._encoder == "h264_nvenc":
+            qp = str(
+                max(
+                    1,
+                    min(51, crf),
+                )
+            )
             cmd.extend(
                 (
                     "-preset",
-                    "p1",
-                    "-tune",
-                    "ll",
+                    _hw_preset(self._encoder, quality, "p3"),
                     "-rc",
                     "constqp",
                     "-qp",
-                    str(
-                        max(
-                            1,
-                            min(51, crf),
-                        )
-                    ),
+                    qp,
+                    # Keep latency low without reordering frames, which
+                    # keeps encode throughput predictable for exports.
+                    "-zerolatency",
+                    "1",
                 )
             )
 
@@ -466,26 +510,22 @@ class Mp4VideoWriter:
         # --------------------------------------------------------------
 
         elif self._encoder == "h264_amf":
+            qp = str(
+                max(
+                    1,
+                    min(51, crf),
+                )
+            )
             cmd.extend(
                 (
                     "-quality",
-                    "speed",
+                    _hw_preset(self._encoder, quality, "speed"),
                     "-rc",
                     "cqp",
                     "-qp_i",
-                    str(
-                        max(
-                            1,
-                            min(51, crf),
-                        )
-                    ),
+                    qp,
                     "-qp_p",
-                    str(
-                        max(
-                            1,
-                            min(51, crf),
-                        )
-                    ),
+                    qp,
                 )
             )
 
