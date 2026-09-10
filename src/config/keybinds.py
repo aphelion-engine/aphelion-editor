@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+
 class KeyAction(Enum):
     """Stable identifiers for every bindable editor action."""
 
@@ -25,6 +26,7 @@ class KeyAction(Enum):
     SELECT_ALL = "select_all"
     DUPLICATE = "duplicate"
     DELETE = "delete"
+    CREATE_CUSTOM_NODE = "create_custom_node"
 
     SEARCH_NODE = "search_node"
     FIT_GRAPH = "fit_graph"
@@ -167,6 +169,13 @@ DEFAULT_KEYBINDS: tuple[KeybindSpec, ...] = (
     KeybindSpec(KeyAction.SELECT_ALL, "Select All", "Edit", "Ctrl+A", "Select all nodes"),
     KeybindSpec(KeyAction.DUPLICATE, "Duplicate", "Edit", "Ctrl+D", "Duplicate the selection"),
     KeybindSpec(KeyAction.DELETE, "Delete", "Edit", "Delete", "Delete the selection"),
+    KeybindSpec(
+        KeyAction.CREATE_CUSTOM_NODE,
+        "Create Custom Node…",
+        "Edit",
+        "Ctrl+Shift+G",
+        "Collapse selected nodes into a reusable custom node",
+    ),
     KeybindSpec(
         KeyAction.CLEAR_CACHE,
         "Clear Frame Cache",

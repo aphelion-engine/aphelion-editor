@@ -10,11 +10,11 @@ from core.events import Connection
 from core.history.command import Command
 from core.history.snapshots import NodeSnapshot, connections_touching
 from core.nodes import Node
+from core.nodes.roto.model import RotoDocument
 from core.nodes.roto_nodes import RotoNode
 from core.nodes.tracking_nodes import PlanarTrackerNode, TrackerNode
 from core.project import Project
 from core.project_settings import ProjectSettings
-from core.nodes.roto.model import RotoDocument
 
 
 class CompositeCommand(Command):

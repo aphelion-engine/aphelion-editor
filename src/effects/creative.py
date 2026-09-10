@@ -6,8 +6,9 @@ import math
 
 import cv2
 import numpy as np
-from core.nodes.enums import MirrorAxis
-from effects.frame_ops import ensure_rgb_f32
+from core.nodes.base import ColorRgb
+from core.nodes.enums import MirrorAxis, PixelSortMode
+from effects.frame_ops import color01, ensure_rgb_f32
 
 
 def transform_3d(
@@ -322,3 +323,148 @@ def _rotate_pair(a: float, b: float, radians: float) -> tuple[float, float]:
     cos_value: float = math.cos(radians)
     sin_value: float = math.sin(radians)
     return a * cos_value - b * sin_value, a * sin_value + b * cos_value
+
+
+def pixel_sort(
+    frame: np.ndarray,
+    *,
+    mode: PixelSortMode,
+    threshold: float,
+    max_length: int,
+    reverse: bool,
+) -> np.ndarray:
+    """Sort horizontal runs of bright pixels by luminance, hue, or saturation.
+
+    Contiguous runs of pixels whose key exceeds ``threshold`` are reordered
+    in place, which produces the signature streaking of "pixel sorting"
+    glitch art without touching the dark background.
+    """
+    source: np.ndarray = ensure_rgb_f32(frame)
+    keys: np.ndarray = _pixel_sort_keys(source, mode)
+    height: int
+    width: int
+    height, width = source.shape[:2]
+    output: np.ndarray = source.copy()
+    span: int = max(2, int(max_length))
+    cut: float = float(np.clip(threshold, 0.0, 1.0))
+    for row in range(height):
+        row_keys: np.ndarray = keys[row]
+        row_pixels: np.ndarray = output[row]
+        start: int = -1
+        for column in range(width + 1):
+            selected: bool = column < width and float(row_keys[column]) >= cut
+            if selected and start < 0:
+                start = column
+            elif not selected and start >= 0:
+                _sort_span(row_keys, row_pixels, start, column, span, reverse)
+                start = -1
+    return output
+
+
+def _sort_span(
+    keys: np.ndarray,
+    pixels: np.ndarray,
+    start: int,
+    end: int,
+    max_length: int,
+    reverse: bool,
+) -> None:
+    """Sort ``pixels[start:end]`` by ``keys``, in bounded chunks."""
+    cursor: int = start
+    while cursor < end:
+        stop: int = min(end, cursor + max_length)
+        order: np.ndarray = np.argsort(keys[cursor:stop], kind="stable")
+        if reverse:
+            order = order[::-1]
+        pixels[cursor:stop] = pixels[cursor:stop][order]
+        cursor = stop
+
+
+def _pixel_sort_keys(frame: np.ndarray, mode: PixelSortMode) -> np.ndarray:
+    """Return the per-pixel sort key for ``mode`` normalized to roughly 0-1."""
+    if mode == PixelSortMode.Hue or mode == PixelSortMode.Saturation:
+        hsv: np.ndarray = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
+        if mode == PixelSortMode.Hue:
+            return (hsv[:, :, 0] / np.float32(360.0)).astype(np.float32)
+        return hsv[:, :, 1].astype(np.float32)
+    return cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+
+
+def duotone(
+    frame: np.ndarray,
+    *,
+    dark: ColorRgb,
+    light: ColorRgb,
+) -> np.ndarray:
+    """Map the frame's luminance between two colors."""
+    source: np.ndarray = ensure_rgb_f32(frame)
+    luma: np.ndarray = cv2.cvtColor(source, cv2.COLOR_RGB2GRAY)[:, :, None]
+    dark_rgb: np.ndarray = color01(dark).reshape(1, 1, 3)
+    light_rgb: np.ndarray = color01(light).reshape(1, 1, 3)
+    return dark_rgb + (light_rgb - dark_rgb) * luma
+
+
+def neon_glow(
+    frame: np.ndarray,
+    *,
+    color: ColorRgb,
+    threshold: int,
+    radius: float,
+    intensity: float,
+    background: float,
+) -> np.ndarray:
+    """Darken the image and light its edges in a single neon tint."""
+    source: np.ndarray = ensure_rgb_f32(frame)
+    gray: np.ndarray = cv2.cvtColor(source, cv2.COLOR_RGB2GRAY)
+    gray_u8: np.ndarray = np.clip(gray * 255.0, 0, 255).astype(np.uint8)
+    low: int = max(0, min(255, int(threshold)))
+    edges: np.ndarray = cv2.Canny(
+        gray_u8, low, min(255, max(low + 1, low * 2)))
+    edge_f32: np.ndarray = edges.astype(np.float32) * np.float32(1.0 / 255.0)
+    if radius > 0.0:
+        edge_f32 = cv2.GaussianBlur(edge_f32, (0, 0), float(radius))
+    tint: np.ndarray = color01(color).reshape(1, 1, 3)
+    base: np.ndarray = source * np.float32(max(0.0, background))
+    glow: np.ndarray = edge_f32[:, :, None] * \
+        tint * np.float32(max(0.0, intensity))
+    return np.clip(base + glow, 0.0, 1.0)
+
+
+def shockwave(
+    frame: np.ndarray,
+    *,
+    progress: float,
+    amplitude: float,
+    wavelength: float,
+    center_x: float,
+    center_y: float,
+) -> np.ndarray:
+    """Push pixels outward within an expanding radial ring."""
+    source: np.ndarray = ensure_rgb_f32(frame)
+    height: int
+    width: int
+    height, width = source.shape[:2]
+    cx: float = float(np.clip(center_x, 0.0, 1.0)) * width
+    cy: float = float(np.clip(center_y, 0.0, 1.0)) * height
+    yy, xx = np.mgrid[0:height, 0:width].astype(np.float32)
+    dx: np.ndarray = xx - cx
+    dy: np.ndarray = yy - cy
+    distance: np.ndarray = np.sqrt(dx * dx + dy * dy)
+    max_radius: float = max(1.0, 0.5 * math.hypot(width, height))
+    ring_radius: float = float(np.clip(progress, 0.0, 1.0)) * max_radius
+    band: float = max(1.0, float(wavelength) * max_radius * 0.25)
+    ring: np.ndarray = np.exp(-((distance - ring_radius)
+                              ** 2) / (2.0 * band * band))
+    fade: np.ndarray = np.clip(1.0 - distance / max_radius, 0.0, 1.0)
+    magnitude: float = float(amplitude) * min(width, height) * 0.25
+    displacement: np.ndarray = ring * fade * magnitude
+    safe_distance: np.ndarray = np.where(distance > 1e-3, distance, 1.0)
+    map_x: np.ndarray = xx - (dx / safe_distance) * displacement
+    map_y: np.ndarray = yy - (dy / safe_distance) * displacement
+    return cv2.remap(
+        source,
+        map_x.astype(np.float32),
+        map_y.astype(np.float32),
+        interpolation=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_REFLECT_101,
+    )

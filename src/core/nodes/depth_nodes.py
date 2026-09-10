@@ -1,18 +1,16 @@
 """Depth-based and pseudo-3D compositing nodes."""
 
 from __future__ import annotations
-import numpy as np
-import cv2
 
+import cv2
+import numpy as np
 from core.nodes.base import NodeSocketType
-from core.nodes.enums import ZMergeMode
-from core.nodes.frame_base import FrameNode
-from core.nodes.property_factory import (
-    slider_property,
-    toggle_property,
-    choice_property,
-    color_property,
-)
+from core.nodes.enums import AnaglyphMode, ZMergeMode
+from core.nodes.frame_base import FrameEffectNode, FrameNode
+from core.nodes.property_factory import (choice_property, color_property,
+                                         slider_property, toggle_property)
+from effects.depth import (anaglyph, depth_haze, depth_of_field, depth_relight,
+                           depth_slice)
 
 DEPTH_CATEGORY = "Depth"
 
@@ -448,10 +446,17 @@ class DepthTiltShiftNode(FrameNode):
         bn = int(self.float_value("blur_near", 0))
         bf = int(self.float_value("blur_far", 32))
 
+        # A zero blur means "do not blur", not an error. With
+        # ``ksize=(0, 0)`` OpenCV derives the kernel size from sigma and
+        # asserts on sigma <= 0, so the default Near Blur of 0 used to raise
+        # on every frame. Skipping the pass is both correct and free.
+        if bn <= 0 and bf <= 0:
+            return f[..., :3]
+
         depth = d[..., 0].astype(np.float32)
 
-        near_blur = cv2.GaussianBlur(f, (0, 0), bn)
-        far_blur = cv2.GaussianBlur(f, (0, 0), bf)
+        near_blur = f if bn <= 0 else cv2.GaussianBlur(f, (0, 0), bn)
+        far_blur = f if bf <= 0 else cv2.GaussianBlur(f, (0, 0), bf)
 
         mask = depth[..., None]
         return near_blur * (1 - mask) + far_blur * mask
@@ -537,3 +542,402 @@ class DepthEdgeNode(FrameNode):
         edges *= self.float_value("strength", 1.0)
 
         return edges[..., None]
+
+
+# ------------------------------------------------------------
+# 11. DepthOfFieldNode — depth-driven defocus
+# ------------------------------------------------------------
+
+class DepthOfFieldNode(FrameEffectNode):
+    """Defocus the frame based on distance from a focal plane."""
+
+    node_type = "Depth of Field"
+    node_category = DEPTH_CATEGORY
+    node_description = "Depth-driven defocus with a controllable focal plane"
+    node_color = (108, 152, 212)
+
+    def setup_effect_properties(self) -> None:
+        """Add the depth input and register the focus controls."""
+        self.add_input("depth", NodeSocketType.Frame)
+        self.set_property(
+            "focus",
+            slider_property(
+                50, 0, 100,
+                priority=10,
+                group="Focus",
+                label="Focus",
+                description="Depth value that stays sharp.",
+                suffix="%",
+            ),
+        )
+        self.set_property(
+            "focus_range",
+            slider_property(
+                25, 1, 100,
+                priority=11,
+                group="Focus",
+                label="Focus Range",
+                description="Depth span that remains in focus.",
+                suffix="%",
+            ),
+        )
+        self.set_property(
+            "max_blur",
+            slider_property(
+                12, 1, 64,
+                priority=12,
+                group="Focus",
+                label="Max Blur",
+                description="Blur applied to the most out-of-focus pixels.",
+                suffix=" px",
+            ),
+        )
+        self.set_property(
+            "invert",
+            toggle_property(
+                False,
+                priority=13,
+                group="Depth",
+                label="Invert Depth",
+                description="Treat dark depth pixels as near instead of far.",
+            ),
+        )
+        # Keyframe or modulate Focus for a rack focus between subjects.
+        self.expose_modulation_input("focus")
+        self.expose_modulation_input("max_blur")
+
+    def process_frame(self, frame: np.ndarray, frame_num: int) -> np.ndarray:
+        """Return the defocused frame, or the source when depth is unwired."""
+        del frame_num
+        depth: np.ndarray | None = self.input_frame("depth")
+        if depth is None:
+            return frame
+        return depth_of_field(
+            frame,
+            depth,
+            focus=self.float_value("focus", 50.0) / 100.0,
+            focus_range=self.float_value("focus_range", 25.0) / 100.0,
+            max_blur=self.float_value("max_blur", 12.0),
+            invert=self.bool_value("invert", False),
+        )
+
+
+# ------------------------------------------------------------
+# 12. DepthHazeNode — atmospheric perspective
+# ------------------------------------------------------------
+
+class DepthHazeNode(FrameEffectNode):
+    """Fade distant pixels toward an atmospheric color."""
+
+    node_type = "Depth Haze"
+    node_category = DEPTH_CATEGORY
+    node_description = "Depth-based atmospheric haze for aerial perspective"
+    node_color = (150, 172, 200)
+
+    def setup_effect_properties(self) -> None:
+        """Add the depth input and register the haze controls."""
+        self.add_input("depth", NodeSocketType.Frame)
+        self.set_property(
+            "near",
+            slider_property(
+                40, 0, 100,
+                priority=10,
+                group="Atmosphere",
+                label="Near",
+                description="Depth where haze starts.",
+                suffix="%",
+            ),
+        )
+        self.set_property(
+            "far",
+            slider_property(
+                100, 0, 100,
+                priority=11,
+                group="Atmosphere",
+                label="Far",
+                description="Depth where haze reaches full density.",
+                suffix="%",
+            ),
+        )
+        self.set_property(
+            "color",
+            color_property(
+                (170, 190, 210),
+                priority=12,
+                group="Atmosphere",
+                label="Color",
+                description="Color distant pixels fade toward.",
+            ),
+        )
+        self.set_property(
+            "density",
+            slider_property(
+                60, 0, 100,
+                priority=13,
+                group="Atmosphere",
+                label="Density",
+                description="Maximum haze opacity.",
+                suffix="%",
+            ),
+        )
+        self.set_property(
+            "invert",
+            toggle_property(
+                False,
+                priority=14,
+                group="Depth",
+                label="Invert Depth",
+                description="Treat dark depth pixels as near instead of far.",
+            ),
+        )
+
+    def process_frame(self, frame: np.ndarray, frame_num: int) -> np.ndarray:
+        """Return the hazed frame, or the source when depth is unwired."""
+        del frame_num
+        depth: np.ndarray | None = self.input_frame("depth")
+        if depth is None:
+            return frame
+        return depth_haze(
+            frame,
+            depth,
+            near=self.float_value("near", 40.0) / 100.0,
+            far=self.float_value("far", 100.0) / 100.0,
+            color=self.color_value("color", (170, 190, 210)),
+            density=self.float_value("density", 60.0) / 100.0,
+            invert=self.bool_value("invert", False),
+        )
+
+
+# ------------------------------------------------------------
+# 13. DepthRelightNode — 2.5D relighting
+# ------------------------------------------------------------
+
+class DepthRelightNode(FrameEffectNode):
+    """Relight the frame with surface normals recovered from depth."""
+
+    node_type = "Depth Relight"
+    node_category = DEPTH_CATEGORY
+    node_description = "2.5D relighting from depth-derived surface normals"
+    node_color = (200, 160, 112)
+
+    def setup_effect_properties(self) -> None:
+        """Add the depth input and register the lighting controls."""
+        self.add_input("depth", NodeSocketType.Frame)
+        self.set_property(
+            "light_x",
+            slider_property(
+                -50, -100, 100,
+                priority=10,
+                group="Light",
+                label="Light X",
+                description="Horizontal light direction.",
+                suffix="%",
+            ),
+        )
+        self.set_property(
+            "light_y",
+            slider_property(
+                -65, -100, 100,
+                priority=11,
+                group="Light",
+                label="Light Y",
+                description="Vertical light direction.",
+                suffix="%",
+            ),
+        )
+        self.set_property(
+            "relief",
+            slider_property(
+                300, 5, 2000,
+                priority=12,
+                group="Surface",
+                label="Relief",
+                description="Steepness of the recovered surface.",
+            ),
+        )
+        self.set_property(
+            "strength",
+            slider_property(
+                100, 0, 300,
+                priority=13,
+                group="Light",
+                label="Strength",
+                description="Intensity of the relighting.",
+                suffix="%",
+            ),
+        )
+        self.set_property(
+            "ambient",
+            slider_property(
+                20, 0, 100,
+                priority=14,
+                group="Light",
+                label="Ambient",
+                description="Fill light in shadowed areas.",
+                suffix="%",
+            ),
+        )
+        self.set_property(
+            "invert",
+            toggle_property(
+                False,
+                priority=15,
+                group="Depth",
+                label="Invert Depth",
+                description="Treat dark depth pixels as near instead of far.",
+            ),
+        )
+
+    def process_frame(self, frame: np.ndarray, frame_num: int) -> np.ndarray:
+        """Return the relit frame, or the source when depth is unwired."""
+        del frame_num
+        depth: np.ndarray | None = self.input_frame("depth")
+        if depth is None:
+            return frame
+        return depth_relight(
+            frame,
+            depth,
+            light_x=self.float_value("light_x", -50.0) / 100.0,
+            light_y=self.float_value("light_y", -65.0) / 100.0,
+            relief=self.float_value("relief", 300.0) / 100.0,
+            strength=self.float_value("strength", 100.0) / 100.0,
+            ambient=self.float_value("ambient", 20.0) / 100.0,
+            invert=self.bool_value("invert", False),
+        )
+
+
+# ------------------------------------------------------------
+# 14. Anaglyph3DNode — depth-based stereo
+# ------------------------------------------------------------
+
+class Anaglyph3DNode(FrameEffectNode):
+    """Build a stereo anaglyph from a depth pass."""
+
+    node_type = "Anaglyph 3D"
+    node_category = DEPTH_CATEGORY
+    node_description = "Depth-based stereo anaglyph for red/cyan 3D glasses"
+    node_color = (188, 112, 128)
+
+    def setup_effect_properties(self) -> None:
+        """Add the depth input and register the stereo controls."""
+        self.add_input("depth", NodeSocketType.Frame)
+        self.set_property(
+            "separation",
+            slider_property(
+                4, 0, 20,
+                priority=10,
+                group="Stereo",
+                label="Separation",
+                description="Interocular offset as a fraction of frame width.",
+                suffix="%",
+            ),
+        )
+        self.set_property(
+            "mode",
+            choice_property(
+                AnaglyphMode.RedCyan,
+                priority=11,
+                group="Stereo",
+                label="Glasses",
+                description="Color pair matching the viewing glasses.",
+            ),
+        )
+        self.set_property(
+            "invert",
+            toggle_property(
+                False,
+                priority=12,
+                group="Depth",
+                label="Invert Depth",
+                description="Swap near and far for the parallax direction.",
+            ),
+        )
+
+    def process_frame(self, frame: np.ndarray, frame_num: int) -> np.ndarray:
+        """Return the anaglyph frame, or the source when depth is unwired."""
+        del frame_num
+        depth: np.ndarray | None = self.input_frame("depth")
+        if depth is None:
+            return frame
+        return anaglyph(
+            frame,
+            depth,
+            separation=self.float_value("separation", 4.0) / 100.0,
+            mode=self.enum_value("mode", AnaglyphMode, AnaglyphMode.RedCyan),
+            invert=self.bool_value("invert", False),
+        )
+
+
+# ------------------------------------------------------------
+# 15. DepthSliceNode — depth range matte
+# ------------------------------------------------------------
+
+class DepthSliceNode(FrameNode):
+    """Output a soft matte for a range of depth values."""
+
+    node_type = "Depth Slice"
+    node_category = DEPTH_CATEGORY
+    node_description = "Soft matte selecting a slice of depth values"
+    node_color = (168, 140, 204)
+
+    def _setup_sockets(self) -> None:
+        """Register the depth input, mask output, and range controls."""
+        self.add_input("depth", NodeSocketType.Frame)
+        self.add_output("mask", NodeSocketType.Mask)
+        self.set_property(
+            "near",
+            slider_property(
+                0, 0, 100,
+                priority=10,
+                group="Slice",
+                label="Near",
+                description="Near edge of the selected depth range.",
+                suffix="%",
+            ),
+        )
+        self.set_property(
+            "far",
+            slider_property(
+                50, 0, 100,
+                priority=11,
+                group="Slice",
+                label="Far",
+                description="Far edge of the selected depth range.",
+                suffix="%",
+            ),
+        )
+        self.set_property(
+            "softness",
+            slider_property(
+                8, 1, 50,
+                priority=12,
+                group="Slice",
+                label="Softness",
+                description="Feather of the matte edges.",
+                suffix="%",
+            ),
+        )
+        self.set_property(
+            "invert",
+            toggle_property(
+                False,
+                priority=13,
+                group="Slice",
+                label="Invert",
+                description="Select everything outside the depth range.",
+            ),
+        )
+
+    def evaluate(self, frame_num: int) -> np.ndarray:
+        """Return the depth-range matte, or black when depth is unwired."""
+        del frame_num
+        depth: np.ndarray | None = self.input_frame("depth")
+        if depth is None:
+            return self.blank_frame()
+        return depth_slice(
+            depth,
+            near=self.float_value("near", 0.0) / 100.0,
+            far=self.float_value("far", 50.0) / 100.0,
+            softness=self.float_value("softness", 8.0) / 100.0,
+            invert=self.bool_value("invert", False),
+        )

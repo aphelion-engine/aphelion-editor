@@ -1,6 +1,8 @@
 """Application dialogs."""
 
 from ui.dialogs.about_dialog import AboutDialog
+from ui.dialogs.custom_node_dialog import (CustomNodeCreateDialog,
+                                           CustomNodeEditorDialog)
 from ui.dialogs.export_dialog import ExportDialog
 from ui.dialogs.pin_bar_dialog import PinBarDialog
 from ui.dialogs.preferences_dialog import PreferencesDialog
@@ -10,6 +12,8 @@ from ui.dialogs.tracking_dialog import TrackingProgressDialog
 
 __all__ = [
     "AboutDialog",
+    "CustomNodeCreateDialog",
+    "CustomNodeEditorDialog",
     "ExportDialog",
     "PinBarDialog",
     "PreferencesDialog",

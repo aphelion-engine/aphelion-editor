@@ -4,19 +4,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Dict, List, Tuple
 
-from PyQt6.QtCore import QPointF
-
 from config.constants import PASTE_OFFSET_PX
-from core.history import (
-    AddNodeCommand,
-    CompositeCommand,
-    InsertAfterCommand,
-    MoveNodesCommand,
-    PasteNodesCommand,
-    RemoveNodesCommand,
-    resolve_insert_sockets,
-)
+from core.history import (AddNodeCommand, CompositeCommand, InsertAfterCommand,
+                          MoveNodesCommand, PasteNodesCommand,
+                          RemoveNodesCommand, resolve_insert_sockets)
 from core.nodes import Node, global_node_registry
+from PyQt6.QtCore import QPointF
 
 if TYPE_CHECKING:
     from ui.node_graph.node_item import NodeItem
@@ -341,8 +334,9 @@ def organize_graph_fruchterman(view: NodeGraphView) -> bool:
     Produces natural clusters, clear areas, and readable layouts.
     """
 
-    import random
     import math
+    import random
+
     from ui.node_graph.node_layout import measure_node
 
     project = view.project
@@ -726,6 +720,9 @@ def _build_node_copy(
         if prop_name.startswith("_input_"):
             continue
         new_node.set_property(prop_name, prop.value)
+    extra = node.snapshot_data()
+    if extra:
+        new_node.restore_snapshot_data(dict(extra))
     new_node.x = node.x + offset_x
     new_node.y = node.y + offset_y
     return new_node

@@ -1,180 +1,95 @@
 """Authoritative built-in node catalog grouped by editor purpose."""
 from __future__ import annotations
 
-from core.nodes.advanced_color_nodes import (
-    ClarityNode,
-    ColorBalanceNode,
-    LevelsNode,
-    ShadowsHighlightsNode,
-    VibranceNode,
-)
-from core.nodes.audio_nodes import (
-    AudioAdvancedMixerNode,
-    AudioAttachNode,
-    AudioCompressorNode,
-    AudioDelayNode,
-    AudioEqNode,
-    AudioExtractNode,
-    AudioGainNode,
-    AudioGateNode,
-    AudioLimiterNode,
-    AudioMixNode,
-    AudioNormalizeNode,
-    AudioPanNode,
-    AudioReverbNode,
-    AudioStereoWidthNode,
-    AudioToMonoNode,
-)
+from core.nodes.advanced_color_nodes import (ClarityNode, ColorBalanceNode,
+                                             LevelsNode, ShadowsHighlightsNode,
+                                             VibranceNode)
+from core.nodes.audio_nodes import (AudioAdvancedMixerNode, AudioAttachNode,
+                                    AudioCompressorNode, AudioDelayNode,
+                                    AudioEqNode, AudioExtractNode,
+                                    AudioGainNode, AudioGateNode,
+                                    AudioLimiterNode, AudioMixNode,
+                                    AudioNormalizeNode, AudioPanNode,
+                                    AudioReverbNode, AudioStereoWidthNode,
+                                    AudioToMonoNode)
 from core.nodes.base import Node
-from core.nodes.color_effects import (
-    ChannelMixerNode,
-    ExposureContrastNode,
-    HueSaturationNode,
-    InvertNode,
-    MonochromeNode,
-    PosterizeNode,
-    ThresholdNode,
-    WhiteBalanceNode,
-)
+from core.nodes.color_effects import (ChannelMixerNode, ExposureContrastNode,
+                                      HueSaturationNode, InvertNode,
+                                      MonochromeNode, PosterizeNode,
+                                      ThresholdNode, WhiteBalanceNode)
 from core.nodes.color_grading import ColorGradingNode
-from core.nodes.compositing import (
-    DissolveNode,
-    MergeNode,
-    AlphaOverNode,
-    AlphaUnderNode,
-    StencilNode,
-    MatteCombineProNode,
-)
-
-from core.nodes.creative_nodes import (
-    ChromaticAberrationNode,
-    GlitchNode,
-    KaleidoscopeNode,
-    LensDistortionNode,
-    MirrorNode,
-    RGBSplitNode,
-    RippleNode,
-    Transform3DNode,
-    GlowNode,
-    LightWrapNode,
-    GlowEdgesNode,
-    PosterEdgesNode,
-    HalftoneNode,
-    VHSNode,
-)
-
-from core.nodes.distort_nodes import (
-    BulgeNode,
-    TileNode,
-    TwirlNode,
-    WaveWarpNode,
-    DisplaceNode,
-    DirectionalDisplaceNode
-)
-from core.nodes.filter_effects import (
-    DenoiseNode,
-    EdgeDetectNode,
-    GaussianBlurNode,
-    MotionBlurNode,
-    PixelateNode,
-    SharpenNode,
-    VignetteNode,
-)
-from core.nodes.generator_nodes import (
-    CheckerboardNode,
-    ColorBarsNode,
-    GradientNode,
-    SolidColorNode,
-    RampNode,
-    UVMapNode,
-    LensFlareNode,
-    HeatDistortionNode,
-    FogNode,
-    NoiseNode,
-    VolumetricLightNode,
-    ZFogNode
-)
-from core.nodes.depth_generator_nodes import (
-    DepthRampNode,
-    DepthNoiseNode,
-    DepthShapeNode,
-    DepthGradientNode,
-    NormalFromDepthNode,
-    NormalShapeNode,
-    PositionMapNode,
-    CameraDepthNode,
-    HeightMapNode,
-    DisplacementMapNode,
-    UVGridNode,
-    UVSphereNode,
-    VolumeNoiseNode,
-    VolumeSliceNode,
-)
-
+from core.nodes.compositing import (AlphaOverNode, AlphaUnderNode,
+                                    DissolveNode, MatteCombineProNode,
+                                    MergeNode, StencilNode)
+from core.nodes.creative_nodes import (ChromaticAberrationNode, DuotoneNode,
+                                       GlitchNode, GlowEdgesNode, GlowNode,
+                                       HalftoneNode, KaleidoscopeNode,
+                                       LensDistortionNode, LightWrapNode,
+                                       MirrorNode, NeonGlowNode, PixelSortNode,
+                                       PosterEdgesNode, RGBSplitNode,
+                                       RippleNode, ShockwaveNode,
+                                       Transform3DNode, VHSNode)
+from core.nodes.depth_generator_nodes import (CameraDepthNode,
+                                              DepthGradientNode,
+                                              DepthNoiseNode, DepthRampNode,
+                                              DepthShapeNode,
+                                              DisplacementMapNode,
+                                              HeightMapNode,
+                                              NormalFromDepthNode,
+                                              NormalShapeNode, PositionMapNode,
+                                              UVGridNode, UVSphereNode,
+                                              VolumeNoiseNode, VolumeSliceNode)
+from core.nodes.depth_nodes import (Anaglyph3DNode, DepthDisplaceNode,
+                                    DepthEdgeNode, DepthHazeNode,
+                                    DepthOfFieldNode, DepthParallaxNode,
+                                    DepthRelightNode, DepthRimLightNode,
+                                    DepthSliceNode, DepthTiltShiftNode,
+                                    ZFogAdvancedNode, ZGlowAdvancedNode)
+from core.nodes.distort_nodes import (BendNode, BulgeNode, BumpMapNode,
+                                      DirectionalDisplaceNode, DisplaceNode,
+                                      OffsetNode, TileNode, TwirlNode,
+                                      WaveWarpNode)
+from core.nodes.filter_effects import (DenoiseNode, EdgeDetectNode,
+                                       GaussianBlurNode, MotionBlurNode,
+                                       PixelateNode, SharpenNode, VignetteNode)
+from core.nodes.generator_nodes import (CheckerboardNode, ColorBarsNode,
+                                        FogNode, GradientNode,
+                                        HeatDistortionNode, LensFlareNode,
+                                        NoiseNode, RampNode, SolidColorNode,
+                                        UVMapNode, VolumetricLightNode,
+                                        ZFogNode)
 from core.nodes.image_input import ImageInputNode
-from core.nodes.keying_nodes import (
-    ChromaKeyNode,
-    CombineMasksNode,
-    MatteEdgeNode,
-    SpillSuppressNode,
-    PremultNode,
-    CleanPlateNode,
-    DespillProNode,
-)
-from core.nodes.math_nodes import (
-    ClampNode,
-    MathFunctionNode,
-    MathNode,
-    PropertyDriveNode,
-    PropertyLinkNode,
-    RemapNode,
-    ValueNode,
-)
-from core.nodes.value_nodes import (
-    TimelineFpsNode,
-    TimelineFrameNode,
-    TimelineMaxFrameNode,
-    TimelineNormalizedNode,
-    TimelineTimeNode,
-)
+from core.nodes.keying_nodes import (ChromaKeyNode, CleanPlateNode,
+                                     CombineMasksNode, DespillProNode,
+                                     MatteEdgeNode, PremultNode,
+                                     SpillSuppressNode)
+from core.nodes.logic_nodes import (CompareNode, LogicGateNode, OscillatorNode,
+                                    RandomNode, RangeCheckNode, SelectNode,
+                                    SmoothStepNode)
+from core.nodes.math_nodes import (ClampNode, MathFunctionNode, MathNode,
+                                   PropertyDriveNode, PropertyLinkNode,
+                                   RemapNode, ValueNode)
 from core.nodes.roto_nodes import RotoNode
-from core.nodes.stylize_nodes import BloomNode, FilmGrainNode, RadialBlurNode, ScanlinesNode
-from core.nodes.timing_nodes import (
-    FilmFlickerNode,
-    FrameHoldNode,
-    PulseExposureNode,
-    StrobeNode,
-    TimeRemapNode,
-)
-from core.nodes.tracking_nodes import (
-    PlanarTrackerNode,
-    TrackerNode,
-    SurfaceTrackerNode,
-    PlanarHomographyTrackerNode,
-)
-
-from core.nodes.transform_nodes import (
-    CornerPinMaskNode,
-    CornerPinNode,
-    CropNode,
-    Transform2DNode,
-    SphericalWarpNode,
-    PolarWarpNode,
-    SwirlNode,
-    ShearNode,
-    PerspectiveNode,
-)
-
-from core.nodes.depth_nodes import (
-    DepthDisplaceNode,
-    DepthRimLightNode,
-    DepthEdgeNode,
-    DepthParallaxNode,
-    DepthTiltShiftNode,
-    ZFogAdvancedNode,
-    ZGlowAdvancedNode,
-)
-from core.nodes.utility_nodes import ChannelMaskNode, FrameSwitchNode, InvertMaskNode
+from core.nodes.smart_color_nodes import (AutoLevelsNode, AutoWhiteBalanceNode,
+                                          ShotMatchNode)
+from core.nodes.stylize_nodes import (BloomNode, FilmGrainNode, RadialBlurNode,
+                                      ScanlinesNode)
+from core.nodes.timing_nodes import (FilmFlickerNode, FrameHoldNode,
+                                     PulseExposureNode, StrobeNode,
+                                     TimeRemapNode)
+from core.nodes.tracking_nodes import (PlanarHomographyTrackerNode,
+                                       PlanarTrackerNode, SurfaceTrackerNode,
+                                       TrackerNode)
+from core.nodes.transform_nodes import (CornerPinMaskNode, CornerPinNode,
+                                        CropNode, PerspectiveNode,
+                                        PolarWarpNode, ShearNode,
+                                        SphericalWarpNode, SwirlNode,
+                                        Transform2DNode)
+from core.nodes.utility_nodes import (ChannelMaskNode, FrameSwitchNode,
+                                      InvertMaskNode)
+from core.nodes.value_nodes import (TimelineFpsNode, TimelineFrameNode,
+                                    TimelineMaxFrameNode,
+                                    TimelineNormalizedNode, TimelineTimeNode)
 from core.nodes.video_input import VideoInputNode
 from core.nodes.viewer import ViewerNode
 
@@ -228,6 +143,9 @@ BUILTIN_NODE_TYPES: tuple[type[Node], ...] = (
     ThresholdNode,
     PosterizeNode,
     InvertNode,
+    AutoLevelsNode,
+    AutoWhiteBalanceNode,
+    ShotMatchNode,
     # Filters
     GaussianBlurNode,
     SharpenNode,
@@ -268,6 +186,10 @@ BUILTIN_NODE_TYPES: tuple[type[Node], ...] = (
     PosterEdgesNode,
     HalftoneNode,
     VHSNode,
+    DuotoneNode,
+    NeonGlowNode,
+    PixelSortNode,
+    ShockwaveNode,
     # Timing
     FilmFlickerNode,
     StrobeNode,
@@ -281,6 +203,9 @@ BUILTIN_NODE_TYPES: tuple[type[Node], ...] = (
     TileNode,
     DisplaceNode,
     DirectionalDisplaceNode,
+    BendNode,
+    BumpMapNode,
+    OffsetNode,
     # Effects / stylize
     FilmGrainNode,
     ScanlinesNode,
@@ -294,6 +219,11 @@ BUILTIN_NODE_TYPES: tuple[type[Node], ...] = (
     DepthTiltShiftNode,
     ZFogAdvancedNode,
     ZGlowAdvancedNode,
+    Anaglyph3DNode,
+    DepthHazeNode,
+    DepthOfFieldNode,
+    DepthRelightNode,
+    DepthSliceNode,
     # Depth-Generators
     DepthRampNode,
     DepthNoiseNode,
@@ -342,4 +272,12 @@ BUILTIN_NODE_TYPES: tuple[type[Node], ...] = (
     RemapNode,
     PropertyLinkNode,
     PropertyDriveNode,
+    # Logic / procedural
+    CompareNode,
+    LogicGateNode,
+    SelectNode,
+    RangeCheckNode,
+    SmoothStepNode,
+    OscillatorNode,
+    RandomNode,
 )

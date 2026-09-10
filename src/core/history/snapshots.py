@@ -21,6 +21,7 @@ class NodeSnapshot:
     x: float
     y: float
     properties: dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_node(cls, node_id: str, node: Node) -> NodeSnapshot:
@@ -38,6 +39,7 @@ class NodeSnapshot:
             x=float(node.x),
             y=float(node.y),
             properties=props,
+            extra=dict(node.snapshot_data()),
         )
 
     def create_node(self) -> Node | None:
@@ -53,6 +55,8 @@ class NodeSnapshot:
         node.y = self.y
         for key, value in self.properties.items():
             node.set_property(key, value)
+        if self.extra:
+            node.restore_snapshot_data(dict(self.extra))
         return node
 
 

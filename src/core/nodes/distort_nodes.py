@@ -1,15 +1,17 @@
 """Spatial distortion effect nodes."""
 
 from __future__ import annotations
-from core.nodes import NodeSocketType
 
-import numpy as np
 import cv2
-
+import numpy as np
+from core.nodes import NodeSocketType
 from core.nodes.base import NodeProperty
+from core.nodes.enums import BendAxis
 from core.nodes.frame_base import FrameEffectNode, FrameNode
-from core.nodes.property_factory import slider_property, toggle_property
-from effects.distort import bulge, tile, twirl, wave_warp
+from core.nodes.property_factory import (choice_property, slider_property,
+                                         toggle_property)
+from effects.distort import (bend, bulge, bump_map, offset, tile, twirl,
+                             wave_warp)
 
 DISTORT_CATEGORY: str = "Distort"
 
@@ -241,3 +243,164 @@ class DirectionalDisplaceNode(FrameNode):
         map_y = (yy + dy).astype(np.float32)
 
         return cv2.remap(frame, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+
+
+class BendNode(FrameEffectNode):
+    """Bow the frame along an axis with a parabolic curve."""
+
+    node_type: str = "Bend"
+    node_category: str = DISTORT_CATEGORY
+    node_description: str = "Bow the image along an axis like a curved screen"
+    node_color: tuple[int, int, int] = (120, 164, 116)
+
+    def setup_effect_properties(self) -> None:
+        """Register the bend amount and orientation."""
+        self.set_property(
+            "amount",
+            _distort_slider(
+                30, -100, 100, 10, "Amount", "Bend", "%"
+            ),
+        )
+        self.set_property(
+            "axis",
+            choice_property(
+                BendAxis.Horizontal,
+                priority=11,
+                group="Bend",
+                label="Axis",
+                description="Axis the curvature bows along.",
+            ),
+        )
+        self.expose_modulation_input("amount")
+
+    def process_frame(self, frame: np.ndarray, frame_num: int) -> np.ndarray:
+        """Return the bent frame."""
+        del frame_num
+        return bend(
+            frame,
+            amount=self.float_value("amount", 30.0) / 100.0,
+            axis=self.enum_value("axis", BendAxis, BendAxis.Horizontal),
+        )
+
+
+class BumpMapNode(FrameEffectNode):
+    """Emboss the frame using a height map as a lit surface."""
+
+    node_type: str = "Bump Map"
+    node_category: str = DISTORT_CATEGORY
+    node_description: str = "Relight the frame using a height map for embossed relief"
+    node_color: tuple[int, int, int] = (150, 132, 104)
+
+    def setup_effect_properties(self) -> None:
+        """Add the height-map input and register the lighting controls."""
+        self.add_input("height_map", NodeSocketType.Frame)
+        self.set_property(
+            "intensity",
+            slider_property(
+                10,
+                0,
+                100,
+                priority=10,
+                group="Bump",
+                label="Intensity",
+                description="Steepness of the recovered surface.",
+                suffix="%",
+            ),
+        )
+        self.set_property(
+            "light_x",
+            slider_property(
+                -50,
+                -100,
+                100,
+                priority=11,
+                group="Light",
+                label="Light X",
+                description="Horizontal light direction.",
+                suffix="%",
+            ),
+        )
+        self.set_property(
+            "light_y",
+            slider_property(
+                -70,
+                -100,
+                100,
+                priority=12,
+                group="Light",
+                label="Light Y",
+                description="Vertical light direction.",
+                suffix="%",
+            ),
+        )
+        self.set_property(
+            "blur",
+            slider_property(
+                0,
+                0,
+                32,
+                priority=13,
+                group="Bump",
+                label="Smooth",
+                description="Soften the height map before shading.",
+                suffix=" px",
+            ),
+        )
+        self.expose_modulation_input("intensity")
+
+    def process_frame(self, frame: np.ndarray, frame_num: int) -> np.ndarray:
+        """Return the bump-lit frame, or the source when unwired."""
+        del frame_num
+        height_map: np.ndarray | None = self.input_frame("height_map")
+        if height_map is None:
+            return frame
+        return bump_map(
+            frame,
+            height_map,
+            intensity=self.float_value("intensity", 10.0) / 100.0 * 10.0,
+            light_x=self.float_value("light_x", -50.0) / 100.0,
+            light_y=self.float_value("light_y", -70.0) / 100.0,
+            blur=self.float_value("blur", 0.0),
+        )
+
+
+class OffsetNode(FrameEffectNode):
+    """Shift the frame by a fraction of its size, wrapping or filling."""
+
+    node_type: str = "Offset"
+    node_category: str = DISTORT_CATEGORY
+    node_description: str = "Offset the image with wrap-around or edge fill"
+    node_color: tuple[int, int, int] = (128, 148, 108)
+
+    def setup_effect_properties(self) -> None:
+        """Register the offset amounts and wrap option."""
+        self.set_property(
+            "offset_x",
+            _distort_slider(0, -100, 100, 10, "Offset X", "Offset", "%"),
+        )
+        self.set_property(
+            "offset_y",
+            _distort_slider(0, -100, 100, 11, "Offset Y", "Offset", "%"),
+        )
+        self.set_property(
+            "wrap",
+            toggle_property(
+                True,
+                priority=12,
+                group="Offset",
+                label="Wrap",
+                description="Repeat pixels around instead of leaving black edges.",
+            ),
+        )
+        self.expose_modulation_input("offset_x")
+        self.expose_modulation_input("offset_y")
+
+    def process_frame(self, frame: np.ndarray, frame_num: int) -> np.ndarray:
+        """Return the offset frame."""
+        del frame_num
+        return offset(
+            frame,
+            offset_x=self.float_value("offset_x", 0.0) / 100.0,
+            offset_y=self.float_value("offset_y", 0.0) / 100.0,
+            wrap=self.bool_value("wrap", True),
+        )

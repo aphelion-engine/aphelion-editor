@@ -5,11 +5,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import QPointF
-from PyQt6.QtWidgets import QMenu, QWidget
-
 from config.keybinds import KeyAction, KeybindStore
 from config.theme import CONTEXT_MENU_STYLE
+from PyQt6.QtCore import QPointF
+from PyQt6.QtWidgets import QMenu, QWidget
 from ui.icons import AppIcon, make_dot_icon, make_icon
 from ui.keybinds import apply_menu_hint
 from ui.node_graph.constants import MENU_ICON_SIZE_PX
@@ -121,6 +120,9 @@ class NodeOperationsMenu(QMenu):
         apply_menu_hint(duplicate, keybinds, KeyAction.DUPLICATE)
         duplicate.triggered.connect(lambda: node_ops.duplicate_items(self.view, items))
 
+        self.addSeparator()
+        self._add_custom_node_menu(items)
+
         if count == 1:
             self._add_insert_after_menu(items[0])
 
@@ -143,6 +145,43 @@ class NodeOperationsMenu(QMenu):
         assert organize is not None
         apply_menu_hint(organize, keybinds, KeyAction.ORGANIZE_GRAPH)
         organize.triggered.connect(self.view.organize_graph)
+
+    def _add_custom_node_menu(self, items: list[NodeItem]) -> None:
+        """Add custom-node create / edit / expand entries."""
+        from core.nodes.custom_nodes import CustomNode
+
+        count = len(items)
+        selected_node = (
+            self.view.project.nodes.get(
+                items[0].node_id) if count == 1 else None
+        )
+        is_custom = isinstance(selected_node, CustomNode)
+
+        create = self.addAction(
+            make_icon(AppIcon.ADD_NODE), "Create Custom Node…"
+        )
+        assert create is not None
+        create.setEnabled(count >= 1)
+        create.setToolTip(
+            "Collapse the selected nodes into a reusable custom node"
+        )
+        create.triggered.connect(self.view.create_custom_node_from_selection)
+
+        edit = self.addAction(
+            make_icon(AppIcon.SETTINGS), "Edit Custom Node…"
+        )
+        assert edit is not None
+        edit.setEnabled(is_custom)
+        edit.setToolTip("Edit this custom node's inner graph and ports")
+        edit.triggered.connect(self.view.edit_selected_custom_node)
+
+        expand = self.addAction(
+            make_icon(AppIcon.DUPLICATE), "Expand Custom Node"
+        )
+        assert expand is not None
+        expand.setEnabled(is_custom)
+        expand.setToolTip("Replace the custom node with its underlying nodes")
+        expand.triggered.connect(self.view.expand_selected_custom_node)
 
     def _add_insert_after_menu(self, item: NodeItem) -> None:
         from core.nodes import global_node_registry

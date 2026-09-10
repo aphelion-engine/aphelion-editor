@@ -5,19 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import QEvent, QObject, QTimer, Qt
-from PyQt6.QtGui import QAction, QCloseEvent, QIcon
-from PyQt6.QtWidgets import (
-    QApplication,
-    QDockWidget,
-    QFileDialog,
-    QLabel,
-    QMainWindow,
-    QMessageBox,
-    QToolBar,
-    QWidget,
-)
-
+from aphelion_sdk.widgets.host import WidgetContext
 from app_io import APH_FILE_FILTER, AphFormatError, load_aph, save_aph
 from app_io.plugin_loader import PluginLoader, plugin_registry_key
 from config.constants import AUTOSAVE_INTERVAL_MS
@@ -25,41 +13,34 @@ from config.keybinds import KeybindStore
 from config.theme import DARK_THEME
 from config.theme_engine import ThemeStyles, build_theme_styles
 from core.boot import RecentProjectsStore
-from core.preferences import PreferencesStore
-from core.preferences.applier import apply_preferences_to_editor
 from core.events import DOCUMENT_DIRTY_EVENTS, ObserverEvent
 from core.history import HistoryStack
 from core.history.commands import SetProjectSettingsCommand
 from core.nodes.roto_nodes import RotoNode
 from core.nodes.tracking_nodes import TRACKER_NODES
+from core.preferences import PreferencesStore
+from core.preferences.applier import apply_preferences_to_editor
 from core.project import Project
-from ui.dialogs import (
-    AboutDialog,
-    ExportDialog,
-    PinBarDialog,
-    PreferencesDialog,
-    ProjectSettingsDialog,
-    ShortcutsDialog,
-)
+from PyQt6.QtCore import QEvent, QObject, Qt, QTimer
+from PyQt6.QtGui import QAction, QCloseEvent, QIcon
+from PyQt6.QtWidgets import (QApplication, QDockWidget, QFileDialog, QLabel,
+                             QMainWindow, QMessageBox, QToolBar, QWidget)
+from ui.dialogs import (AboutDialog, ExportDialog, PinBarDialog,
+                        PreferencesDialog, ProjectSettingsDialog,
+                        ShortcutsDialog)
 from ui.dialogs.plugin_dialog import open_attached_dialog
 from ui.keybinds import EditorActions, status_hint_line
 from ui.node_graph import NodeGraphView
 from ui.node_graph import operations as node_ops
 from ui.timeline import TimelineWidget
-from ui.widgets import (
-    EditorStatusBar,
-    KeyframesPanelWidget,
-    LogViewerWidget,
-    MediaPoolWidget,
-    PropertiesPanel,
-    ViewportWidget,
-)
+from ui.widgets import (EditorStatusBar, KeyframesPanelWidget, LogViewerWidget,
+                        MediaPoolWidget, PropertiesPanel, ViewportWidget)
+from ui.widgets.plugin_host import EditorWidgetHost
 from ui.windows.layouts import EditorDocks, LayoutMode, apply_layout
 from ui.windows.menubar import build_menu_bar
 from ui.windows.plugin_panels import mount_plugin_panels
-from ui.windows.toolbar import build_pin_bar, resolve_pinned_actions, sync_pin_bar
-from aphelion_sdk.widgets.host import WidgetContext
-from ui.widgets.plugin_host import EditorWidgetHost
+from ui.windows.toolbar import (build_pin_bar, resolve_pinned_actions,
+                                sync_pin_bar)
 from utils.logging_setup import get_logger
 from utils.paths import resource_path
 
@@ -485,9 +466,8 @@ class Editor(QMainWindow):
 
     def refresh_node_colors(self) -> None:
         """Refresh accent colors on all graph node items."""
-        from PyQt6.QtGui import QColor
-
         from core.nodes.registry import global_node_registry
+        from PyQt6.QtGui import QColor
 
         for node_id, item in self.node_graph.node_items.items():
             node = self.project.nodes.get(node_id)
@@ -785,6 +765,11 @@ class Editor(QMainWindow):
         items = self.node_graph.selected_nodes()
         if items:
             node_ops.duplicate_items(self.node_graph, items)
+
+    def create_custom_node_from_selection(self) -> None:
+        """Collapse the graph selection into a reusable custom node."""
+        self.node_graph.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self.node_graph.create_custom_node_from_selection()
 
     def set_layout_mode(self, mode: LayoutMode) -> None:
         """Apply a named workspace layout preset."""

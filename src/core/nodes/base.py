@@ -7,7 +7,6 @@ from enum import IntEnum, auto
 from typing import Any
 
 import numpy as np
-
 from config.constants import DEFAULT_FPS, DEFAULT_HEIGHT, DEFAULT_WIDTH
 from core.animation import AnimationCurve
 from core.audio import AudioData, FrameWithAudio
@@ -150,6 +149,12 @@ class Node(ABC):
         self._node_property_resolver: NodePropertyResolver | None = None
         self._property_drive_lookup: PropertyDriveLookup | None = None
 
+        # Reusable evaluation helpers. ``Project`` binds these once per
+        # node instead of allocating a fresh closure for every node on
+        # every evaluated frame, which matters for long exports.
+        self._drive_lookup: Any = None
+        self._eval_resampler: Any = None
+
         self.exception_log: list[Exception] = []
         self._setup_sockets()
 
@@ -263,6 +268,21 @@ class Node(ABC):
     @abstractmethod
     def evaluate(self, frame_num: int) -> NodeValue:
         raise NotImplementedError
+
+    def snapshot_data(self) -> dict[str, Any]:
+        """Return extra state needed to recreate this node for undo / copy.
+
+        The base implementation returns nothing because most nodes are fully
+        described by ``node_type`` plus their serialized properties. Nodes
+        that own non-property state (for example a custom node's embedded
+        subgraph definition) override this so undo, redo, duplicate, and
+        copy/paste all preserve it.
+        """
+        return {}
+
+    def restore_snapshot_data(self, data: dict[str, Any]) -> None:
+        """Restore state previously produced by :meth:`snapshot_data`."""
+        return
 
     def to_dict(self) -> dict[str, Any]:
         from core.serialization import encode_value

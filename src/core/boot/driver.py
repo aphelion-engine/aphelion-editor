@@ -13,9 +13,8 @@ from app_io.node_loader import NodeLoader
 from app_io.plugin_loader import PluginLoader
 from core.boot.request import BootMode, BootRequest
 from core.nodes.base import Node, NodeSocketType
-from core.nodes.video_input import VideoInputNode
 from core.nodes.property_link import sockets_compatible
-
+from core.nodes.video_input import VideoInputNode
 from core.preferences.models import PluginSettings
 from core.preferences.store import PreferencesStore
 from core.project import Project
@@ -142,11 +141,26 @@ class EditorBootDriver:
             NodeLoader.load_defaults()
             self._nodes_registered = True
 
+        # Reusable custom nodes live outside the built-in catalog. Loading
+        # them here (before the project document stage) means saved projects
+        # referencing them resolve, and they appear in every Add Node menu.
+        from core.custom_node_store import global_custom_node_store
+
+        global_custom_node_store.load()
+        custom_count = len(global_custom_node_store.names())
+
         count = len(NodeLoader.default_nodes)
+
+        detail = (
+            f"{custom_count} custom node definition(s)"
+            if custom_count
+            else ""
+        )
 
         return BootStageResult(
             True,
             f"Registered {count} built-in node type(s)",
+            detail=detail,
         )
 
     # ------------------------------------------------------------------
@@ -998,17 +1012,28 @@ def _node_registry() -> Mapping[str, Any]:
     registry = NodeLoader.default_nodes
 
     if isinstance(registry, Mapping):
-        return registry
+        result = dict(registry)
+    else:
+        result = {}
 
-    result: dict[str, Any] = {}
+        try:
+            for item in registry:
+                node_type = getattr(item, "node_type", None)
 
+                if isinstance(node_type, str) and node_type:
+                    result[node_type] = item
+        except TypeError:
+            pass
+
+    # Dynamically registered types (plugins, custom nodes) are not part of
+    # NodeLoader.default_nodes. Consult the live registry so a saved project
+    # that references one is not reported as an unknown node type.
     try:
-        for item in registry:
-            node_type = getattr(item, "node_type", None)
+        from core.nodes.registry import global_node_registry
 
-            if isinstance(node_type, str) and node_type:
-                result[node_type] = item
-    except TypeError:
+        for info in global_node_registry.get_all_nodes().values():
+            result.setdefault(info.name, info.node_class)
+    except Exception:  # noqa: BLE001 - validation must never crash on this
         pass
 
     return result

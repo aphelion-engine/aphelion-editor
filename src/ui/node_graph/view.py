@@ -4,46 +4,27 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer
-from PyQt6.QtGui import (
-    QBrush,
-    QColor,
-    QKeyEvent,
-    QLinearGradient,
-    QPainter,
-    QPainterPath,
-    QPen,
-    QRadialGradient,
-    QWheelEvent,
-)
-from PyQt6.QtWidgets import (
-    QFrame,
-    QGraphicsScene,
-    QGraphicsView,
-    QMenu,
-)
-
+import ui.node_graph.custom_node_ops as custom_node_ops
+import ui.node_graph.operations as node_ops
 from config.keybinds import KeybindStore
+from core.custom_node_store import global_custom_node_store
 from core.events import Connection, ObserverEvent
-from core.history import (
-    AddNodeCommand,
-    CompositeCommand,
-    ConnectCommand,
-    DisconnectCommand,
-    HistoryStack,
-    MoveNodesCommand,
-    RemoveNodesCommand,
-)
+from core.history import (AddNodeCommand, CompositeCommand, ConnectCommand,
+                          DisconnectCommand, HistoryStack, MoveNodesCommand,
+                          RemoveNodesCommand)
 from core.nodes import global_node_registry
 from core.project import Project
-
+from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer
+from PyQt6.QtGui import (QBrush, QColor, QKeyEvent, QLinearGradient, QPainter,
+                         QPainterPath, QPen, QRadialGradient, QWheelEvent)
+from PyQt6.QtWidgets import (QDialog, QFrame, QGraphicsScene, QGraphicsView,
+                             QMenu, QMessageBox)
+from ui.node_graph.clipboard import GraphClipboard
 from ui.node_graph.connection_item import ConnectionItem, PreviewWireItem
 from ui.node_graph.constants import GRID_SPACING_PX, SOCKET_SNAP_DISTANCE_PX
-from ui.node_graph.theme_state import current_graph_palette
-from ui.node_graph.clipboard import GraphClipboard
 from ui.node_graph.node_item import NodeItem
 from ui.node_graph.search_palette import NodeSearchPalette
-import ui.node_graph.operations as node_ops
+from ui.node_graph.theme_state import current_graph_palette
 
 
 class NodeGraphView(QGraphicsView):
@@ -513,6 +494,126 @@ class NodeGraphView(QGraphicsView):
         self._context_menu = NodeOperationsMenu(self, self)
         self._context_menu.exec(global_pos)
         self._context_menu = None
+
+    # ==================================================================
+    # Custom nodes
+    # ==================================================================
+
+    def create_custom_node_from_selection(self) -> str | None:
+        """Collapse the selected nodes into a reusable custom node."""
+        from ui.dialogs.custom_node_dialog import CustomNodeCreateDialog
+
+        node_ids = [
+            item.node_id
+            for item in self.selected_nodes()
+            if item.node_id in self.project.nodes
+        ]
+        collapsible = [
+            node_id
+            for node_id in node_ids
+            if custom_node_ops.is_collapsible(self.project.nodes[node_id])
+        ]
+        if not collapsible:
+            QMessageBox.information(
+                self,
+                "Create Custom Node",
+                "Select one or more processing nodes first.\n\n"
+                "Viewers cannot be part of a custom node; wires leaving the "
+                "selection become exposed outputs instead.",
+            )
+            return None
+
+        dialog = CustomNodeCreateDialog(
+            self,
+            project=self.project,
+            node_ids=node_ids,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+
+        node_id = custom_node_ops.collapse_to_custom_node(
+            self,
+            node_ids,
+            name=dialog.node_name,
+            description=dialog.description,
+            color=dialog.color,
+        )
+        if node_id is None:
+            QMessageBox.warning(
+                self,
+                "Create Custom Node",
+                "Could not create the custom node from this selection.",
+            )
+            return None
+
+        if dialog.edit_after:
+            self.edit_custom_node(node_id)
+
+        status = self.window().statusBar() if self.window() is not None else None
+        if status is not None:
+            status.showMessage(
+                f"Created custom node: {dialog.node_name}", 2500)
+        return node_id
+
+    def edit_custom_node(self, node_id: str) -> bool:
+        """Open the definition editor for a custom node instance."""
+        from core.nodes.custom_nodes import CustomNode
+        from ui.dialogs.custom_node_dialog import CustomNodeEditorDialog
+
+        node = self.project.nodes.get(node_id)
+        if not isinstance(node, CustomNode):
+            return False
+
+        previous_name = node.definition_name
+        dialog = CustomNodeEditorDialog(
+            node.definition,
+            self,
+            keybinds=self.keybinds,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+
+        definition = dialog.definition
+        if definition is None:
+            return False
+
+        if (
+            previous_name != definition.name
+            and global_custom_node_store.has(previous_name)
+        ):
+            global_custom_node_store.remove(previous_name, persist=False)
+        global_custom_node_store.upsert(definition)
+        custom_node_ops.apply_definition_to_project(
+            self,
+            definition,
+            previous_name=previous_name,
+        )
+        return True
+
+    def edit_selected_custom_node(self) -> bool:
+        items = self.selected_nodes()
+        if len(items) != 1:
+            return False
+        return self.edit_custom_node(items[0].node_id)
+
+    def expand_selected_custom_node(self) -> bool:
+        """Dissolve the selected custom node into its underlying nodes."""
+        items = self.selected_nodes()
+        if len(items) != 1:
+            QMessageBox.information(
+                self,
+                "Expand Custom Node",
+                "Select a single custom node to expand.",
+            )
+            return False
+        if not custom_node_ops.expand_custom_node(self, items[0].node_id):
+            QMessageBox.information(
+                self,
+                "Expand Custom Node",
+                "The selected node is not a custom node.",
+            )
+            return False
+        return True
 
     def copy_selection(self) -> None:
         """Copy selected nodes into the graph clipboard."""

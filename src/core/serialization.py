@@ -5,21 +5,13 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
-from core.nodes.base import (
-    MediaEdgeMode,
-    MediaLoopMode,
-    NodeSocketType,
-    VideoFrameErrorMethod,
-)
-from core.nodes.enums import (
-    BlendMode,
-    CombineMaskMode,
-    EdgeDisplayMode,
-    GradientMode,
-    MaskChannel,
-    SwitchInput,
-    TransformBorderMode,
-)
+from core.nodes.base import (MediaEdgeMode, MediaLoopMode, NodeSocketType,
+                             VideoFrameErrorMethod)
+from core.nodes.enums import (AnaglyphMode, AutoBalanceMode, BendAxis,
+                              BlendMode, CombineMaskMode, ComparisonOperation,
+                              EaseMode, EdgeDisplayMode, GradientMode,
+                              LogicOperation, MaskChannel, PixelSortMode,
+                              SwitchInput, TransformBorderMode, Waveform)
 from render.preview import ViewerBackground, ViewportFitMode
 
 APH_FORMAT_ID: str = "aphelion-project"
@@ -31,11 +23,18 @@ _ENUM_TYPES: dict[str, type[Enum]] = {
     "MediaLoopMode": MediaLoopMode,
     "VideoFrameErrorMethod": VideoFrameErrorMethod,
     "NodeSocketType": NodeSocketType,
+    "AnaglyphMode": AnaglyphMode,
+    "AutoBalanceMode": AutoBalanceMode,
+    "BendAxis": BendAxis,
     "BlendMode": BlendMode,
     "CombineMaskMode": CombineMaskMode,
+    "ComparisonOperation": ComparisonOperation,
+    "EaseMode": EaseMode,
     "EdgeDisplayMode": EdgeDisplayMode,
     "GradientMode": GradientMode,
+    "LogicOperation": LogicOperation,
     "MaskChannel": MaskChannel,
+    "PixelSortMode": PixelSortMode,
     "SwitchInput": SwitchInput,
     "TransformBorderMode": TransformBorderMode,
     "ViewportFitMode": ViewportFitMode,

@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import numpy as np
 import cv2
-
+import numpy as np
 from core.nodes.base import WHITE_COLOR_RGB, NodeProperty, NodeSocketType
 from core.nodes.enums import GradientMode, NoiseType
 from core.nodes.frame_base import FrameNode
-from core.nodes.property_factory import choice_property, color_property, slider_property
+from core.nodes.property_factory import (choice_property, color_property,
+                                         slider_property)
 from effects.generators import checkerboard, color_bars, gradient, solid_color
 
 GENERATOR_CATEGORY: str = "Generator"
@@ -620,21 +620,42 @@ class VolumetricLightNode(FrameNode):
         cx = int(self.float_value("center_x", 50.0) / 100.0 * w)
         cy = int(self.float_value("center_y", 50.0) / 100.0 * h)
         intensity = self.float_value("intensity", 100.0) / 100.0
-        samples = int(self.float_value("samples", 32))
+        samples = max(1, int(self.float_value("samples", 32)))
 
-        rays = np.zeros((h, w), np.float32)
-        yy, xx = np.indices((h, w))
+        # Bilinear interpolation is linear, so collapsing the source to
+        # luminance *once* is mathematically identical to averaging each of
+        # the ``samples`` remapped RGB frames. It also drops every remap to a
+        # single channel instead of three, and removes the per-sample
+        # ``mean(axis=2)`` reduction that dominated this node's cost.
+        gray = frame[..., :3].mean(axis=2, dtype=np.float32)
+
+        # float32 maps avoid the two full-frame int64 -> float32 casts that
+        # the default ``np.indices`` dtype forced on every sample.
+        yy, xx = np.indices((h, w), dtype=np.float32)
         dx = cx - xx
         dy = cy - yy
 
+        rays = np.zeros((h, w), np.float32)
+        # Reused per-sample buffers: the ray-march loop otherwise allocates
+        # four full-resolution arrays on every iteration.
+        sx = np.empty((h, w), np.float32)
+        sy = np.empty((h, w), np.float32)
+        sample = np.empty((h, w), np.float32)
+
         for i in range(samples):
             t = i / samples
-            sx = (xx + dx * t).astype(np.float32)
-            sy = (yy + dy * t).astype(np.float32)
-            sample = cv2.remap(frame[..., :3], sx, sy, cv2.INTER_LINEAR)
-            rays += sample.mean(axis=2)
 
-        rays = np.clip(rays * intensity / samples, 0, 1)
+            np.multiply(dx, t, out=sx)
+            np.add(sx, xx, out=sx)
+            np.multiply(dy, t, out=sy)
+            np.add(sy, yy, out=sy)
+
+            cv2.remap(gray, sx, sy, cv2.INTER_LINEAR, dst=sample)
+            np.add(rays, sample, out=rays)
+
+        np.multiply(rays, intensity / samples, out=rays)
+        np.clip(rays, 0.0, 1.0, out=rays)
+
         return np.dstack([rays, rays, rays])
 
 class ZFogNode(FrameNode):

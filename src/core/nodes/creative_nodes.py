@@ -5,12 +5,13 @@ from __future__ import annotations
 import cv2
 import numpy as np
 from core.nodes.base import NodeProperty
-from core.nodes.enums import MirrorAxis
+from core.nodes.enums import MirrorAxis, PixelSortMode
 from core.nodes.frame_base import FrameEffectNode
-from core.nodes.property_factory import (choice_property, slider_property,
-                                         toggle_property)
-from effects.creative import (chromatic_aberration, glitch, kaleidoscope,
-                              lens_distortion, mirror, rgb_split, ripple,
+from core.nodes.property_factory import (choice_property, color_property,
+                                         slider_property, toggle_property)
+from effects.creative import (chromatic_aberration, duotone, glitch,
+                              kaleidoscope, lens_distortion, mirror, neon_glow,
+                              pixel_sort, rgb_split, ripple, shockwave,
                               transform_3d)
 
 CREATIVE_CATEGORY: str = "Creative"
@@ -543,3 +544,293 @@ class VHSNode(FrameEffectNode):
         static = np.random.random(rgb.shape).astype(np.float32) * noise
 
         return np.clip(shifted + static, 0, 1)
+
+
+class PixelSortNode(FrameEffectNode):
+    """Sort bright runs of pixels to smear highlights into streaks."""
+
+    node_type: str = "Pixel Sort"
+    node_category: str = CREATIVE_CATEGORY
+    node_description: str = "Sort bright pixel runs into glitch streaks"
+    node_color: tuple[int, int, int] = (206, 88, 118)
+
+    def setup_effect_properties(self) -> None:
+        """Register the sort key, selection threshold, and run length."""
+        self.set_property(
+            "mode",
+            choice_property(
+                PixelSortMode.Luminance,
+                priority=10,
+                group="Sort",
+                label="Sort Key",
+                description="Pixel value used to order each run.",
+            ),
+        )
+        self.set_property(
+            "threshold",
+            slider_property(
+                55,
+                0,
+                100,
+                priority=11,
+                group="Sort",
+                label="Threshold",
+                description="Only pixels brighter than this are sorted.",
+                suffix="%",
+            ),
+        )
+        self.set_property(
+            "length",
+            slider_property(
+                64,
+                4,
+                512,
+                priority=12,
+                group="Sort",
+                label="Max Length",
+                description="Longest run sorted before starting a new one.",
+                suffix=" px",
+            ),
+        )
+        self.set_property(
+            "reverse",
+            toggle_property(
+                False,
+                priority=13,
+                group="Sort",
+                label="Reverse",
+                description="Sort brightest to darkest instead.",
+            ),
+        )
+        self.expose_modulation_input("threshold")
+
+    def process_frame(self, frame: np.ndarray, frame_num: int) -> np.ndarray:
+        """Return the pixel-sorted frame."""
+        del frame_num
+        return pixel_sort(
+            frame,
+            mode=self.enum_value("mode", PixelSortMode,
+                                 PixelSortMode.Luminance),
+            threshold=self.float_value("threshold", 55.0) / 100.0,
+            max_length=int(self.int_value("length", 64)),
+            reverse=self.bool_value("reverse", False),
+        )
+
+
+class DuotoneNode(FrameEffectNode):
+    """Remap luminance between two colors for a striking poster look."""
+
+    node_type: str = "Duotone"
+    node_category: str = CREATIVE_CATEGORY
+    node_description: str = "Map shadows and highlights between two colors"
+    node_color: tuple[int, int, int] = (168, 116, 200)
+
+    def setup_effect_properties(self) -> None:
+        """Register the shadow and highlight colors."""
+        self.set_property(
+            "dark",
+            color_property(
+                (18, 10, 48),
+                priority=10,
+                group="Colors",
+                label="Shadows",
+                description="Color mapped to the darkest pixels.",
+            ),
+        )
+        self.set_property(
+            "light",
+            color_property(
+                (255, 212, 120),
+                priority=11,
+                group="Colors",
+                label="Highlights",
+                description="Color mapped to the brightest pixels.",
+            ),
+        )
+
+    def process_frame(self, frame: np.ndarray, frame_num: int) -> np.ndarray:
+        """Return the two-color remap."""
+        del frame_num
+        return duotone(
+            frame,
+            dark=self.color_value("dark", (18, 10, 48)),
+            light=self.color_value("light", (255, 212, 120)),
+        )
+
+
+class NeonGlowNode(FrameEffectNode):
+    """Darken the image and light its edges in a neon tint."""
+
+    node_type: str = "Neon Glow"
+    node_category: str = CREATIVE_CATEGORY
+    node_description: str = "Edge-lit neon sign look with a tinted glow"
+    node_color: tuple[int, int, int] = (84, 196, 208)
+
+    def setup_effect_properties(self) -> None:
+        """Register the neon tint, edge detection, and glow controls."""
+        self.set_property(
+            "color",
+            color_property(
+                (64, 255, 220),
+                priority=10,
+                group="Neon",
+                label="Color",
+                description="Tint applied to the glowing edges.",
+            ),
+        )
+        self.set_property(
+            "edge_threshold",
+            slider_property(
+                60,
+                0,
+                255,
+                priority=11,
+                group="Neon",
+                label="Edge Threshold",
+                description="Minimum edge strength that glows.",
+            ),
+        )
+        self.set_property(
+            "radius",
+            slider_property(
+                6,
+                0,
+                64,
+                priority=12,
+                group="Neon",
+                label="Glow Radius",
+                description="Softness of the glow.",
+                suffix=" px",
+            ),
+        )
+        self.set_property(
+            "intensity",
+            slider_property(
+                200,
+                0,
+                500,
+                priority=13,
+                group="Neon",
+                label="Intensity",
+                description="Brightness of the glowing edges.",
+                suffix="%",
+            ),
+        )
+        self.set_property(
+            "background",
+            slider_property(
+                30,
+                0,
+                100,
+                priority=14,
+                group="Neon",
+                label="Background",
+                description="Brightness of the underlying image.",
+                suffix="%",
+            ),
+        )
+        self.expose_modulation_input("intensity")
+
+    def process_frame(self, frame: np.ndarray, frame_num: int) -> np.ndarray:
+        """Return the neon-lit frame."""
+        del frame_num
+        return neon_glow(
+            frame,
+            color=self.color_value("color", (64, 255, 220)),
+            threshold=int(self.int_value("edge_threshold", 60)),
+            radius=self.float_value("radius", 6.0),
+            intensity=self.float_value("intensity", 200.0) / 100.0,
+            background=self.float_value("background", 30.0) / 100.0,
+        )
+
+
+class ShockwaveNode(FrameEffectNode):
+    """Radial displacement ring that expands over time."""
+
+    node_type: str = "Shockwave"
+    node_category: str = CREATIVE_CATEGORY
+    node_description: str = "Expanding radial distortion ring for impacts and teleports"
+    node_color: tuple[int, int, int] = (196, 128, 96)
+
+    def setup_effect_properties(self) -> None:
+        """Register the ring animation and placement controls."""
+        self.set_property(
+            "progress",
+            slider_property(
+                0,
+                0,
+                100,
+                priority=10,
+                group="Ring",
+                label="Progress",
+                description="Ring radius as a fraction of the frame.",
+                suffix="%",
+            ),
+        )
+        self.set_property(
+            "amplitude",
+            slider_property(
+                40,
+                0,
+                100,
+                priority=11,
+                group="Ring",
+                label="Amplitude",
+                description="Strength of the outward distortion.",
+                suffix="%",
+            ),
+        )
+        self.set_property(
+            "wavelength",
+            slider_property(
+                25,
+                1,
+                100,
+                priority=12,
+                group="Ring",
+                label="Thickness",
+                description="Width of the distortion band.",
+                suffix="%",
+            ),
+        )
+        self.set_property(
+            "center_x",
+            slider_property(
+                50,
+                0,
+                100,
+                priority=13,
+                group="Center",
+                label="Center X",
+                description="Horizontal ring origin.",
+                suffix="%",
+            ),
+        )
+        self.set_property(
+            "center_y",
+            slider_property(
+                50,
+                0,
+                100,
+                priority=14,
+                group="Center",
+                label="Center Y",
+                description="Vertical ring origin.",
+                suffix="%",
+            ),
+        )
+        # An Oscillator or Value node drives the ring outward over time.
+        self.expose_modulation_input("progress")
+        self.expose_modulation_input("amplitude")
+
+    def process_frame(self, frame: np.ndarray, frame_num: int) -> np.ndarray:
+        """Return the frame displaced by the current ring."""
+        del frame_num
+        return shockwave(
+            frame,
+            progress=self.float_value("progress", 0.0) / 100.0,
+            amplitude=self.float_value("amplitude", 40.0) / 100.0,
+            wavelength=self.float_value("wavelength", 25.0) / 100.0,
+            center_x=self.float_value("center_x", 50.0) / 100.0,
+            center_y=self.float_value("center_y", 50.0) / 100.0,
+        )

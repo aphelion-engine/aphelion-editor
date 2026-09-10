@@ -4,16 +4,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PyQt6.QtGui import QAction, QActionGroup
-from PyQt6.QtWidgets import QDockWidget, QMenu, QMenuBar
-
 from aphelion_sdk.widgets.host import WidgetContext
 from config.keybinds import KeyAction
 from config.theme import CONTEXT_MENU_STYLE, MENUBAR_STYLE
+from core.widgets.registry import global_widget_registry
+from PyQt6.QtGui import QAction, QActionGroup
+from PyQt6.QtWidgets import QDockWidget, QMenu, QMenuBar
 from ui.icons import AppIcon, make_icon
 from ui.node_graph.node_menu import populate_add_node_menu
 from ui.windows.layouts import LAYOUT_LABELS, LayoutMode
-from core.widgets.registry import global_widget_registry
 
 if TYPE_CHECKING:
     from ui.windows.editor import Editor
@@ -90,6 +89,8 @@ def _build_edit_menu(menubar: QMenuBar, editor: Editor) -> None:
     _add_action(edit_menu, editor, KeyAction.SELECT_ALL)
     _add_action(edit_menu, editor, KeyAction.DUPLICATE)
     _add_action(edit_menu, editor, KeyAction.DELETE)
+    edit_menu.addSeparator()
+    _add_action(edit_menu, editor, KeyAction.CREATE_CUSTOM_NODE)
     edit_menu.addSeparator()
     _add_action(edit_menu, editor, KeyAction.CLEAR_CACHE)
     edit_menu.addSeparator()

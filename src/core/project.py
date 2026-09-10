@@ -8,28 +8,77 @@ from collections.abc import Callable
 from dataclasses import replace
 from typing import Any
 
-from config.constants import (
-    DEFAULT_DURATION,
-    DEFAULT_FPS,
-    DEFAULT_HEIGHT,
-    DEFAULT_WIDTH,
-    FRAME_CACHE_MAX_MB,
-)
+from config.constants import (DEFAULT_DURATION, DEFAULT_FPS, DEFAULT_HEIGHT,
+                              DEFAULT_WIDTH, FRAME_CACHE_MAX_MB)
 from core.audio import FrameWithAudio
 from core.cache import FrameCache
 from core.events import Connection, ObserverEvent
 from core.graph import DependencyGraph
 from core.nodes import Node, VideoInputNode, global_node_registry
 from core.nodes.base import NodePropertyInputType, NodeSocketType
-from core.nodes.property_link import (
-    PROPERTY_DRIVE_PROPERTY_KEY,
-    PROPERTY_DRIVE_VALUE_SLOT,
-    property_drive_target_id,
-    sockets_compatible,
-)
+from core.nodes.property_link import (PROPERTY_DRIVE_PROPERTY_KEY,
+                                      PROPERTY_DRIVE_VALUE_SLOT,
+                                      property_drive_target_id,
+                                      sockets_compatible)
 from core.project_settings import ProjectSettings
 from core.serialization import APH_FORMAT_ID, APH_FORMAT_VERSION
 from render.preview import PreviewSettings
+
+#: Distinct "not in dict" marker so an export-cache hit of ``None`` is not
+#: confused with a miss.
+_CACHE_MISS: object = object()
+
+
+class _NodeDriveLookup:
+    """Reusable per-node property-drive lookup.
+
+    The evaluator used to allocate a fresh closure for every node on every
+    frame just to capture ``(node_id, overrides)``. Exports evaluate the
+    same node thousands of times, so that allocation churn is replaced by
+    one long-lived callable that the node keeps for its lifetime.
+    """
+
+    __slots__ = ("owner", "node_id", "_overrides")
+
+    def __init__(
+        self,
+        owner: Project,
+        overrides: dict[tuple[str, str], float],
+        node_id: str,
+    ) -> None:
+        self.owner = owner
+        self.node_id = node_id
+        self._overrides = overrides
+
+    def __call__(self, key: str) -> float | None:
+        return self._overrides.get((self.node_id, key))
+
+
+class _TimeResampler:
+    """Reusable upstream-frame resampler for one node input socket.
+
+    Replaces the per-frame ``lambda`` the evaluator used to build for every
+    frame-socket connection.
+    """
+
+    __slots__ = ("owner", "_evaluate", "_node_id", "_slot")
+
+    def __init__(
+        self,
+        owner: Project,
+        evaluate: Callable[[str, int, str], Any],
+    ) -> None:
+        self.owner = owner
+        self._evaluate = evaluate
+        self._node_id = ""
+        self._slot = "frame"
+
+    def bind(self, node_id: str, slot: str) -> None:
+        self._node_id = node_id
+        self._slot = slot
+
+    def __call__(self, frame_num: int) -> Any:
+        return self._evaluate(self._node_id, int(frame_num), self._slot)
 
 
 class Project:
@@ -70,9 +119,42 @@ class Project:
         self._playback_proxy_override_width: int | None = None
         self._full_resolution_override = False
 
+        # Explicit preview-width override. Used by nested subgraph evaluation
+        # (custom nodes) so an embedded graph renders at exactly the same
+        # resolution as the parent graph instead of the viewer-less default.
+        self._preview_width_override: int | None = None
+
         # Evaluation is deliberately serialized because Node instances
         # contain mutable per-evaluation state.
         self._eval_lock = threading.RLock()
+
+        # --------------------------------------------------------------
+        # Export-mode evaluation
+        #
+        # Interactive evaluation keeps a large cross-frame LRU because a
+        # user scrubs back and forth over the same frames. A sequential
+        # export never revisits a frame, so that cache degenerates into
+        # pure overhead: every node result is inserted, byte-counted and
+        # immediately evicted, and the process holds hundreds of
+        # megabytes of float32 intermediates that are never read again.
+        #
+        # Export mode swaps the LRU for a tiny dict that is cleared at the
+        # start of every frame. Within-frame fan-out dedup is preserved
+        # (diamond graphs still evaluate a shared node once), but nothing
+        # survives to the next frame, so memory stays flat and CPU cache
+        # locality improves dramatically.
+        # --------------------------------------------------------------
+
+        self._export_mode = False
+        self._export_frame_cache: dict[
+            tuple[str, int, str],
+            Any,
+        ] = {}
+
+        # Pre-bound resolvers: created once here instead of allocating a
+        # lambda for every node on every evaluated frame.
+        self._named_resolver_bound = self._resolve_named_property_for_frame
+        self._node_resolver_bound = self._resolve_node_property_for_frame
 
         # --------------------------------------------------------------
         # Property-drive state
@@ -256,6 +338,21 @@ class Project:
             else max(1, int(max_width))
         )
 
+    def set_preview_width_override(
+        self,
+        max_width: int | None,
+    ) -> None:
+        """Force an exact preview width regardless of viewer settings.
+
+        ``0`` means full resolution. ``None`` restores normal viewer-driven
+        resolution. Used by custom-node subgraph evaluation.
+        """
+        self._preview_width_override = (
+            None
+            if max_width is None
+            else max(0, int(max_width))
+        )
+
     def get_preview_settings(self) -> PreviewSettings:
         viewer = (
             self.nodes.get(self.active_viewer)
@@ -266,6 +363,14 @@ class Project:
         settings = PreviewSettings.from_viewer(
             viewer
         )
+
+        override_width = self._preview_width_override
+
+        if override_width is not None:
+            return replace(
+                settings,
+                max_width=override_width,
+            )
 
         if self._full_resolution_override:
             return replace(
@@ -720,6 +825,13 @@ class Project:
             frame_num
         )
 
+        # Export evaluation is strictly sequential and never revisits a
+        # frame, so drop the previous frame's intermediates before this
+        # tree starts. This bounds peak memory to a single frame's result
+        # set instead of the multi-gigabyte interactive LRU budget.
+        if self._export_mode:
+            self._export_frame_cache.clear()
+
         # Resolve preview settings once.
         self._eval_context_settings = (
             self.get_preview_settings()
@@ -738,6 +850,72 @@ class Project:
         self._eval_context_frame = None
         self._eval_context_settings = None
         self._eval_context_cache_width = None
+
+    def set_export_mode(
+        self,
+        enabled: bool,
+    ) -> None:
+        """Select the evaluation cache strategy for sequential rendering.
+
+        ``enabled=False`` (the interactive default) keeps the large
+        cross-frame LRU, which is what makes scrubbing and playback cheap.
+
+        ``enabled=True`` switches to a per-frame scratch cache. A linear
+        export never re-reads an earlier frame, so the LRU only adds
+        bookkeeping, memory pressure, and allocator churn while providing
+        no cache hits. The scratch cache still deduplicates a node that is
+        fanned out to several consumers *within* one frame.
+
+        Callers must reset this to ``False`` when the export finishes.
+        """
+
+        enabled = bool(enabled)
+
+        if self._export_mode == enabled:
+            return
+
+        self._export_mode = enabled
+        self._export_frame_cache.clear()
+
+    def _resolve_named_property_for_frame(
+        self,
+        node_name: str,
+        property_key: str,
+    ) -> float | None:
+        """Bound resolver variant that reads the active evaluation frame.
+
+        Bound once per project and handed to every node, which removes one
+        closure allocation per node per evaluated frame.
+        """
+
+        frame_num = self._eval_context_frame
+
+        if frame_num is None:
+            return None
+
+        return self._resolve_named_property_value(
+            node_name,
+            property_key,
+            frame_num,
+        )
+
+    def _resolve_node_property_for_frame(
+        self,
+        node_id: str,
+        property_key: str,
+    ) -> float | None:
+        """Bound resolver variant that reads the active evaluation frame."""
+
+        frame_num = self._eval_context_frame
+
+        if frame_num is None:
+            return None
+
+        return self._resolve_node_property_value(
+            node_id,
+            property_key,
+            frame_num,
+        )
 
     def _evaluate_node_locked(
         self,
@@ -758,26 +936,40 @@ class Project:
         # --------------------------------------------------------------
         # Cache lookup
         # --------------------------------------------------------------
+        #
+        # Export mode uses a flat per-frame dict: no cache-slot string is
+        # built, no LRU bookkeeping runs, and no byte-size estimation is
+        # performed. The interactive path keeps the keyed LRU so proxy and
+        # full-resolution results stay in separate namespaces.
+        # --------------------------------------------------------------
 
-        settings = self._get_evaluation_settings()
+        export_cache = self._export_frame_cache if self._export_mode else None
 
-        cache_slot = (
-            f"{output_slot}@"
-            f"{settings.max_width}"
-        )
+        if export_cache is not None:
+            cache_key = (node_id, frame_num, output_slot)
+            cached = export_cache.get(cache_key, _CACHE_MISS)
+            if cached is not _CACHE_MISS:
+                return cached
+            settings = self._get_evaluation_settings()
+            cache_slot = None
+        else:
+            settings = self._get_evaluation_settings()
 
-        cache = self._frame_cache
+            cache_slot = (
+                f"{output_slot}@"
+                f"{settings.max_width}"
+            )
 
-        cached = cache.get_fast(
-            (
+            cache_key = (
                 node_id,
                 frame_num,
                 cache_slot,
             )
-        )
 
-        if cached is not None:
-            return cached
+            cached = self._frame_cache.get_fast(cache_key)
+
+            if cached is not None:
+                return cached
 
         # --------------------------------------------------------------
         # Prepare node
@@ -796,33 +988,35 @@ class Project:
         # Resolver setup
         # --------------------------------------------------------------
         #
-        # These are deliberately tiny closures. The expensive project
-        # searches are avoided by the indexed lookup functions below.
+        # The project owns one bound resolver pair and one reusable
+        # drive-lookup / time-resampler per node. Assigning them is a
+        # plain attribute store; nothing is allocated per frame.
         # --------------------------------------------------------------
 
         node.set_property_resolver(
-            lambda name, key, fn=frame_num:
-                self._resolve_named_property_value(
-                    name,
-                    key,
-                    fn,
-                )
+            self._named_resolver_bound
         )
 
         node.set_node_property_resolver(
-            lambda source_id, key, fn=frame_num:
-                self._resolve_node_property_value(
-                    source_id,
-                    key,
-                    fn,
-                )
+            self._node_resolver_bound
         )
 
+        drive_lookup = node._drive_lookup
+
+        if (
+            drive_lookup is None
+            or drive_lookup.owner is not self
+            or drive_lookup.node_id != node_id
+        ):
+            drive_lookup = _NodeDriveLookup(
+                self,
+                self._drive_overrides,
+                node_id,
+            )
+            node._drive_lookup = drive_lookup
+
         node.set_property_drive_lookup(
-            lambda key, nid=node_id:
-                self._drive_overrides.get(
-                    (nid, key)
-                )
+            drive_lookup
         )
 
         # --------------------------------------------------------------
@@ -871,23 +1065,22 @@ class Project:
             )
 
             if input_slot == "frame":
-                upstream_node_id = (
-                    conn.output_node_id
-                )
+                resampler = node._eval_resampler
 
-                upstream_slot = (
-                    conn.output_slot
+                if resampler is None or resampler.owner is not self:
+                    resampler = _TimeResampler(
+                        self,
+                        self.evaluate_node,
+                    )
+                    node._eval_resampler = resampler
+
+                resampler.bind(
+                    conn.output_node_id,
+                    conn.output_slot,
                 )
 
                 node.set_time_resampler(
-                    lambda target_frame,
-                    o=upstream_node_id,
-                    s=upstream_slot:
-                        self.evaluate_node(
-                            o,
-                            target_frame,
-                            s,
-                        )
+                    resampler
                 )
 
         # --------------------------------------------------------------
@@ -912,14 +1105,13 @@ class Project:
             # Viewer is intentionally not cached because it is just a
             # passthrough endpoint.
             if node.node_type != "Viewer":
-                cache.set_fast(
-                    (
-                        node_id,
-                        frame_num,
-                        cache_slot,
-                    ),
-                    result,
-                )
+                if export_cache is not None:
+                    export_cache[cache_key] = result
+                else:
+                    self._frame_cache.set_fast(
+                        cache_key,
+                        result,
+                    )
 
             return result
 
@@ -1346,9 +1538,7 @@ class Project:
         self,
         e: Exception,
     ) -> None:
-        from utils.logging_setup import (
-            get_logger,
-        )
+        from utils.logging_setup import get_logger
 
         self.exceptions_log.append(e)
 
@@ -1624,6 +1814,17 @@ class Project:
                         ),
                     )
                 )
+
+                if node is None:
+                    # Custom nodes embed their own subgraph definition, so a
+                    # project stays portable even when the definition was
+                    # never saved to this machine's global store.
+                    from core.nodes.custom_nodes import \
+                        create_custom_node_from_document
+
+                    node = create_custom_node_from_document(
+                        node_blob
+                    )
 
                 if node is None:
                     project.log_exception(

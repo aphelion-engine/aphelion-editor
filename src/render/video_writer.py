@@ -98,7 +98,7 @@ def _hw_preset(
 # How many decoded/encoded frames the writer may buffer ahead of FFmpeg.
 # A deeper queue hides encoder hiccups and keeps the evaluator feeling
 # serial, which matters most for long exports.
-_DEFAULT_QUEUE_SIZE: int = 24
+_DEFAULT_QUEUE_SIZE: int = 32
 
 
 # ============================================================================
@@ -534,13 +534,23 @@ class Mp4VideoWriter:
                 # Broad MP4 compatibility.
                 "-pix_fmt",
                 "yuv420p",
-
-                "-movflags",
-                "+faststart",
-
-                str(self._temp_video_path),
             )
         )
+
+        # ``+faststart`` relocates the moov atom, which requires rewriting
+        # the whole file. When audio is muxed afterwards the temporary
+        # video is copied into the final container anyway, so paying for a
+        # second pass over a multi-gigabyte file is pure waste — the mux
+        # step applies faststart to the real output instead.
+        if not self._include_audio:
+            cmd.extend(
+                (
+                    "-movflags",
+                    "+faststart",
+                )
+            )
+
+        cmd.append(str(self._temp_video_path))
 
         # ==================================================================
         # FFmpeg stderr
@@ -1008,18 +1018,27 @@ class Mp4VideoWriter:
 
         # ==============================================================
         # Float -> signed 16-bit PCM.
+        #
+        # ``samples`` may alias the caller's ``AudioData.samples`` buffer
+        # (``astype`` with ``copy=False`` is a no-op when the source is
+        # already float32), so the conversion must never write in place.
+        # Doing so used to scale the node's audio by 32767 permanently,
+        # corrupting preview playback after an export.
         # ==============================================================
 
-        np.clip(
+        scaled = np.clip(
             samples,
             -1.0,
             1.0,
-            out=samples,
         )
 
-        samples *= 32767.0
+        np.multiply(
+            scaled,
+            32767.0,
+            out=scaled,
+        )
 
-        return samples.astype(
+        return scaled.astype(
             np.int16,
             copy=False,
         )
@@ -1056,8 +1075,6 @@ class Mp4VideoWriter:
         self._frame_queue.put(
             frame,
         )
-
-        self._frame_count += 1
 
         # ==============================================================
         # AUDIO

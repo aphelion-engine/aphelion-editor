@@ -1,17 +1,18 @@
 """Background export of evaluated viewer frames to video or image sequences.
 
-Two things dominate export wall-clock time:
+Optimization strategy:
 
-1. **Graph evaluation** — serialized by design (node instances hold
-   mutable per-evaluation state), so this stays a single producer.
-2. **Frame encoding** — PNG compression and H.264 encoding are both
-   GIL-releasing native work, so they belong off the producer thread.
-
-The MP4 path already had a dedicated encoder thread; the PNG path used
-to interleave ``cv2.imwrite`` with evaluation and serialize the two. This
-module now pipelines both: frames are produced serially and encoded by a
-bounded pool, so the CPU stays busy encoding frame *N* while frame *N+1*
-is being evaluated.
+- The producer runs the project in **export evaluation mode**, which
+  replaces the interactive cross-frame frame cache with a per-frame
+  scratch cache. A linear export never re-reads an earlier frame, so the
+  interactive LRU only contributed bookkeeping plus hundreds of
+  megabytes of live float32 intermediates. See ``Project.set_export_mode``.
+- Encoding is pipelined on a bounded pool so the CPU encodes frame *N*
+  while frame *N+1* is evaluating. Image sequences colour-convert on the
+  producer thread, halving the number of full frame buffers kept alive by
+  the in-flight queue.
+- The MP4 writer has its own dedicated encoder thread and is fed in a
+  single pass, so no frame is ever evaluated twice.
 """
 
 from __future__ import annotations
@@ -62,38 +63,40 @@ class ExportRequest:
     encode_workers: int = 0
     #: PNG zlib compression level (0-9). Lower is dramatically faster and
     #: only costs disk space, which is why it defaults below OpenCV's own.
-    png_compression: int = 3
+    png_compression: int = 1
 
 
 _PROGRESS_UPDATE_INTERVAL: int = 8
 
-# Bound on how far encoding may run ahead of evaluation. Large enough to
-# keep every encoder thread fed, small enough that a 4K sequence cannot
-# balloon the process footprint.
-_MAX_FRAMES_IN_FLIGHT: int = 16
+# Upper bound on encoder threads. PNG compression scales well across
+# cores, but past this point memory bandwidth and the single evaluation
+# producer become the limit.
+_MAX_ENCODE_WORKERS: int = 16
 
 
 def _default_encode_workers() -> int:
-    """Return a conservative default encoder thread count."""
+    """Return a sensible default encoder thread count."""
     cpu_count: int = os.cpu_count() or 2
-    return max(2, min(8, cpu_count))
+    return max(2, min(_MAX_ENCODE_WORKERS, cpu_count))
 
 
 def _encode_png_bgr(
-    frame_rgb: np.ndarray,
+    frame_bgr: np.ndarray,
     filename: Path,
     compression: int,
 ) -> bool:
-    """Encode one RGB frame to a BGR PNG on disk.
+    """Encode one BGR frame to a PNG on disk.
+
+    ``frame_bgr`` is already colour-converted by the producer so that each
+    queued task retains exactly one frame buffer.
 
     Returns:
         ``True`` when the file was written, ``False`` otherwise.
     """
-    bgr: np.ndarray = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
     return bool(
         cv2.imwrite(
             str(filename),
-            bgr,
+            frame_bgr,
             [cv2.IMWRITE_PNG_COMPRESSION, compression],
         )
     )
@@ -135,6 +138,9 @@ class ExportWorker(QThread):
         # Full-resolution export must not be quietly downgraded by whatever
         # proxy width the interactive Viewer happens to be set to.
         self._project.set_full_resolution_override(self._request.full_resolution)
+        # Sequential rendering never revisits a frame, so disable the
+        # interactive cross-frame cache for the duration of the export.
+        self._project.set_export_mode(True)
         # Fresh slate so any exception surfaced afterward is from this run,
         # not a stale failure left over from earlier interactive preview.
         for node in self._project.nodes.values():
@@ -144,6 +150,7 @@ class ExportWorker(QThread):
         except Exception as exc:  # noqa: BLE001
             self.failed.emit(str(exc))
         finally:
+            self._project.set_export_mode(False)
             self._project.set_full_resolution_override(False)
 
     def _export(self) -> None:
@@ -227,9 +234,13 @@ class ExportWorker(QThread):
 
         compression: int = max(0, min(9, int(self._request.png_compression)))
         workers: int = self._encode_workers()
+        # Enough queued work to keep every worker busy while staying within
+        # roughly two frames of buffering per worker.
+        backlog: int = max(8, workers * 2)
 
         written = 0
         in_flight: deque[Future[bool]] = deque()
+        evaluate = self._evaluate_frame_rgb
 
         def drain(count: int) -> int:
             """Collect ``count`` completed encodes, returning successes."""
@@ -252,22 +263,25 @@ class ExportWorker(QThread):
                     self.failed.emit("Export cancelled.")
                     return
 
-                frame, _ = self._evaluate_frame_rgb(frame_num)
+                frame, _ = evaluate(frame_num)
                 if frame is not None:
+                    # Colour-convert on the producer thread so each queued
+                    # task holds one frame buffer instead of two.
+                    bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
                     filename = out_dir / f"frame_{frame_num:06d}.png"
                     in_flight.append(
                         pool.submit(
                             _encode_png_bgr,
-                            frame,
+                            bgr,
                             filename,
                             compression,
                         )
                     )
 
-                # Once the backlog exceeds the in-flight cap we block on the
-                # oldest encodes. This keeps memory bounded while still giving
-                # every worker something to chew on.
-                if len(in_flight) >= _MAX_FRAMES_IN_FLIGHT:
+                # Once the backlog is reached we block on the oldest encodes.
+                # This keeps memory bounded while still giving every worker
+                # something to chew on.
+                if len(in_flight) >= backlog:
                     written += drain(len(in_flight) - workers + 1)
 
                 if ((index + 1) % _PROGRESS_UPDATE_INTERVAL == 0) or (index + 1 == total):
@@ -283,63 +297,67 @@ class ExportWorker(QThread):
         self.finished_ok.emit(str(out_dir))
 
     def _export_mp4(self, start: int, end: int, total: int) -> None:
-        first_frame: np.ndarray | None = None
         audio_sample_rate = max(1, int(self._request.export_sample_rate))
         audio_channels = 1 if int(self._request.export_channels) == 1 else 2
-
-        # Find first valid frame and extract audio info
-        for frame_num in range(start, end + 1):
-            frame, audio = self._evaluate_frame_rgb(frame_num)
-            if frame is not None:
-                first_frame = frame
-                break
-
-        if first_frame is None:
-            self.failed.emit(self._no_frames_message("evaluated for export"))
-            return
-
-        height, width = first_frame.shape[:2]
-        output = self._request.output_path
-        output.parent.mkdir(parents=True, exist_ok=True)
-
-        try:
-            writer = Mp4VideoWriter(
-                output,
-                fps=float(max(1, self._request.fps)),
-                width=width,
-                height=height,
-                audio_sample_rate=audio_sample_rate,
-                audio_channels=audio_channels,
-                include_audio=self._request.export_audio_enabled,
-                quality=self._request.export_quality,
-            )
-        except (OSError, RuntimeError) as exc:
-            self.failed.emit(f"Could not open the video writer: {exc}")
-            return
-
-        written = 0
-        # Hot loop: bind the writer method and request once so per-frame
-        # Python work stays at attribute-free dispatch.
-        writer_write = writer.write
         include_audio: bool = self._request.export_audio_enabled
+        output = self._request.output_path
+
+        # Single pass: the first valid frame both probes the dimensions and
+        # opens the writer. The old flow probed a frame and then re-evaluated
+        # it in the main loop; with the export scratch cache that re-probe
+        # would be a full duplicate graph evaluation.
+        writer: Mp4VideoWriter | None = None
+        writer_write = None
+        width = 0
+        height = 0
+        written = 0
+        evaluate = self._evaluate_frame_rgb
+        fps = float(max(1, self._request.fps))
+
         try:
             for index, frame_num in enumerate(range(start, end + 1)):
                 if self._cancelled or self.isInterruptionRequested():
                     self.failed.emit("Export cancelled.")
                     return
-                # Cache-backed, so re-evaluating the probed frame above is free.
-                frame, audio = self._evaluate_frame_rgb(frame_num)
+
+                frame, audio = evaluate(frame_num)
                 if frame is None:
                     continue
-                if frame.shape[0] != height or frame.shape[1] != width:
-                    interpolation = cv2.INTER_AREA if frame.shape[0] > height or frame.shape[1] > width else cv2.INTER_LINEAR
+
+                if writer is None:
+                    height, width = frame.shape[:2]
+                    output.parent.mkdir(parents=True, exist_ok=True)
+                    try:
+                        writer = Mp4VideoWriter(
+                            output,
+                            fps=fps,
+                            width=width,
+                            height=height,
+                            audio_sample_rate=audio_sample_rate,
+                            audio_channels=audio_channels,
+                            include_audio=include_audio,
+                            quality=self._request.export_quality,
+                        )
+                    except (OSError, RuntimeError) as exc:
+                        self.failed.emit(f"Could not open the video writer: {exc}")
+                        return
+                    writer_write = writer.write
+                elif frame.shape[0] != height or frame.shape[1] != width:
+                    interpolation = (
+                        cv2.INTER_AREA
+                        if frame.shape[0] > height or frame.shape[1] > width
+                        else cv2.INTER_LINEAR
+                    )
                     frame = cv2.resize(frame, (width, height), interpolation=interpolation)
+
                 writer_write(frame, audio=audio if include_audio else None)
                 written += 1
+
                 if ((index + 1) % _PROGRESS_UPDATE_INTERVAL == 0) or (index + 1 == total):
                     self.progress.emit(index + 1, total)
         finally:
-            writer.close()
+            if writer is not None:
+                writer.close()
 
         if written == 0:
             self.failed.emit(self._no_frames_message("written"))

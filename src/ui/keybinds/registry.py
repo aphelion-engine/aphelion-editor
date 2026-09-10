@@ -5,11 +5,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+from config.keybinds import KeyAction, KeybindStore, NodeCreateSlot
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QAction, QKeySequence
 from PyQt6.QtWidgets import QWidget
-
-from config.keybinds import KeyAction, KeybindStore, NodeCreateSlot
 from ui.icons import AppIcon, make_icon
 
 if TYPE_CHECKING:
@@ -76,6 +75,11 @@ class EditorActions:
             KeyAction.DELETE,
             editor.delete_selected_nodes,
             icon=AppIcon.DELETE,
+        )
+        self._register(
+            KeyAction.CREATE_CUSTOM_NODE,
+            editor.create_custom_node_from_selection,
+            icon=AppIcon.ADD_NODE,
         )
         self._register(
             KeyAction.SEARCH_NODE,
