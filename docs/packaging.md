@@ -2,6 +2,8 @@
 
 Two different artifacts: **pip wheels** (library/CLI install) and **standalone freeze** (end-user executable / MSI).
 
+All standalone packaging lives in one module, `src/aphelion_build.py`. It owns the release config, the freeze options, the MSI wizard tables, the MSI UI patch, and the plugin-SDK wheel build — so a version bump is a single edit to `BuildConfig` in that file.
+
 ## Pip wheels
 
 From `aphelion-editor/` (`pip install -e ".[dev]"` provides the `build` frontend):
@@ -25,19 +27,27 @@ Console script after install: `aphelion`.
 Requires the `freeze` extra (`cx_Freeze` ≥ 8.6). Intermediates go to `build/`. The executable tree defaults to `dist/`.
 
 ```bash
-python main.py --build
-python main.py --build --build-dir path/to/output
+python -m aphelion_build --exe
+python -m aphelion_build --exe --build-dir path/to/output
 ```
 
+The same flags are available through the app entry point (`python main.py --build`).
+
 On Windows the binary is `AphelionEditor.exe`. The freeze copies `resources/`, `userdata/`, `plugins/`, and `logs/` into the output tree.
+
+To wipe build artifacts:
+
+```bash
+python -m aphelion_build --clean
+```
 
 ## Windows installer
 
 ```bash
-python main.py --build-installer
-python main.py --build-installer --build-dir path/to/output
+python -m aphelion_build --installer
+python -m aphelion_build --installer --build-dir path/to/output
 ```
 
-`--build-installer` is Windows-only. It freezes the editor and writes `AphelionEditorSetup-0.1.0-win64.msi` into `dist/` (or `--build-dir`). If both `--build` and `--build-installer` are passed, the installer path is used.
+`--installer` is Windows-only. It freezes the editor, bundles the plugin SDK wheel built from `../aphelion-sdk`, and writes `AphelionEditorSetup-<version>-win64.msi` into `releases/` (or `--build-dir`). `--installer` includes a freeze, so it wins if combined with `--exe`.
 
-The MSI defaults to a per-user install under Local App Data, with optional all-users (Program Files), PATH, and desktop shortcut. Building it requires `cx_Freeze` and `python-msilib` (used to finish the installer UI).
+The MSI wizard defaults to a per-user install under Local App Data, and offers all-users (Program Files), PATH, and desktop-shortcut options, plus an optional pip install of the bundled SDK. Building it requires `cx_Freeze` and `python-msilib` (used to finish the installer UI).

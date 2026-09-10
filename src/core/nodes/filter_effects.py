@@ -2,23 +2,26 @@
 
 from __future__ import annotations
 
+import cv2
 import numpy as np
-
 from core.nodes.base import NodeProperty
-from core.nodes.enums import EdgeDisplayMode
+from core.nodes.enums import BlurEdgeMode, EdgeDisplayMode
 from core.nodes.frame_base import FrameEffectNode
-from core.nodes.property_factory import choice_property, color_property, slider_property
-from effects.filters import (
-    bilateral_denoise,
-    edge_detect,
-    gaussian_blur,
-    motion_blur,
-    pixelate,
-    unsharp_mask,
-    vignette,
-)
+from core.nodes.property_factory import (choice_property, color_property,
+                                         slider_property)
+from effects.filters import (bilateral_denoise, edge_detect, gaussian_blur,
+                             motion_blur, pixelate, unsharp_mask, vignette)
 
 FILTER_CATEGORY: str = "Filter"
+
+# OpenCV border policies keyed by the inspector choice. Reflect is the
+# OpenCV default and therefore the safest "do what I mean" mapping.
+_BLUR_EDGE_BORDERS: dict[BlurEdgeMode, int] = {
+    BlurEdgeMode.Default: cv2.BORDER_DEFAULT,
+    BlurEdgeMode.Reflect: cv2.BORDER_REFLECT,
+    BlurEdgeMode.Replicate: cv2.BORDER_REPLICATE,
+    BlurEdgeMode.Wrap: cv2.BORDER_WRAP,
+}
 
 
 class GaussianBlurNode(FrameEffectNode):
@@ -41,6 +44,28 @@ class GaussianBlurNode(FrameEffectNode):
                 0, 0, 100, 11, "Sigma", "Gaussian sigma; zero selects automatic.", ""
             ),
         )
+        self.set_property(
+            "passes",
+            _filter_slider(
+                1,
+                1,
+                4,
+                12,
+                "Passes",
+                "Repeat the blur to reach a wider kernel cheaply.",
+                "\u00d7",
+            ),
+        )
+        self.set_property(
+            "edge",
+            choice_property(
+                BlurEdgeMode.Default,
+                priority=13,
+                group="Kernel",
+                label="Edge Mode",
+                description="How the kernel treats pixels outside the frame.",
+            ),
+        )
 
     def process_frame(self, frame: np.ndarray, frame_num: int) -> np.ndarray:
         """Blur the source frame."""
@@ -49,6 +74,11 @@ class GaussianBlurNode(FrameEffectNode):
             frame,
             radius=self.int_value("radius", 8),
             sigma=self.float_value("sigma", 0.0) / 10.0,
+            edge=_BLUR_EDGE_BORDERS.get(
+                self.enum_value("edge", BlurEdgeMode, BlurEdgeMode.Default),
+                cv2.BORDER_DEFAULT,
+            ),
+            passes=self.int_value("passes", 1),
         )
 
 
@@ -232,6 +262,30 @@ class VignetteNode(FrameEffectNode):
                 description="Color blended into the edges.",
             ),
         )
+        self.set_property(
+            "roundness",
+            _filter_slider(
+                0,
+                -95,
+                100,
+                13,
+                "Roundness",
+                "Shape the falloff ellipse; positive is wider, negative taller.",
+                "%",
+            ),
+        )
+        self.set_property(
+            "center_x",
+            _filter_slider(
+                50, 0, 100, 14, "Center X", "Horizontal center of the falloff.", "%"
+            ),
+        )
+        self.set_property(
+            "center_y",
+            _filter_slider(
+                50, 0, 100, 15, "Center Y", "Vertical center of the falloff.", "%"
+            ),
+        )
 
     def process_frame(self, frame: np.ndarray, frame_num: int) -> np.ndarray:
         """Apply the vignette."""
@@ -241,6 +295,9 @@ class VignetteNode(FrameEffectNode):
             amount=self.float_value("strength", 55.0) / 100.0,
             softness=self.float_value("softness", 60.0) / 100.0,
             color=self.color_value("color", (0, 0, 0)),
+            roundness=self.float_value("roundness", 0.0) / 100.0,
+            center_x=self.float_value("center_x", 50.0) / 100.0,
+            center_y=self.float_value("center_y", 50.0) / 100.0,
         )
 
 

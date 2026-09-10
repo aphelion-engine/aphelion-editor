@@ -6,10 +6,8 @@ import math
 
 import cv2
 import numpy as np
-
 from core.nodes.base import NEUTRAL_COLOR_RGB, ColorRgb
 from effects.frame_ops import color01, ensure_rgb_f32
-
 
 #: Base grain standard deviation expressed in 0-1 display units. Kept as a
 #: module constant so the Amount slider stays expressed as a percentage.

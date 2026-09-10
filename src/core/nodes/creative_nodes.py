@@ -2,23 +2,16 @@
 
 from __future__ import annotations
 
-import numpy as np
 import cv2
-
+import numpy as np
 from core.nodes.base import NodeProperty
 from core.nodes.enums import MirrorAxis
 from core.nodes.frame_base import FrameEffectNode
-from core.nodes.property_factory import choice_property, slider_property, toggle_property
-from effects.creative import (
-    chromatic_aberration,
-    glitch,
-    kaleidoscope,
-    lens_distortion,
-    mirror,
-    rgb_split,
-    ripple,
-    transform_3d,
-)
+from core.nodes.property_factory import (choice_property, slider_property,
+                                         toggle_property)
+from effects.creative import (chromatic_aberration, glitch, kaleidoscope,
+                              lens_distortion, mirror, rgb_split, ripple,
+                              transform_3d)
 
 CREATIVE_CATEGORY: str = "Creative"
 TRANSFORM_CATEGORY: str = "Transform"
@@ -159,6 +152,18 @@ class ChromaticAberrationNode(FrameEffectNode):
         self.set_property(
             "angle", _axis_slider(0, -180, 180, 11, "Angle", "Aberration", "°")
         )
+        self.set_property(
+            "radial",
+            _axis_slider(
+                0,
+                -100,
+                100,
+                12,
+                "Radial",
+                "Aberration",
+                "%",
+            ),
+        )
 
     def process_frame(self, frame: np.ndarray, frame_num: int) -> np.ndarray:
         del frame_num
@@ -166,6 +171,7 @@ class ChromaticAberrationNode(FrameEffectNode):
             frame,
             amount=self.float_value("amount", 40.0) / 100.0,
             angle_degrees=self.float_value("angle", 0.0),
+            radial=self.float_value("radial", 0.0) / 100.0,
         )
 
 

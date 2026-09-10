@@ -92,13 +92,13 @@ def _dispatch_packaging(args: argparse.Namespace) -> int:
         distutils.errors.DistutilsOptionError: If freeze options are invalid.
     """
     if args.build_installer:
-        from installer_build import build_installer
+        from aphelion_build import build_installer
 
         dest = args.build_dir or _default_installer_dir()
         msi_path = build_installer(build_dir=dest)
         print(f"Wrote installer: {msi_path}")
         return 0
-    from freeze_app import build_standalone
+    from aphelion_build import build_standalone
 
     dest = args.build_dir or _default_dist_dir()
     build_standalone(build_dir=dest)

@@ -9,9 +9,16 @@ quantizing to 8-bit.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import cv2
 import numpy as np
-from core.nodes.base import ColorRgb
+
+if TYPE_CHECKING:
+    # Imported for typing only. Keeping this out of the runtime import graph
+    # breaks the effects <-> core.nodes cycle (core.nodes.frame_base imports
+    # mix_frames from this module) and keeps this hot path cheap to import.
+    from core.nodes.base import ColorRgb
 
 FRAME_DTYPE: np.dtype = np.dtype(np.float32)
 

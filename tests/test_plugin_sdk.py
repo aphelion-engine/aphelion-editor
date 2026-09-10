@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 import aphelion_sdk
+import pytest
 from aphelion_sdk import VideoEffectPlugin
 from app_io.plugin_loader import _import_plugin_file
 from core.nodes.enums import BlendMode
@@ -184,7 +183,7 @@ def test_plugin_loader_disable_and_reload(tmp_path: Path) -> None:
 
 def test_msi_upgrade_code_is_guid() -> None:
     """The installer upgrade code must be a Windows GUID string."""
-    from freeze_config import MSI_OUTPUT_NAME, MSI_UPGRADE_CODE
+    from aphelion_build import MSI_OUTPUT_NAME, MSI_UPGRADE_CODE
 
     assert MSI_UPGRADE_CODE.startswith("{")
     assert MSI_UPGRADE_CODE.endswith("}")
@@ -196,7 +195,7 @@ def test_msi_options_include_installer_choices() -> None:
     """The MSI wizard must offer scope, PATH, and desktop choices."""
     from pathlib import Path
 
-    from freeze_config import create_msi_options
+    from aphelion_build import create_msi_options
 
     options = create_msi_options(dist_dir=Path("dist"), install_icon=Path("icon.ico"))
     data = options["data"]
@@ -326,5 +325,3 @@ class _NullHost:
 
     def set_property_value(self, key: str, value: object) -> None:
         del key, value
-
-

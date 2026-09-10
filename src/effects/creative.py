@@ -6,7 +6,6 @@ import math
 
 import cv2
 import numpy as np
-
 from core.nodes.enums import MirrorAxis
 from effects.frame_ops import ensure_rgb_f32
 

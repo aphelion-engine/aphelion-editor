@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from enum import IntEnum, auto, Enum
+from enum import Enum, IntEnum, auto
+
 
 class NoiseType(Enum):
     PERLIN = "perlin"
@@ -23,7 +24,7 @@ class DepthShape(IntEnum):
     Sphere = auto()
     Box = auto()
     Cylinder = auto()
-    
+
 class ZMergeMode(IntEnum):
     Min = auto()
     Max = auto()
@@ -73,6 +74,15 @@ class EdgeDisplayMode(IntEnum):
     Grayscale = auto()
     WhiteOnBlack = auto()
     BlackOnWhite = auto()
+
+
+class BlurEdgeMode(IntEnum):
+    """Border sampling policy for convolution and blur kernels."""
+
+    Default = auto()
+    Reflect = auto()
+    Replicate = auto()
+    Wrap = auto()
 
 
 class MaskChannel(IntEnum):

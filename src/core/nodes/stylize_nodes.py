@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import numpy as np
-
 from core.nodes.base import NodeProperty
 from core.nodes.frame_base import FrameEffectNode
-from core.nodes.property_factory import slider_property
+from core.nodes.property_factory import (color_property, slider_property,
+                                         toggle_property)
 from effects.stylize import bloom, film_grain, radial_blur, scanlines
 
 STYLIZE_CATEGORY: str = "Effects"
@@ -23,6 +23,28 @@ class FilmGrainNode(FrameEffectNode):
     def setup_effect_properties(self) -> None:
         self.set_property("amount", _stylize_slider(25, 0, 100, 10, "Amount", "Grain"))
         self.set_property("seed", _stylize_slider(0, 0, 999, 11, "Seed", "Random", ""))
+        self.set_property(
+            "size",
+            _stylize_slider(
+                100,
+                25,
+                800,
+                12,
+                "Grain Size",
+                "Grain",
+                "%",
+            ),
+        )
+        self.set_property(
+            "monochrome",
+            toggle_property(
+                False,
+                priority=13,
+                group="Grain",
+                label="Monochrome",
+                description="Correlate channels so grain reads as one layer.",
+            ),
+        )
 
     def process_frame(self, frame: np.ndarray, frame_num: int) -> np.ndarray:
         return film_grain(
@@ -30,6 +52,8 @@ class FilmGrainNode(FrameEffectNode):
             amount=self.float_value("amount", 25.0) / 100.0,
             frame_num=frame_num,
             seed=self.int_value("seed", 0),
+            size=self.float_value("size", 100.0) / 100.0,
+            monochrome=self.bool_value("monochrome", False),
         )
 
 
@@ -45,6 +69,22 @@ class ScanlinesNode(FrameEffectNode):
         self.set_property("intensity", _stylize_slider(35, 0, 100, 10, "Intensity", "Lines"))
         self.set_property("spacing", _stylize_slider(3, 2, 12, 11, "Spacing", "Lines", " px"))
         self.set_property("scroll", _stylize_slider(0, 0, 100, 12, "Scroll", "Motion"))
+        self.set_property(
+            "line_width",
+            _stylize_slider(1, 1, 8, 13, "Line Width", "Lines", " px"),
+        )
+        self.set_property(
+            "flicker",
+            _stylize_slider(
+                0,
+                0,
+                50,
+                14,
+                "Flicker",
+                "Motion",
+                "%",
+            ),
+        )
 
     def process_frame(self, frame: np.ndarray, frame_num: int) -> np.ndarray:
         return scanlines(
@@ -53,6 +93,8 @@ class ScanlinesNode(FrameEffectNode):
             spacing=self.int_value("spacing", 3),
             scroll=self.float_value("scroll", 0.0) / 100.0,
             frame_num=frame_num,
+            line_width=self.int_value("line_width", 1),
+            flicker=self.float_value("flicker", 0.0) / 100.0,
         )
 
 
@@ -68,6 +110,28 @@ class BloomNode(FrameEffectNode):
         self.set_property("threshold", _stylize_slider(70, 0, 100, 10, "Threshold", "Glow"))
         self.set_property("intensity", _stylize_slider(40, 0, 100, 11, "Intensity", "Glow"))
         self.set_property("radius", _stylize_slider(12, 1, 40, 12, "Radius", "Blur", " px"))
+        self.set_property(
+            "softness",
+            _stylize_slider(
+                0,
+                0,
+                100,
+                13,
+                "Softness",
+                "Glow",
+                "%",
+            ),
+        )
+        self.set_property(
+            "tint",
+            color_property(
+                (255, 255, 255),
+                priority=14,
+                group="Glow",
+                label="Tint",
+                description="Color applied to the glow only.",
+            ),
+        )
 
     def process_frame(self, frame: np.ndarray, frame_num: int) -> np.ndarray:
         del frame_num
@@ -76,6 +140,8 @@ class BloomNode(FrameEffectNode):
             threshold=self.float_value("threshold", 70.0) / 100.0,
             intensity=self.float_value("intensity", 40.0) / 100.0,
             radius=self.int_value("radius", 12),
+            softness=self.float_value("softness", 0.0) / 100.0,
+            tint=self.color_value("tint", (255, 255, 255)),
         )
 
 
@@ -92,6 +158,18 @@ class RadialBlurNode(FrameEffectNode):
         self.set_property("center_x", _stylize_slider(50, 0, 100, 11, "Center X", "Center"))
         self.set_property("center_y", _stylize_slider(50, 0, 100, 12, "Center Y", "Center"))
         self.set_property("samples", _stylize_slider(8, 3, 16, 13, "Samples", "Quality", ""))
+        self.set_property(
+            "falloff",
+            _stylize_slider(
+                100,
+                10,
+                400,
+                14,
+                "Falloff",
+                "Quality",
+                "%",
+            ),
+        )
 
     def process_frame(self, frame: np.ndarray, frame_num: int) -> np.ndarray:
         del frame_num
@@ -101,6 +179,7 @@ class RadialBlurNode(FrameEffectNode):
             center_x=self.float_value("center_x", 50.0) / 100.0,
             center_y=self.float_value("center_y", 50.0) / 100.0,
             samples=self.int_value("samples", 8),
+            falloff=self.float_value("falloff", 100.0) / 100.0,
         )
 
 
