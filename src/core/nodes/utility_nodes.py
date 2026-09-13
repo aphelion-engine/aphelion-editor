@@ -17,12 +17,21 @@ from effects.masks import channel_mask, invert_mask
 
 
 class FrameSwitchNode(FrameNode):
-    """Route input A or B to the output without copying."""
+    """Route input A or B to the output without copying.
+
+    Pure routing: it never inspects pixel values, so it forwards whatever
+    representation arrives. Declaring that lets the compiled plan pass a raw
+    8-bit source straight through a switch without promoting it.
+    """
 
     node_type: str = "Frame Switch"
     node_category: str = "Utility"
     node_description: str = "Select either frame input A or B"
     node_color: tuple[int, int, int] = (138, 138, 84)
+
+    #: Never inspects pixels; forwards the incoming representation.
+    accepts_u8_frame = True
+    preserves_frame_dtype = True
 
     def _setup_sockets(self) -> None:
         """Register routing sockets and selection."""

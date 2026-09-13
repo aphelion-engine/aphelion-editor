@@ -389,46 +389,65 @@ class ViewportWidget(QWidget):
         return self._playback_active and self._performance.drop_frames_during_playback
 
     def _blank_frame(self) -> np.ndarray:
+        """Return a display-ready black frame (dense representation)."""
         settings = self.project.get_preview_settings()
         width = max(16, settings.max_width)
         height = max(16, round(width * 9 / 16))
-        return np.zeros((height, width, 3), dtype=FRAME_DTYPE)
+        return np.zeros((height, width, 3), dtype=np.uint8)
 
     def display_frame(self, frame: np.ndarray) -> None:
         """Present ``frame`` with Viewer fit mode; never stretch by default.
 
-        Pipeline frames arrive as float32 in the ``[0, 1]`` contract and are
-        quantized to uint8 here — the last step before handing pixels to Qt.
+        Two representations are accepted and the cheaper one is taken by
+        preference:
+
+        * **uint8 RGB** — a frame that never needed float precision reaches
+          here exactly as the decoder produced it. No quantization, no
+          clamp pass, no float round trip. This is the bare-playback path.
+        * **float32** — a frame that went through effects is clamped and
+          quantized exactly once, here, at the display boundary.
+
+        Ownership: the QImage is constructed *over* the numpy buffer, so a
+        reference is retained in ``self._image_buffer`` for as long as the
+        buffer may be read. The previous implementation additionally copied
+        the QImage before handing it to ``QPixmap.fromImage`` — which itself
+        deep-copies into Qt-owned memory — costing a second full-frame
+        memcpy on every single presented frame.
         """
         if frame.dtype != np.uint8:
             with profiler.scope("display_convert"):
                 frame = to_display_u8(frame)
+        else:
+            # Already display-ready; make sure scanlines are contiguous but
+            # never copy a buffer that already is.
+            if not frame.flags.c_contiguous:
+                frame = np.ascontiguousarray(frame)
 
         h, w = frame.shape[:2]
         if len(frame.shape) == 3 and frame.shape[2] == 3:
-            frame_rgb = np.ascontiguousarray(frame)
-            self._image_buffer = frame_rgb
+            self._image_buffer = frame
             q_img = QImage(
-                _qt_image_buffer(frame_rgb),
+                _qt_image_buffer(frame),
                 w,
                 h,
                 3 * w,
                 QImage.Format.Format_RGB888,
             )
         else:
-            gray = np.ascontiguousarray(frame)
-            self._image_buffer = gray
+            self._image_buffer = frame
             q_img = QImage(
-                _qt_image_buffer(gray),
+                _qt_image_buffer(frame),
                 w,
                 h,
                 w,
                 QImage.Format.Format_Grayscale8,
             )
 
-        # Copy once into Qt-owned memory so the numpy buffer can be reused.
+        # QPixmap.fromImage performs its own deep copy into Qt-owned (and,
+        # where available, GPU-resident) memory, so the source QImage does
+        # not need a defensive .copy() first.
         with profiler.scope("qt_upload"):
-            pixmap = QPixmap.fromImage(q_img.copy())
+            pixmap = QPixmap.fromImage(q_img)
         self.label.setText("")
         self.label.setPixmap(self._fit_pixmap(pixmap))
         self._roto_overlay.setGeometry(self.label.rect())

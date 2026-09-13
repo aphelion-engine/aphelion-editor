@@ -6,17 +6,35 @@ import numpy as np
 
 from config.constants import DEFAULT_MAX_PREFETCH_FRAMES, DEFAULT_PREVIEW_MAX_WIDTH
 from core.audio import AudioData, FrameWithAudio
-from core.nodes.base import Node, NodeProperty, NodePropertyInputType, NodeSocketType
+from core.nodes.base import (Node, NodeProperty, NodePropertyInputType,
+                             NodeSocketType, PreviewCost)
+from effects.frame_ops import ensure_rgb_f32
 from render.preview import ViewerBackground, ViewportFitMode
 
 
 class ViewerNode(Node):
-    """Connects to an input source to view a video stream."""
+    """Connects to an input source to view a video stream.
+
+    Capability declarations
+    -----------------------
+    ``accepts_u8_frame`` is True because this node now promotes on demand:
+    the default path (no exposure change, no flips) forwards the incoming
+    frame untouched, and the exposure path calls ``ensure_rgb_f32`` before
+    scaling. That makes the Viewer the terminal node that lets a bare
+    ``Video Input → Viewer`` graph reach the viewport with **zero** float
+    conversions — the pixels the decoder produced are the pixels displayed.
+    """
 
     node_type = "Viewer"
     node_category = "Input/Output"
     node_description = "Connects to an input source to view a video stream"
     node_color = (200, 50, 50)
+
+    #: Tolerates a raw 8-bit frame and promotes it only when it must.
+    accepts_u8_frame = True
+    #: Forwards the incoming dtype on every pass-through path.
+    preserves_frame_dtype = True
+    preview_cost = PreviewCost.LIGHT
 
     def _setup_sockets(self) -> None:
         self.add_input("frame", NodeSocketType.Frame)
@@ -201,7 +219,12 @@ class ViewerNode(Node):
                 audio = self._apply_viewer_audio(audio)
             return FrameWithAudio(frame=frame, audio=audio) if audio is not None else frame
 
-        adjusted: np.ndarray = frame * np.float32(gain)
+        # Promote *before* scaling. A raw 8-bit source left untouched by the
+        # graph arrives here with 0-255 values, and multiplying that directly
+        # would exceed the pipeline's [0, 1] contract and clip to white.
+        # Only the non-default exposure path pays this, and it is the last
+        # conversion before display either way.
+        adjusted: np.ndarray = ensure_rgb_f32(frame) * np.float32(gain)
 
         if audio is not None:
             audio = self._apply_viewer_audio(audio)

@@ -17,7 +17,8 @@ from effects.distort import (bend, bulge, bump_map, offset, tile, twirl,
                              wave_warp)
 from effects.filters import (bilateral_denoise, edge_detect, gaussian_blur,
                              pixelate, unsharp_mask, vignette)
-from effects.frame_ops import (color01, ensure_rgb_f32, from_source_u8,
+from effects.frame_ops import (SOURCE_DTYPE, color01, ensure_rgb_f32,
+                               ensure_rgb_u8, from_source_u8, is_source_frame,
                                mix_frames, resize_like, to_display_u8)
 from effects.generators import checkerboard, color_bars, gradient, solid_color
 from effects.masks import channel_mask, invert_mask
@@ -54,6 +55,7 @@ __all__ = [
     "duotone",
     "edge_detect",
     "ensure_rgb_f32",
+    "ensure_rgb_u8",
     "exposure_contrast",
     "film_flicker",
     "film_grain",
@@ -64,6 +66,7 @@ __all__ = [
     "hue_saturation",
     "invert",
     "invert_mask",
+    "is_source_frame",
     "kaleidoscope",
     "lens_distortion",
     "levels",
@@ -85,6 +88,7 @@ __all__ = [
     "shockwave",
     "shot_match",
     "solid_color",
+    "SOURCE_DTYPE",
     "strobe",
     "threshold",
     "tile",

@@ -8,16 +8,10 @@ import numpy as np
 
 from config.constants import DEFAULT_FPS, DEFAULT_PREVIEW_MAX_WIDTH
 from core.audio import AudioData, FrameWithAudio
-from core.nodes.base import (
-    FRAME_DTYPE,
-    MediaEdgeMode,
-    Node,
-    NodeProperty,
-    NodePropertyInputType,
-    NodeSocketType,
-    VideoFrameErrorMethod,
-)
-from effects.frame_ops import from_source_u8
+from core.nodes.base import (FRAME_DTYPE, MediaEdgeMode, Node, NodeProperty,
+                             NodePropertyInputType, NodeSocketType,
+                             PreviewCost, VideoFrameErrorMethod)
+from effects.frame_ops import SOURCE_DTYPE, from_source_u8
 from render.video_decoder import MediaInfo, VideoDecoder
 
 
@@ -29,12 +23,32 @@ class AudioChannelMode(IntEnum):
 
 
 class VideoInputNode(Node):
-    """Acts as an input source for a video stream."""
+    """Acts as an input source for a video stream.
+
+    This node is where the single largest interactive win lives. It is the
+    only place that touches decoder pixels, so it is the only place that can
+    avoid the historical eager ``uint8 → float32`` promotion.
+
+    ``can_emit_u8_frame`` tells the compiled render plan that this node is
+    *able* to hand over its raw decoded buffer. Whether it actually does is
+    decided per evaluation tree: ``Project`` only grants permission when the
+    plan proved every node between this source and the Viewer tolerates
+    8-bit input (see ``Node.accepts_u8_frame``).
+
+    The promotion it skips is bit-identical to the one ``ensure_rgb_f32``
+    performs on the first node that genuinely needs float precision, so
+    final render output is unchanged — only the work disappears.
+    """
 
     node_type = "Video Input"
     node_category = "Input/Output"
     node_description = "Acts as an input source for video stream"
     node_color = (50, 150, 50)
+
+    #: Able to hand over the decoder's raw 8-bit buffer.
+    can_emit_u8_frame = True
+    #: A source is structurally cheap; decode cost is tracked separately.
+    preview_cost = PreviewCost.LIGHT
 
     def __init__(self, name: str | None = None) -> None:
         self._decoder: VideoDecoder = VideoDecoder()
@@ -42,6 +56,11 @@ class VideoInputNode(Node):
         self._current_frame: np.ndarray | None = None
         self._preview_max_width: int = DEFAULT_PREVIEW_MAX_WIDTH
         super().__init__(name)
+
+    @property
+    def _output_dtype(self) -> np.dtype:
+        """Dtype this node should produce for the current evaluation tree."""
+        return SOURCE_DTYPE if self._emit_u8_allowed else FRAME_DTYPE
 
     def _setup_sockets(self) -> None:
         self.add_output("frame", NodeSocketType.Frame)
@@ -248,12 +267,17 @@ class VideoInputNode(Node):
         self._preview_max_width = max(0, int(preview_max_width))
 
     def blank_frame(self) -> np.ndarray:
-        """Blank frame sized to the active preview proxy when possible."""
+        """Blank frame sized to the active preview proxy when possible.
+
+        The dtype follows the active output representation so that error,
+        blank, and hold-previous frames never mix representations inside a
+        single graph evaluation.
+        """
         if self._preview_max_width > 0 and self._eval_width > 0:
             width = min(self._eval_width, self._preview_max_width)
             scale = width / float(self._eval_width)
             height = max(1, round(self._eval_height * scale))
-            return np.zeros((height, width, 3), dtype=FRAME_DTYPE)
+            return np.zeros((height, width, 3), dtype=self._output_dtype)
         return super().blank_frame()
 
     def handle_error_frame(self) -> np.ndarray:
@@ -422,7 +446,17 @@ class VideoInputNode(Node):
                 audio = self._get_silence_audio()
                 return FrameWithAudio(frame=frame, audio=audio)
 
-            frame: np.ndarray = from_source_u8(frame_u8)
+            # Hand over the decoder's own buffer when the compiled plan
+            # proved the path to the Viewer tolerates 8-bit input. This
+            # skips a full-frame promote (astype + multiply) and lets the
+            # frame cache hold 4x more source frames per byte budget.
+            #
+            # ``ensure_rgb_f32`` produces bit-identical values on the first
+            # node that needs float precision, so nothing downstream can
+            # tell the difference.
+            frame: np.ndarray = (
+                frame_u8 if self._emit_u8_allowed else from_source_u8(frame_u8)
+            )
             self._previous_frame = self._current_frame
             self._current_frame = frame
 

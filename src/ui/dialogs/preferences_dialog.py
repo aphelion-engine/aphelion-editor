@@ -406,7 +406,8 @@ class PreferencesDialog(QDialog):
         self._high_quality_after_scrub = QCheckBox(
             "Render full quality once the drag stops"
         )
-        self._high_quality_after_scrub.setChecked(perf.high_quality_after_scrub)
+        self._high_quality_after_scrub.setChecked(
+            perf.high_quality_after_scrub)
         scrub_form.addRow(self._high_quality_after_scrub)
 
         layout.addWidget(scrub_group)

@@ -22,6 +22,7 @@ from core.nodes.property_link import (PROPERTY_DRIVE_PROPERTY_KEY,
                                       sockets_compatible)
 from core.perf.profiler import profiler
 from core.project_settings import ProjectSettings
+from core.render_plan import RenderPlan, RenderPlanCache
 from core.serialization import APH_FORMAT_ID, APH_FORMAT_VERSION
 from render.preview import PreviewSettings
 
@@ -156,6 +157,23 @@ class Project:
         # lambda for every node on every evaluated frame.
         self._named_resolver_bound = self._resolve_named_property_for_frame
         self._node_resolver_bound = self._resolve_node_property_for_frame
+
+        # --------------------------------------------------------------
+        # Compiled render plan
+        #
+        # Structural facts about the graph (evaluation order, which
+        # sources may hand over raw 8-bit frames, which nodes are
+        # independent) only change when the topology changes. They are
+        # compiled once into an immutable RenderPlan and reused until the
+        # revision moves, instead of being re-derived per frame.
+        # --------------------------------------------------------------
+
+        self._topology_revision: int = 0
+        self._render_plan_cache = RenderPlanCache()
+
+        # Node ids permitted to emit raw 8-bit frames for the evaluation
+        # tree currently in flight. Populated per top-level evaluation.
+        self._eval_u8_sources: frozenset[str] = frozenset()
 
         # --------------------------------------------------------------
         # Property-drive state
@@ -530,6 +548,9 @@ class Project:
             node,
         )
 
+        # Structure changed: the compiled execution plan is stale.
+        self.bump_topology()
+
         self.dependency_graph.update(
             self.nodes,
             self.connections,
@@ -572,6 +593,9 @@ class Project:
 
         if self.active_viewer == node_id:
             self.active_viewer = None
+
+        # Structure changed: the compiled execution plan is stale.
+        self.bump_topology()
 
         if isinstance(node, VideoInputNode):
             node.close()
@@ -744,6 +768,9 @@ class Project:
             self.connections,
         )
 
+        # Structure changed: the compiled execution plan is stale.
+        self.bump_topology()
+
         self.dependency_graph.invalidate_node(
             input_node_id
         )
@@ -782,6 +809,9 @@ class Project:
             connection.input_node_id
         )
 
+        # Structure changed: the compiled execution plan is stale.
+        self.bump_topology()
+
         self.notify_observers(
             ObserverEvent.ConnectionRemoved,
             connection,
@@ -802,6 +832,37 @@ class Project:
         )
 
         return output_node_id in downstream
+
+    # ==================================================================
+    # Compiled render plan
+    # ==================================================================
+
+    @property
+    def topology_revision(self) -> int:
+        """Monotonic counter bumped whenever graph structure changes.
+
+        Properties, keyframes, and project settings deliberately do **not**
+        bump this: changing ``Exposure`` must not invalidate the compiled
+        execution plan.
+        """
+        return self._topology_revision
+
+    def bump_topology(self) -> None:
+        """Mark the compiled render plan as stale."""
+        self._topology_revision += 1
+        self._render_plan_cache.invalidate()
+
+    def render_plan(self, viewer_id: str | None = None) -> RenderPlan:
+        """Return the compiled execution plan for a Viewer (cached).
+
+        Compilation is O(V + E) and happens only when topology changes, so
+        this is safe to call from the evaluation hot path.
+        """
+        return self._render_plan_cache.get(self, viewer_id)
+
+    def u8_source_allowed(self, node_id: str, viewer_id: str | None = None) -> bool:
+        """Whether ``node_id`` may emit a raw 8-bit frame for this Viewer."""
+        return self.render_plan(viewer_id).may_emit_u8(node_id)
 
     # ==================================================================
     # Evaluation
@@ -874,6 +935,15 @@ class Project:
             self._eval_context_settings.max_width
         )
 
+        # Resolve the raw-8-bit source allowlist once per evaluation tree.
+        # This is a single cached plan lookup; per-node decisions then cost
+        # one set membership test.
+        #
+        # Export always uses the compiled plan too: the promotion that
+        # ``ensure_rgb_f32`` performs is bit-identical to the eager
+        # ``from_source_u8`` it replaces, so final output is unchanged.
+        self._eval_u8_sources = self.render_plan().u8_source_ids
+
         # Resolve property drives once.
         self._prepare_property_drive_overrides(
             frame_num
@@ -883,6 +953,7 @@ class Project:
         self._eval_context_frame = None
         self._eval_context_settings = None
         self._eval_context_cache_width = None
+        self._eval_u8_sources = frozenset()
 
         # Memory-pressure response: a burst of 4K float intermediates can
         # approach the configured budget within a single frame evaluation.
@@ -1023,6 +1094,16 @@ class Project:
             frame_num=frame_num,
             project_max_frame=self.max_frame,
         )
+
+        # Raw-8-bit source permission, decided by the compiled plan.
+        #
+        # This is the whole payoff of ``core.render_plan``: a source that
+        # the plan proved safe skips the eager uint8 → float32 promotion
+        # and hands the decoder's buffer straight over, while every node
+        # that genuinely needs float precision still promotes on demand
+        # via ``ensure_rgb_f32``. One set-membership test per node per
+        # frame is the entire cost.
+        node._emit_u8_allowed = node_id in self._eval_u8_sources
 
         # --------------------------------------------------------------
         # Resolver setup
@@ -1490,6 +1571,9 @@ class Project:
             return True
 
         self.active_viewer = node_id
+
+        # The plan is compiled per Viewer, so switching Viewers recompiles.
+        self.bump_topology()
 
         self.notify_observers(
             ObserverEvent.ActiveViewerChanged,

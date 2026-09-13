@@ -118,13 +118,77 @@ class NodeSocket:
         }
 
 
+class PreviewCost(IntEnum):
+    """Rough execution cost class used by the interactive preview governor.
+
+    Nodes declare this instead of the engine hard-coding a list of "slow"
+    node types. The governor uses it to decide what to scale back first when
+    a frame cannot meet its deadline, and the graph complexity readout uses
+    it to tell the user when a composition needs caching.
+    """
+
+    LIGHT = 0
+    MEDIUM = 1
+    HEAVY = 2
+    EXTREME = 3
+
+
 class Node(ABC):
-    """Base class for all nodes."""
+    """Base class for all nodes.
+
+    Engine capability declarations
+    ------------------------------
+    These class attributes let the compiled render plan
+    (``core.render_plan``) make execution decisions *before* any frame is
+    evaluated, instead of the engine guessing at runtime.
+
+    ``accepts_u8_frame``
+        The node tolerates a raw 8-bit RGB frame on its frame inputs — it
+        promotes via ``ensure_rgb_f32`` itself. Declaring this is what
+        allows a source to skip the eager float promotion and hand its
+        decoded frame straight over. **Defaults to False**: a node that has
+        not been verified keeps the old, always-float behaviour, so opting
+        in is a deliberate, reviewable act rather than an accident.
+
+    ``can_emit_u8_frame``
+        The node originates frames and is able to hand them over in raw
+        8-bit form when the plan proves every downstream node tolerates it.
+
+    ``preserves_frame_dtype``
+        The node's output dtype follows its input dtype (pure routing).
+
+    ``is_static_output``
+        The output cannot change while the frame number changes, so it may
+        be cached indefinitely until a parameter or upstream input changes.
+
+    ``is_temporal``
+        The node reads frames other than the requested one (motion blur,
+        temporal denoise, ...). Forces sequential evaluation during export
+        and blocks parallel frame rendering.
+    """
 
     node_description: str = ""
     node_category: str = "Misc"
     node_type: str = "BaseNode"
     node_color: tuple[int, int, int] = (100, 100, 100)
+
+    #: Preview cost class, used by the adaptive quality governor.
+    preview_cost: PreviewCost = PreviewCost.MEDIUM
+
+    #: Whether ``evaluate`` tolerates a raw uint8 RGB frame on frame inputs.
+    accepts_u8_frame: bool = False
+
+    #: Whether this node can originate raw uint8 frames.
+    can_emit_u8_frame: bool = False
+
+    #: Whether the output dtype simply follows the input dtype.
+    preserves_frame_dtype: bool = False
+
+    #: Whether the output is independent of the frame number.
+    is_static_output: bool = False
+
+    #: Whether the node reads neighbouring frames.
+    is_temporal: bool = False
 
     def __init__(self, name: str | None = None) -> None:
         self.name = name or self.node_type
@@ -154,6 +218,11 @@ class Node(ABC):
         # every evaluated frame, which matters for long exports.
         self._drive_lookup: Any = None
         self._eval_resampler: Any = None
+
+        # Set by ``Project`` from the compiled render plan, once per
+        # evaluation tree. False means "promote eagerly", which is the
+        # historical behaviour and the safe default.
+        self._emit_u8_allowed: bool = False
 
         self.exception_log: list[Exception] = []
         self._setup_sockets()

@@ -17,7 +17,7 @@ from core.nodes.base import (
     NodeSocketType,
 )
 from core.nodes.property_factory import slider_property, toggle_property
-from effects.frame_ops import mix_frames
+from effects.frame_ops import ensure_rgb_f32, mix_frames
 
 EnumT = TypeVar("EnumT", bound=Enum)
 
@@ -151,7 +151,17 @@ class FrameNode(Node):
 
 
 class FrameEffectNode(FrameNode):
-    """Unary effect with consistent Enabled and Mix controls."""
+    """Unary effect with consistent Enabled and Mix controls.
+
+    Declares ``accepts_u8_frame`` because every concrete effect promotes its
+    input through ``ensure_rgb_f32`` at the point it starts doing float math.
+    That single declaration is what lets the compiled render plan permit
+    upstream sources to skip the eager float promotion for this whole family
+    of nodes.
+    """
+
+    #: Every ``process_frame`` implementation promotes via ``ensure_rgb_f32``.
+    accepts_u8_frame: bool = True
 
     def _setup_sockets(self) -> None:
         """Register shared unary frame sockets and processing controls."""
@@ -193,8 +203,22 @@ class FrameEffectNode(FrameNode):
         mix: float = self.float_value("mix", 100.0) / 100.0
         if mix <= 0.0:
             return source_payload if source_payload is not None else source
+
         effected: np.ndarray = self.process_frame(source, frame_num)
-        mixed = mix_frames(source, effected, mix)
+
+        if mix >= 1.0:
+            # Fast path: the effect completely replaces the source, so the
+            # source never has to be promoted. This is the default (Mix =
+            # 100%) and it is what keeps a raw 8-bit source untouched all
+            # the way through the graph.
+            mixed = effected
+        else:
+            # A partial mix genuinely needs both operands in the processing
+            # representation. Previously this multiplied the *raw* source
+            # directly, which silently produced 0-255-scaled garbage once a
+            # source was allowed to hand over 8-bit pixels.
+            mixed = mix_frames(ensure_rgb_f32(source), effected, mix)
+
         if source_payload is not None:
             return FrameWithAudio(frame=mixed, audio=source_payload.audio)
         return mixed

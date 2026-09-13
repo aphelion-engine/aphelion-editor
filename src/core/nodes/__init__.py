@@ -11,6 +11,7 @@ from core.nodes.base import (
     NodePropertyInputType,
     NodeSocket,
     NodeSocketType,
+    PreviewCost,
     VideoFrameErrorMethod,
 )
 from core.nodes.color_effects import (
@@ -88,6 +89,7 @@ __all__ = [
     "NodeRegistry",
     "NodeSocket",
     "NodeSocketType",
+    "PreviewCost",
     "PixelateNode",
     "PosterizeNode",
     "SharpenNode",
