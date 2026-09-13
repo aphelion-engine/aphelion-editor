@@ -22,7 +22,7 @@ AddNodeAtCallback = Callable[[str, str, QPointF], None]
 
 
 class GraphContextMenu(QMenu):
-    """Empty-canvas menu: add nodes, paste, select all, fit view."""
+    """Empty-canvas menu: add nodes, paste, selection tools, fit view."""
 
     def __init__(
         self,
@@ -35,6 +35,11 @@ class GraphContextMenu(QMenu):
         on_fit_view: Callable[[], None],
         on_organize_graph: Callable[[], None],
         keybinds: KeybindStore,
+        on_invert_selection: Callable[[], None] | None = None,
+        on_select_connected: Callable[[], None] | None = None,
+        on_toggle_spotlight: Callable[[], None] | None = None,
+        spotlight_enabled: bool = False,
+        can_select_related: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -62,6 +67,33 @@ class GraphContextMenu(QMenu):
         assert select_all is not None
         apply_menu_hint(select_all, keybinds, KeyAction.SELECT_ALL)
         select_all.triggered.connect(on_select_all)
+
+        if on_invert_selection is not None:
+            invert = self.addAction("Invert Selection")
+            assert invert is not None
+            apply_menu_hint(invert, keybinds, KeyAction.INVERT_SELECTION)
+            invert.triggered.connect(on_invert_selection)
+
+        if on_select_connected is not None:
+            connected = self.addAction("Select Connected")
+            assert connected is not None
+            connected.setEnabled(can_select_related)
+            connected.setToolTip("Grow the selection along the graph")
+            apply_menu_hint(connected, keybinds, KeyAction.SELECT_CONNECTED)
+            connected.triggered.connect(on_select_connected)
+
+        if on_toggle_spotlight is not None:
+            spotlight = self.addAction(
+                make_icon(AppIcon.SPOTLIGHT), "Spotlight Selection"
+            )
+            assert spotlight is not None
+            spotlight.setCheckable(True)
+            spotlight.setChecked(spotlight_enabled)
+            spotlight.setToolTip("Dim everything outside the selection")
+            apply_menu_hint(spotlight, keybinds, KeyAction.TOGGLE_SPOTLIGHT)
+            spotlight.triggered.connect(on_toggle_spotlight)
+
+        self.addSeparator()
 
         fit = self.addAction(make_icon(AppIcon.FIT_VIEW), "Fit to View")
         assert fit is not None
@@ -129,6 +161,7 @@ class NodeOperationsMenu(QMenu):
         self.addSeparator()
         self._add_align_menu(items)
         self._add_distribute_menu(items)
+        self._add_selection_menu(items)
 
         self.addSeparator()
         select_all = self.addAction(make_icon(AppIcon.SELECT_ALL), "Select All")
@@ -258,3 +291,77 @@ class NodeOperationsMenu(QMenu):
         v_action.triggered.connect(
             lambda: node_ops.distribute_vertical(self.view, items)
         )
+
+    def _add_selection_menu(self, items: list[NodeItem]) -> None:
+        """Add wiring, bypass, framing, and spotlight quick actions."""
+        from ui.node_graph.selection_ops import SelectionTraversal
+
+        view = self.view
+        keybinds = view.keybinds
+        count = len(items)
+
+        bypass = self.addAction(make_icon(AppIcon.BYPASS), "Toggle Bypass")
+        assert bypass is not None
+        bypass.setEnabled(count > 0)
+        bypass.setToolTip("Bypass or re-enable the selected effect nodes")
+        apply_menu_hint(bypass, keybinds, KeyAction.TOGGLE_BYPASS)
+        bypass.triggered.connect(view.toggle_selection_bypass)
+
+        unwire = self.addAction(
+            make_icon(AppIcon.DELETE), "Remove Attached Wires")
+        assert unwire is not None
+        unwire.setEnabled(count > 0)
+        unwire.setToolTip("Disconnect every wire touching the selection")
+        unwire.triggered.connect(view.remove_selection_wires)
+
+        selection_menu = self.addMenu(
+            make_icon(AppIcon.SELECT_ALL), "Selection"
+        )
+        assert selection_menu is not None
+        selection_menu.setStyleSheet(CONTEXT_MENU_STYLE)
+
+        invert = selection_menu.addAction("Invert Selection")
+        assert invert is not None
+        apply_menu_hint(invert, keybinds, KeyAction.INVERT_SELECTION)
+        invert.triggered.connect(view.invert_selection)
+
+        selection_menu.addSeparator()
+        for label, handler, key_action in (
+            ("Select Connected", view.select_connected, KeyAction.SELECT_CONNECTED),
+            ("Select Upstream", view.select_upstream, None),
+            ("Select Downstream", view.select_downstream, None),
+            ("Select Same Type", view.select_same_type, None),
+        ):
+            action = selection_menu.addAction(label)
+            assert action is not None
+            action.setEnabled(count > 0)
+            if key_action is not None:
+                apply_menu_hint(action, keybinds, key_action)
+            action.triggered.connect(handler)
+
+        selection_menu.addSeparator()
+        tidy = selection_menu.addAction(
+            make_icon(AppIcon.TIDY), "Tidy Selection")
+        assert tidy is not None
+        tidy.setEnabled(count >= 2)
+        apply_menu_hint(tidy, keybinds, KeyAction.TIDY_SELECTION)
+        tidy.triggered.connect(view.tidy_selection)
+
+        fit = selection_menu.addAction(
+            make_icon(AppIcon.FIT_VIEW), "Fit Selection")
+        assert fit is not None
+        fit.setEnabled(count > 0)
+        apply_menu_hint(fit, keybinds, KeyAction.FIT_SELECTION)
+        fit.triggered.connect(view.fit_selection)
+
+        selection_menu.addSeparator()
+        spotlight = selection_menu.addAction(
+            make_icon(AppIcon.SPOTLIGHT), "Spotlight Selection"
+        )
+        assert spotlight is not None
+        spotlight.setCheckable(True)
+        spotlight.setChecked(view.is_spotlight_enabled())
+        spotlight.setEnabled(count > 0)
+        spotlight.setToolTip("Dim everything outside the selection")
+        apply_menu_hint(spotlight, keybinds, KeyAction.TOGGLE_SPOTLIGHT)
+        spotlight.triggered.connect(lambda: view.toggle_spotlight())

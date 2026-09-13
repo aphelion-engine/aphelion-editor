@@ -9,11 +9,17 @@ from typing import Any
 
 import numpy as np
 
+from core.audio import AudioData, FrameWithAudio
+
 
 def _estimate_bytes(value: Any) -> int:
     """Estimate the memory consumed by a cached value."""
     if isinstance(value, np.ndarray):
         return int(value.nbytes)
+    if isinstance(value, FrameWithAudio):
+        return _estimate_bytes(value.frame) + _estimate_bytes(value.audio)
+    if isinstance(value, AudioData):
+        return int(value.samples.nbytes)
     return sys.getsizeof(value)
 
 

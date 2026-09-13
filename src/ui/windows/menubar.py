@@ -87,7 +87,9 @@ def _build_edit_menu(menubar: QMenuBar, editor: Editor) -> None:
     _add_action(edit_menu, editor, KeyAction.PASTE)
     edit_menu.addSeparator()
     _add_action(edit_menu, editor, KeyAction.SELECT_ALL)
+    _add_action(edit_menu, editor, KeyAction.INVERT_SELECTION)
     _add_action(edit_menu, editor, KeyAction.DUPLICATE)
+    _add_action(edit_menu, editor, KeyAction.TOGGLE_BYPASS)
     _add_action(edit_menu, editor, KeyAction.DELETE)
     edit_menu.addSeparator()
     _add_action(edit_menu, editor, KeyAction.CREATE_CUSTOM_NODE)
@@ -121,6 +123,17 @@ def _build_nodes_menu(menubar: QMenuBar, editor: Editor) -> None:
     _add_action(nodes_menu, editor, KeyAction.FIT_GRAPH)
     organize = _add_action(nodes_menu, editor, KeyAction.ORGANIZE_GRAPH)
     organize.setText("Organize Graph…")
+
+    nodes_menu.addSeparator()
+    selection_menu = nodes_menu.addMenu("Selection")
+    assert selection_menu is not None
+    _style_menu(selection_menu)
+    _add_action(selection_menu, editor, KeyAction.SELECT_CONNECTED)
+    _add_action(selection_menu, editor, KeyAction.TIDY_SELECTION)
+    _add_action(selection_menu, editor, KeyAction.FIT_SELECTION)
+    selection_menu.addSeparator()
+    _add_action(selection_menu, editor, KeyAction.TOGGLE_SPOTLIGHT)
+    _add_action(selection_menu, editor, KeyAction.INVERT_SELECTION)
 
 
 def _build_view_menu(menubar: QMenuBar, editor: Editor) -> None:

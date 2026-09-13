@@ -4,15 +4,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import QPointF, Qt
-from PyQt6.QtGui import QBrush, QPainter, QPainterPath, QPainterPathStroker, QPen
-from PyQt6.QtWidgets import (
-    QGraphicsPathItem,
-    QStyleOptionGraphicsItem,
-    QWidget,
-)
-
 from core.events import Connection
+from PyQt6.QtCore import QPointF, Qt
+from PyQt6.QtGui import (QBrush, QPainter, QPainterPath, QPainterPathStroker,
+                         QPen)
+from PyQt6.QtWidgets import (QGraphicsPathItem, QStyleOptionGraphicsItem,
+                             QWidget)
 from ui.node_graph.constants import WIRE_CURVE_OFFSET_PX, WIRE_WIDTH_PX
 from ui.node_graph.theme_state import current_graph_palette
 
@@ -46,6 +43,13 @@ class ConnectionItem(QGraphicsPathItem):
         self.setPen(QPen(current_graph_palette().wire, WIRE_WIDTH_PX))
         self.setBrush(QBrush(Qt.BrushStyle.NoBrush))
         self.update_path()
+
+    def set_dimmed(self, dimmed: bool) -> None:
+        """Fade this wire when spotlight mode highlights a different selection."""
+        target = 0.25 if dimmed else 1.0
+        if abs(self.opacity() - target) < 1e-3:
+            return
+        self.setOpacity(target)
 
     def update_path(self) -> None:
         """Recompute geometry from current socket positions."""

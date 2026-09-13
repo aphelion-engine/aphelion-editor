@@ -30,7 +30,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
-from core.nodes.base import Node, NodeSocketType
+from core.nodes.base import (ColorRgb, Node, NodeProperty,
+                             NodePropertyInputType, NodeSocket, NodeSocketType)
 from core.nodes.registry import global_node_registry
 
 #: Category shown in the Add Node menu for saved custom node definitions.
@@ -55,6 +56,15 @@ PORT_SOCKET_TYPES: tuple[NodeSocketType, ...] = (
     NodeSocketType.Number,
     NodeSocketType.Color,
     NodeSocketType.Audio,
+)
+
+#: Property kinds that can be exposed as an adjustable custom parameter.
+CUSTOM_PROPERTY_TYPES: tuple[NodePropertyInputType, ...] = (
+    NodePropertyInputType.Slider,
+    NodePropertyInputType.Number,
+    NodePropertyInputType.Checkbox,
+    NodePropertyInputType.Text,
+    NodePropertyInputType.Color,
 )
 
 
@@ -96,6 +106,110 @@ class CustomPort:
 
 
 @dataclass
+class CustomProperty:
+    """An adjustable parameter exposed by a custom node.
+
+    A custom property is a normal node property on the custom node instance
+    whose value is pushed onto a chosen property of an *inner* node whenever
+    the custom node is evaluated. That makes the parameter actually drive the
+    embedded graph.
+    """
+
+    name: str
+    label: str = ""
+    input_type: NodePropertyInputType = NodePropertyInputType.Slider
+    default: Any = 0.0
+    min_value: float = 0.0
+    max_value: float = 1.0
+    group: str = "Parameters"
+    description: str = ""
+    suffix: str = ""
+    #: Inner node whose property this parameter drives.
+    target_node_id: str = ""
+    #: Property key on that inner node.
+    target_key: str = ""
+
+    @property
+    def display_label(self) -> str:
+        return self.label or self.name.replace("_", " ").title()
+
+    def to_dict(self) -> dict[str, Any]:
+        from core.serialization import encode_value
+
+        return {
+            "name": self.name,
+            "label": self.label,
+            "input_type": self.input_type.name,
+            "default": encode_value(self.default),
+            "min_value": float(self.min_value),
+            "max_value": float(self.max_value),
+            "group": self.group,
+            "description": self.description,
+            "suffix": self.suffix,
+            "target_node_id": self.target_node_id,
+            "target_key": self.target_key,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Any) -> CustomProperty | None:
+        if not isinstance(data, dict):
+            return None
+        name = str(data.get("name", "")).strip()
+        if not name:
+            return None
+
+        from core.serialization import decode_value
+
+        try:
+            input_type = NodePropertyInputType[
+                str(data.get("input_type", "Slider"))
+            ]
+        except KeyError:
+            input_type = NodePropertyInputType.Slider
+
+        default = decode_value(data.get("default"))
+        if input_type == NodePropertyInputType.Color:
+            default = _coerce_rgb(default)
+        elif input_type == NodePropertyInputType.Checkbox:
+            default = bool(default)
+        elif input_type in (
+            NodePropertyInputType.Slider,
+            NodePropertyInputType.Number,
+        ):
+            try:
+                default = float(default)
+            except (TypeError, ValueError):
+                default = 0.0
+        elif input_type == NodePropertyInputType.Text:
+            default = "" if default is None else str(default)
+
+        def _float(key: str, fallback: float) -> float:
+            try:
+                return float(data.get(key, fallback))
+            except (TypeError, ValueError):
+                return fallback
+
+        return cls(
+            name=name,
+            label=str(data.get("label", "")),
+            input_type=input_type,
+            default=default,
+            min_value=_float("min_value", 0.0),
+            max_value=_float("max_value", 1.0),
+            group=str(data.get("group", "")) or "Parameters",
+            description=str(data.get("description", "")),
+            suffix=str(data.get("suffix", "")),
+            target_node_id=str(data.get("target_node_id", "")),
+            target_key=str(data.get("target_key", "")),
+        )
+
+    def copy(self) -> CustomProperty:
+        restored = CustomProperty.from_dict(self.to_dict())
+        assert restored is not None
+        return restored
+
+
+@dataclass
 class CustomNodeDefinition:
     """Serializable description of a reusable custom node."""
 
@@ -104,6 +218,7 @@ class CustomNodeDefinition:
     color: tuple[int, int, int] = DEFAULT_CUSTOM_COLOR
     inputs: list[CustomPort] = field(default_factory=list)
     outputs: list[CustomPort] = field(default_factory=list)
+    properties: list[CustomProperty] = field(default_factory=list)
     #: node id -> serialized node document (same shape as ``Project`` nodes).
     nodes: dict[str, dict[str, Any]] = field(default_factory=dict)
     #: serialized connection documents.
@@ -116,6 +231,7 @@ class CustomNodeDefinition:
             "color": [int(self.color[0]), int(self.color[1]), int(self.color[2])],
             "inputs": [port.to_dict() for port in self.inputs],
             "outputs": [port.to_dict() for port in self.outputs],
+            "properties": [prop.to_dict() for prop in self.properties],
             "nodes": {
                 str(node_id): dict(blob)
                 for node_id, blob in self.nodes.items()
@@ -167,12 +283,19 @@ class CustomNodeDefinition:
             if port is not None:
                 outputs.append(port)
 
+        properties: list[CustomProperty] = []
+        for raw_prop in data.get("properties", []) or []:
+            prop = CustomProperty.from_dict(raw_prop)
+            if prop is not None:
+                properties.append(prop)
+
         return cls(
             name=str(data.get("name", "")).strip() or "Custom Node",
             description=str(data.get("description", "")),
             color=color,
             inputs=inputs,
             outputs=outputs,
+            properties=properties,
             nodes=nodes,
             connections=connections,
         )
@@ -304,16 +427,31 @@ class CustomNode(Node):
         self._subgraph: Any = None
         super().__init__(name)
 
-    # -- sockets -----------------------------------------------------------
+    # -- sockets / properties ---------------------------------------------
 
     def _setup_sockets(self) -> None:
         for port in self.definition.inputs:
             self.add_input(port.name, port.socket_type)
         for port in self.definition.outputs:
             self.add_output(port.name, port.socket_type)
+        self._setup_custom_properties()
+
+    def _setup_custom_properties(self) -> None:
+        """Rebuild exposed parameters from the definition.
+
+        Existing values for unchanged parameter names are preserved so a live
+        definition refresh (edit) does not reset the user's settings.
+        """
+        existing = {key: prop.value for key, prop in self.properties.items()}
+        self.properties.clear()
+        for index, spec in enumerate(self.definition.properties):
+            prop = build_node_property(spec, priority=index)
+            if spec.name in existing:
+                prop.value = existing[spec.name]
+            self.properties[spec.name] = prop
 
     def rebuild_sockets(self) -> None:
-        """Re-create ports from the current definition."""
+        """Re-create ports and parameters from the current definition."""
         self.inputs.clear()
         self.outputs.clear()
         self._setup_sockets()
@@ -328,6 +466,44 @@ class CustomNode(Node):
     def definition_name(self) -> str:
         return self.definition.name
 
+    def custom_value(self, name: str, fallback: Any = None) -> Any:
+        """Return the current value of an exposed parameter."""
+        prop = self.properties.get(name)
+        if prop is None:
+            spec = next(
+                (item for item in self.definition.properties if item.name == name),
+                None,
+            )
+            return fallback if spec is None else spec.default
+        value = prop.value
+        curve = self.animated_properties.get(name)
+        if (
+            curve is not None
+            and not curve.is_empty
+            and isinstance(value, (int, float))
+            and not isinstance(value, bool)
+        ):
+            return curve.value_at(self._current_frame_num)
+        return value
+
+    def embedded_project(self) -> Any:
+        """Return the (cached) ``Project`` holding this node's inner graph."""
+        return self._ensure_subgraph()
+
+    def _apply_custom_properties(self, subgraph: Any) -> None:
+        """Push exposed parameter values onto the inner nodes they drive."""
+        for spec in self.definition.properties:
+            if not spec.target_node_id or not spec.target_key:
+                continue
+            target = subgraph.nodes.get(spec.target_node_id)
+            if target is None:
+                continue
+            inner_prop = target.properties.get(spec.target_key)
+            if inner_prop is None:
+                continue
+            inner_prop.value = self.custom_value(spec.name, spec.default)
+            subgraph.invalidate_cache(spec.target_node_id)
+
     # -- evaluation --------------------------------------------------------
 
     def evaluate(self, frame_num: int) -> dict[str, Any]:
@@ -336,6 +512,9 @@ class CustomNode(Node):
             return {}
 
         self._sync_subgraph_context(subgraph)
+
+        # Push exposed parameter values onto the inner nodes they drive.
+        self._apply_custom_properties(subgraph)
 
         # Feed parent values into the subgraph input terminals. Invalidating
         # each terminal clears its downstream cache so stale results from a
@@ -399,12 +578,14 @@ class CustomNode(Node):
         return data
 
     def apply_document(self, data: dict[str, Any]) -> None:
-        super().apply_document(data)
+        # Apply the embedded definition first so its ports and parameters
+        # exist before base property restoration resolves saved values.
         blob = data.get("custom_definition")
         if isinstance(blob, dict):
             self.definition = CustomNodeDefinition.from_dict(blob)
             self.rebuild_sockets()
             self._subgraph = None
+        super().apply_document(data)
 
     def snapshot_data(self) -> dict[str, Any]:
         return {"custom_definition": self.definition.to_dict()}
@@ -492,6 +673,7 @@ def definition_from_project(
     *,
     description: str = "",
     color: tuple[int, int, int] = DEFAULT_CUSTOM_COLOR,
+    properties: list[CustomProperty] | None = None,
 ) -> CustomNodeDefinition:
     """Snapshot a live project into a custom node definition.
 
@@ -547,6 +729,7 @@ def definition_from_project(
         color=color,
         inputs=inputs,
         outputs=outputs,
+        properties=list(properties or []),
         nodes=nodes,
         connections=connections,
     )
@@ -603,8 +786,189 @@ def _identifier(name: str) -> str:
     return safe
 
 
+# ============================================================================
+# Custom parameter helpers
+# ============================================================================
+
+
+def sanitize_property_key(name: str, fallback: str = "parameter") -> str:
+    """Return a snake_case property key derived from a display name."""
+    cleaned: list[str] = []
+    for ch in str(name).strip().lower():
+        if ch.isalnum():
+            cleaned.append(ch)
+        elif cleaned and cleaned[-1] != "_":
+            cleaned.append("_")
+    key = "".join(cleaned).strip("_")
+    if not key or key[0].isdigit():
+        key = f"{fallback}_{key}" if key else fallback
+    return key
+
+
+def unique_property_key(base: str, taken: set[str]) -> str:
+    """Return ``base`` (or ``base_2``, ``base_3``…) not present in ``taken``."""
+    candidate = base
+    index = 2
+    while candidate in taken:
+        candidate = f"{base}_{index}"
+        index += 1
+    return candidate
+
+
+def bindable_property_targets(node: Node) -> list[tuple[str, NodeProperty]]:
+    """Return property keys on ``node`` that can back a custom parameter."""
+    items: list[tuple[str, NodeProperty]] = []
+    for key, prop in node.properties.items():
+        if key.startswith("_input_"):
+            continue
+        if prop.input_type in CUSTOM_PROPERTY_TYPES:
+            items.append((key, prop))
+    items.sort(key=lambda item: (item[1].priority, item[1].label or item[0]))
+    return items
+
+
+def custom_property_from_target(
+    node: Node,
+    node_id: str,
+    key: str,
+    *,
+    name: str = "",
+) -> CustomProperty | None:
+    """Derive a custom parameter spec from an inner node's property."""
+    prop = node.properties.get(key)
+    if prop is None or prop.input_type not in CUSTOM_PROPERTY_TYPES:
+        return None
+
+    label = prop.label or key.replace("_", " ").title()
+    fallback_key = sanitize_property_key(key, "parameter")
+    return CustomProperty(
+        name=name or fallback_key,
+        label=label,
+        input_type=prop.input_type,
+        default=prop.value,
+        min_value=float(prop.slider_min_value),
+        max_value=float(prop.slider_max_value),
+        group=prop.group or "Parameters",
+        description=prop.description,
+        suffix=prop.suffix,
+        target_node_id=str(node_id),
+        target_key=key,
+    )
+
+
+def build_node_property(spec: CustomProperty, *, priority: int) -> NodeProperty:
+    """Create the runtime ``NodeProperty`` for an exposed parameter."""
+    common: dict[str, Any] = {
+        "priority": priority,
+        "group": spec.group or "Parameters",
+        "label": spec.display_label,
+        "description": spec.description
+        or f"Adjustable parameter: {spec.display_label}",
+        "suffix": spec.suffix,
+    }
+
+    if spec.input_type == NodePropertyInputType.Checkbox:
+        return NodeProperty(
+            input_type=NodePropertyInputType.Checkbox,
+            value=bool(spec.default),
+            **common,
+        )
+    if spec.input_type == NodePropertyInputType.Text:
+        return NodeProperty(
+            input_type=NodePropertyInputType.Text,
+            value="" if spec.default is None else str(spec.default),
+            **common,
+        )
+    if spec.input_type == NodePropertyInputType.Color:
+        return NodeProperty(
+            input_type=NodePropertyInputType.Color,
+            value=_coerce_rgb(spec.default),
+            **common,
+        )
+
+    input_type = (
+        NodePropertyInputType.Number
+        if spec.input_type == NodePropertyInputType.Number
+        else NodePropertyInputType.Slider
+    )
+    try:
+        value = float(spec.default)
+    except (TypeError, ValueError):
+        value = 0.0
+    return NodeProperty(
+        input_type=input_type,
+        value=value,
+        slider_min_value=float(spec.min_value),
+        slider_max_value=float(spec.max_value),
+        **common,
+    )
+
+
+def format_property_value(spec: CustomProperty) -> str:
+    """Return a compact editable text form of a parameter default."""
+    if spec.input_type == NodePropertyInputType.Color:
+        rgb = _coerce_rgb(spec.default)
+        return f"{rgb[0]}, {rgb[1]}, {rgb[2]}"
+    if spec.input_type == NodePropertyInputType.Checkbox:
+        return "true" if spec.default else "false"
+    if spec.input_type in (
+        NodePropertyInputType.Slider,
+        NodePropertyInputType.Number,
+    ):
+        try:
+            return f"{float(spec.default):g}"
+        except (TypeError, ValueError):
+            return "0"
+    return "" if spec.default is None else str(spec.default)
+
+
+def parse_property_value(spec: CustomProperty, text: str) -> Any:
+    """Parse an edited default value back into the parameter's value type."""
+    raw = str(text).strip()
+    if spec.input_type == NodePropertyInputType.Checkbox:
+        return raw.lower() in {"1", "true", "yes", "on"}
+    if spec.input_type == NodePropertyInputType.Color:
+        parts = [piece for piece in raw.replace(
+            ";", ",").split(",") if piece.strip()]
+        if len(parts) < 3:
+            return _coerce_rgb(spec.default)
+        channels: list[int] = []
+        for piece in parts[:3]:
+            try:
+                channels.append(max(0, min(255, int(float(piece.strip())))))
+            except ValueError:
+                channels.append(128)
+        return (channels[0], channels[1], channels[2])
+    if spec.input_type in (
+        NodePropertyInputType.Slider,
+        NodePropertyInputType.Number,
+    ):
+        try:
+            return float(raw)
+        except ValueError:
+            try:
+                return float(spec.default)
+            except (TypeError, ValueError):
+                return 0.0
+    return raw
+
+
+def _coerce_rgb(value: Any) -> ColorRgb:
+    if isinstance(value, (list, tuple)) and len(value) >= 3:
+        try:
+            return (
+                max(0, min(255, int(value[0]))),
+                max(0, min(255, int(value[1]))),
+                max(0, min(255, int(value[2]))),
+            )
+        except (TypeError, ValueError):
+            pass
+    return (128, 128, 128)
+
+
 __all__ = [
     "CUSTOM_NODE_CATEGORY",
+    "CUSTOM_PROPERTY_TYPES",
     "PORT_SLOT",
     "PORT_SOCKET_TYPES",
     "SUBGRAPH_INPUT_TYPE",
@@ -613,13 +977,24 @@ __all__ = [
     "CustomNode",
     "CustomNodeDefinition",
     "CustomPort",
+    "CustomProperty",
     "SubgraphInputNode",
     "SubgraphOutputNode",
+    "bindable_property_targets",
     "build_node_from_blob",
+    "build_node_property",
     "create_custom_node_from_document",
+    "custom_property_from_target",
     "definition_from_project",
+    "format_property_value",
     "is_terminal_node",
     "make_custom_node_class",
+    "parse_property_value",
+    "port_input_socket",
+    "rename_in_definition",
     "sanitize_port_name",
+    "sanitize_property_key",
     "unique_port_name",
+    "unique_property_key",
+    "with_ports",
 ]

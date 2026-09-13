@@ -76,6 +76,13 @@ class ProjectSettingsDialog(QDialog):
         buttons.accepted.connect(self._accept)
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
+        self._name.setToolTip("Project name shown in the editor and saved project document.")
+        self._width.setToolTip("Output width in pixels. Higher resolutions require more processing and memory; use preview proxies for faster editing.")
+        self._height.setToolTip("Output height in pixels. Together with width, sets the project aspect ratio.")
+        self._fps.setToolTip("Timeline frames per second. Higher values require more frames to be rendered each second during playback.")
+        self._duration.setToolTip("Timeline duration in seconds; determines the available frame range.")
+        from ui.widgets.tooltips import apply_form_tooltips
+        apply_form_tooltips(self)
 
     @property
     def settings(self) -> ProjectSettings | None:

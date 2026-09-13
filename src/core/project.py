@@ -406,6 +406,16 @@ class Project:
 
         return settings
 
+    def cached_preview_frame(self, node_id: str, frame_num: int) -> Any | None:
+        """Read a ready preview without waiting for or starting graph evaluation."""
+        if not self._eval_lock.acquire(blocking=False):
+            return None
+        try:
+            width = self.get_preview_settings().max_width
+            return self._frame_cache.get_fast((node_id, frame_num, f"frame@{width}"))
+        finally:
+            self._eval_lock.release()
+
     def _preview_cache_slot(
         self,
         output_slot: str,

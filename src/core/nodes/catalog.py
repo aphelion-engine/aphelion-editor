@@ -1,6 +1,8 @@
 """Authoritative built-in node catalog grouped by editor purpose."""
 from __future__ import annotations
 
+from core.nodes.shape_tracker import ShapeTrackerNode
+from core.nodes.vfx_tools import VFX_NODE_TYPES
 from core.nodes.advanced_color_nodes import (ClarityNode, ColorBalanceNode,
                                              LevelsNode, ShadowsHighlightsNode,
                                              VibranceNode)
@@ -280,4 +282,6 @@ BUILTIN_NODE_TYPES: tuple[type[Node], ...] = (
     SmoothStepNode,
     OscillatorNode,
     RandomNode,
+    ShapeTrackerNode,
+    *VFX_NODE_TYPES,
 )

@@ -805,6 +805,17 @@ class PropertyRow(QWidget):
         """Lay out either a normal labeled row or a full-width custom editor."""
         super().__init__(parent)
         self.setObjectName("PropertyRow")
+        description = description.strip() or f"Adjust {title.lower()}."
+        prop = editor.prop
+        if prop.input_type.name in ("Number", "Slider"):
+            description += f" Range: {prop.slider_min_value} to {prop.slider_max_value}{prop.suffix}."
+        if keyframe_button is not None:
+            description += " Use the diamond to add or remove a keyframe at the playhead."
+        self.setToolTip(description)
+        editor.setToolTip(description)
+        for control in editor.findChildren(QWidget):
+            if not control.toolTip():
+                control.setToolTip(description)
         self.editor: PropertyWidget = editor
         self.keyframe_button: KeyframeButtonWidget | None = keyframe_button
         layout: QHBoxLayout = QHBoxLayout(self)

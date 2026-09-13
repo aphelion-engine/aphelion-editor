@@ -4,36 +4,18 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, Qt
-from PyQt6.QtGui import (
-    QBrush,
-    QColor,
-    QFont,
-    QLinearGradient,
-    QPainter,
-    QPen,
-)
-from PyQt6.QtWidgets import (
-    QGraphicsItem,
-    QGraphicsRectItem,
-    QGraphicsSceneHoverEvent,
-    QGraphicsSceneMouseEvent,
-    QStyleOptionGraphicsItem,
-    QWidget,
-)
-
 from core.nodes import Node
-from ui.node_graph.constants import (
-    BODY_PADDING_PX,
-    CORNER_RADIUS_PX,
-    HEADER_HEIGHT_PX,
-    SHADOW_OFFSET_X_PX,
-    SHADOW_OFFSET_Y_PX,
-    SOCKET_EDGE_GAP_PX,
-    SOCKET_HIT_PAD_PX,
-    SOCKET_SIZE_PX,
-    SOCKET_SPACING_PX,
-)
+from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, Qt
+from PyQt6.QtGui import QBrush, QColor, QFont, QLinearGradient, QPainter, QPen
+from PyQt6.QtWidgets import (QGraphicsItem, QGraphicsRectItem,
+                             QGraphicsSceneHoverEvent,
+                             QGraphicsSceneMouseEvent,
+                             QStyleOptionGraphicsItem, QWidget)
+from ui.node_graph.constants import (BODY_PADDING_PX, CORNER_RADIUS_PX,
+                                     HEADER_HEIGHT_PX, SHADOW_OFFSET_X_PX,
+                                     SHADOW_OFFSET_Y_PX, SOCKET_EDGE_GAP_PX,
+                                     SOCKET_HIT_PAD_PX, SOCKET_SIZE_PX,
+                                     SOCKET_SPACING_PX)
 from ui.node_graph.node_layout import measure_node
 from ui.node_graph.theme_state import GraphThemePalette, current_graph_palette
 
@@ -46,6 +28,18 @@ def _distance_squared(point: QPointF, other: QPoint) -> float:
     dx = point.x() - other.x()
     dy = point.y() - other.y()
     return dx * dx + dy * dy
+
+
+#: Modifiers that extend a selection instead of replacing it.
+_MULTI_SELECT_MODIFIERS = (
+    Qt.KeyboardModifier.ControlModifier
+    | Qt.KeyboardModifier.ShiftModifier
+)
+
+
+def _is_multi_select(event: QGraphicsSceneMouseEvent) -> bool:
+    """Return whether ``event`` asks for an additive (multi) selection."""
+    return bool(event.modifiers() & _MULTI_SELECT_MODIFIERS)
 
 
 class NodeItem(QGraphicsRectItem):
@@ -87,10 +81,23 @@ class NodeItem(QGraphicsRectItem):
         """Current painted node width in pixels."""
         return self._node_width
 
+    def set_dimmed(self, dimmed: bool) -> None:
+        """Fade this node when spotlight mode highlights a different selection.
+
+        Opacity is cheaper and visually calmer than repainting every colour,
+        and it lets the selected nodes keep their normal, vivid look.
+        """
+        target = 0.3 if dimmed else 1.0
+        if abs(self.opacity() - target) < 1e-3:
+            return
+        self.setOpacity(target)
+
     def relayout_from_content(self) -> None:
         """Resize the item when node labels or sockets change."""
         dimensions = measure_node(self.node)
         if dimensions.width == self._node_width and dimensions.height == int(self.rect().height()):
+            self._calculate_socket_positions()
+            self.update()
             return
         self.prepareGeometryChange()
         self._node_width = dimensions.width
@@ -169,9 +176,20 @@ class NodeItem(QGraphicsRectItem):
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(palette.selection_soft)
             painter.drawRoundedRect(
-                body.adjusted(-3, -3, 3, 3),
+                body.adjusted(-4, -4, 4, 4),
                 CORNER_RADIUS_PX + 2,
                 CORNER_RADIUS_PX + 2,
+            )
+            # A crisp ring outside the soft halo keeps every member of a
+            # multi-node selection readable at low zoom.
+            ring = QColor(palette.selection)
+            ring.setAlpha(150)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(ring, 1.0))
+            painter.drawRoundedRect(
+                body.adjusted(-5.5, -5.5, 5.5, 5.5),
+                CORNER_RADIUS_PX + 3,
+                CORNER_RADIUS_PX + 3,
             )
             border = palette.selection
             width = 2.0
@@ -373,9 +391,7 @@ class NodeItem(QGraphicsRectItem):
         if event.button() == Qt.MouseButton.RightButton:
             if not self.isSelected():
                 scene = self.scene()
-                if scene is not None and not (
-                    event.modifiers() & Qt.KeyboardModifier.ControlModifier
-                ):
+                if scene is not None and not _is_multi_select(event):
                     scene.clearSelection()
                 self.setSelected(True)
             if self.graph_view is not None:
@@ -384,12 +400,13 @@ class NodeItem(QGraphicsRectItem):
             return
 
         if event.button() == Qt.MouseButton.LeftButton:
-            ctrl = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
-            scene = self.scene()
-            if ctrl:
+            if _is_multi_select(event):
+                # Ctrl or Shift toggles this node in or out of the selection,
+                # which is how a multi-node selection is built up by hand.
                 self.setSelected(not self.isSelected())
                 event.accept()
                 return
+            scene = self.scene()
             if scene is not None and not self.isSelected():
                 scene.clearSelection()
                 self.setSelected(True)

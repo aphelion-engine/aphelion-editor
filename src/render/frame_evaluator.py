@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -41,6 +42,8 @@ class FrameEvaluationWorker(QThread):
 
         # These are only written by the controlling/UI thread and read by
         # the worker. CPython's simple bool/int reads are atomic enough here.
+        self.last_render_seconds = 0.0
+        self._generation = 0
         self._playing = False
         self._running = True
         self._max_prefetch = DEFAULT_MAX_PREFETCH_FRAMES
@@ -79,6 +82,7 @@ class FrameEvaluationWorker(QThread):
         """Switch the worker to a new project."""
         with self._request_lock:
             self._project = project
+            self._generation += 1
             self._pending = None
 
         self._wake.set()
@@ -114,16 +118,21 @@ class FrameEvaluationWorker(QThread):
 
             node_id, frame_num = request
 
+            generation = self._generation
+            started = time.monotonic()
             frame = self._evaluate(node_id, frame_num)
+            self.last_render_seconds = time.monotonic() - started
 
             # Do not emit stale frames if a newer request arrived while
             # evaluation was running.
-            if self._has_pending():
+            if generation != self._generation or not self._running:
+                continue
+            if self._has_pending() and not self._playing:
                 continue
 
             self.frame_ready.emit(node_id, frame_num, frame)
 
-            if self._playing:
+            if self._playing and self.last_render_seconds < 1.0 / max(1, self._project.fps):
                 self._prefetch(node_id, frame_num)
 
     # ------------------------------------------------------------------
@@ -219,11 +228,11 @@ class FrameEvaluationWorker(QThread):
 
         for next_frame in range(frame_num + 1, end_frame + 1):
             # New UI request always wins.
-            if self._has_pending():
+            if self._project is not project or self._has_pending():
                 return
 
             # Don't waste time after shutdown.
-            if not self._running or self.isInterruptionRequested():
+            if not self._playing or not self._running or self.isInterruptionRequested():
                 return
 
             self._evaluate(node_id, next_frame)

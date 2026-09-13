@@ -224,3 +224,9 @@ class AnaglyphMode(IntEnum):
     RedCyan = auto()
     GreenMagenta = auto()
     AmberBlue = auto()
+
+
+class TrackerShape(Enum):
+    Ellipse = "ellipse"
+    Rectangle = "rectangle"
+    Polygon = "polygon"

@@ -6,7 +6,7 @@ import time
 from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
-from PyQt6.QtCore import QRect, Qt
+from PyQt6.QtCore import QEvent, QRect, Qt
 from PyQt6.QtGui import QCloseEvent, QImage, QPixmap, QResizeEvent
 from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
@@ -46,6 +46,8 @@ class ViewportWidget(QWidget):
         self._history = history
         self._pending_request: tuple[str, int] | None = None
         self._image_buffer: np.ndarray | None = None
+        self._adaptive_width: int | None = None
+        self._last_adaptation = 0.0
         self._playback_active: bool = False
         self._performance: PerformanceSettings = PerformanceSettings()
         self._displayed_fps: float = 0.0
@@ -85,8 +87,14 @@ class ViewportWidget(QWidget):
         self._tracker_overlay = TrackerOverlayWidget(
             project, self._history, self.displayed_image_rect, self.label
         )
+        # Keep controls in layout space, outside both the image and its HUD.
+        tracker_toolbar = self._tracker_overlay._toolbar
+        tracker_toolbar.setParent(self)
+        layout.insertWidget(0, tracker_toolbar)
+        tracker_toolbar.hide()
         self._tracker_overlay.setGeometry(self.label.rect())
         self._tracker_overlay.raise_()
+        self.label.installEventFilter(self)
 
         self._worker = FrameEvaluationWorker(project)
         self._worker.frame_ready.connect(self._on_frame_ready)
@@ -106,6 +114,7 @@ class ViewportWidget(QWidget):
             proxy override to match the current play state, and toggles the
             on-screen performance overlay.
         """
+        self._adaptive_width = None
         self._performance = performance
         self._worker.set_max_prefetch(performance.max_prefetch_frames)
         self._sync_playback_proxy_override()
@@ -115,17 +124,37 @@ class ViewportWidget(QWidget):
 
     def _sync_playback_proxy_override(self) -> None:
         """Enable the forced playback-proxy width only while actively playing."""
-        if self._playback_active and self._performance.playback_proxy_override_enabled:
-            self.project.set_playback_proxy_override(
-                self._performance.playback_proxy_width
-            )
-        else:
-            self.project.set_playback_proxy_override(None)
+        width = None
+        if self._playback_active:
+            if self._performance.playback_proxy_override_enabled:
+                width = self._performance.playback_proxy_width
+            if self._performance.adaptive_preview_enabled and self._adaptive_width is not None:
+                width = min(width, self._adaptive_width) if width else self._adaptive_width
+        self.project.set_playback_proxy_override(width)
+
+    def _adapt_preview(self) -> None:
+        """Reduce overloaded playback resolution at most once every two seconds."""
+        if not self._playback_active or not self._performance.adaptive_preview_enabled:
+            return
+        now = time.monotonic()
+        if now - self._last_adaptation < 2.0:
+            return
+        if self._worker.last_render_seconds <= 1.25 / max(1, self.project.fps):
+            return
+        width = self.project.get_preview_settings().max_width or self.project.width
+        if width <= 320:
+            return
+        self._adaptive_width = max(320, int(width * 0.75))
+        self._last_adaptation = now
+        self._sync_playback_proxy_override()
+
 
     def set_project(self, project: Project) -> None:
         """Retarget this viewport at a newly loaded project."""
         self.project.unsubscribe(self.on_project_changed)
         self.project = project
+        self._adaptive_width = None
+        self._sync_playback_proxy_override()
         self._worker.set_project(project)
         self._pending_request = None
         self._image_buffer = None
@@ -204,6 +233,7 @@ class ViewportWidget(QWidget):
             frame_data = self._blank_frame()
 
         self.display_frame(frame_data)
+        self._adapt_preview()
 
     def _result_is_relevant(self, node_id: str, frame_num: int) -> bool:
         """Accept exact requests or safe stale playback results.
@@ -305,7 +335,7 @@ class ViewportWidget(QWidget):
         proxy_note = (
             " [proxy]"
             if self._playback_active
-            and self._performance.playback_proxy_override_enabled
+            and (self._performance.playback_proxy_override_enabled or self._adaptive_width is not None)
             else ""
         )
         self._overlay.setText(
@@ -388,13 +418,13 @@ class ViewportWidget(QWidget):
             if queued_frame == frame_num:
                 audio_to_feed = fallback_audio
             else:
-                result = self.project.evaluate_node(viewer_id, queued_frame)
+                result = self.project.cached_preview_frame(viewer_id, queued_frame)
                 if isinstance(result, FrameWithAudio):
                     audio_to_feed = result.audio
             if audio_to_feed is None:
-                continue
+                break
             self._audio_engine.feed_audio(audio_to_feed)
-        self._queued_audio_until_frame = end_frame
+            self._queued_audio_until_frame = queued_frame + 1
 
     def _prime_audio_playback(self) -> None:
         """Reset audio queue state when playback begins."""
@@ -402,6 +432,8 @@ class ViewportWidget(QWidget):
 
     def set_playback_active(self, active: bool) -> None:
         """Hint the worker to prefetch; timeline alone drives frame changes."""
+        self._adaptive_width = None
+        self._last_adaptation = time.monotonic()
         self._playback_active = bool(active)
         self._worker.set_playing(active)
         self._sync_playback_proxy_override()
@@ -421,6 +453,12 @@ class ViewportWidget(QWidget):
         """Stop background evaluation before the editor window is torn down."""
         self._audio_engine.stop()
         self._worker.stop()
+
+    def eventFilter(self, watched, event):
+        if watched is self.label and event.type() == QEvent.Type.Resize:
+            self._roto_overlay.setGeometry(self.label.rect())
+            self._tracker_overlay.setGeometry(self.label.rect())
+        return super().eventFilter(watched, event)
 
     def resizeEvent(self, a0: QResizeEvent | None) -> None:
         super().resizeEvent(a0)

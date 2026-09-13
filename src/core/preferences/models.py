@@ -127,6 +127,7 @@ class PerformanceSettings:
     playback_proxy_width: int = DEFAULT_PLAYBACK_PROXY_WIDTH
     drop_frames_during_playback: bool = True
     show_performance_overlay: bool = False
+    adaptive_preview_enabled: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -138,6 +139,7 @@ class PerformanceSettings:
             "playback_proxy_width": self.playback_proxy_width,
             "drop_frames_during_playback": self.drop_frames_during_playback,
             "show_performance_overlay": self.show_performance_overlay,
+            "adaptive_preview_enabled": self.adaptive_preview_enabled,
         }
 
     @classmethod
@@ -158,6 +160,7 @@ class PerformanceSettings:
                 0,
                 MAX_MAX_PREFETCH_FRAMES,
             ),
+            adaptive_preview_enabled=bool(data.get("adaptive_preview_enabled", True)),
             hardware_decode_enabled=bool(data.get("hardware_decode_enabled", False)),
             playback_proxy_override_enabled=bool(
                 data.get("playback_proxy_override_enabled", False)

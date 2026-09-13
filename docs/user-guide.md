@@ -29,6 +29,42 @@ Reset docks with **Reset Layout** (`Ctrl+Shift+R`). Show every dock with `Ctrl+S
 
 Copy, paste, duplicate, and delete operate on the selection (`Ctrl+C` / `Ctrl+V` / `Ctrl+D` / `Delete`).
 
+## Custom nodes
+
+Custom nodes are reusable chips that wrap a group of nodes and behave like a
+function. They live under the **Custom** category in every Add Node menu and
+node search palette, in every project.
+
+Create one with **Create Custom Node…** (`Ctrl+Shift+G`) or the graph/node
+context menu:
+
+1. Select the nodes to fold. Wires entering the selection become input ports;
+   wires leaving it become output ports. Viewer nodes are never folded in —
+   a wire to a Viewer becomes an output port instead.
+2. Name the chip, pick a header color, and choose **Create** or
+   **Create & Edit…**.
+
+Right-click a chip and choose **Edit Custom Node…** to open the definition
+editor:
+
+- **Ports** — add, rename, retype, or remove exposed inputs and outputs.
+- **Parameters** — **Add Parameter…** exposes an inner node property (slider,
+  number, toggle, text, or color) as an adjustable knob on the chip. Choose a
+  target from the menu; the parameter inherits the property's label, type,
+  and slider range. Parameters are edited on the chip like any other node
+  property, and support keyframes.
+- **Node Properties** — edit the inner nodes' own properties while you work.
+- **Preview** — a temporary Viewer node is wired into the editor graph so you
+  can watch the result live. Wire any inner node into it while editing.
+  Viewer nodes are preview-only and never saved into the definition.
+
+**Expand Custom Node** (node context menu) replaces a chip with its
+underlying nodes for one-off tweaks without touching the saved definition.
+
+Definitions are stored in `userdata/custom_nodes.json` and registered at
+startup. Each `.aph` project also embeds the definitions it uses, so a project
+still loads on a machine that has never seen them.
+
 ## Playback and preview
 
 Space toggles play. Left/Right step a frame. Home/End jump to the start/end. **I** / **O** set in/out.
@@ -71,6 +107,7 @@ Projects are `.aph` JSON documents. **Ctrl+S** saves; **Ctrl+Shift+S** saves as.
 | New / Open / Save / Save As | `Ctrl+N` / `Ctrl+O` / `Ctrl+S` / `Ctrl+Shift+S` |
 | Export | `Ctrl+E` |
 | Undo / Redo | `Ctrl+Z` / `Ctrl+Shift+Z` |
+| Create custom node | `Ctrl+Shift+G` |
 | Search nodes | `Tab` |
 | Fit graph | `F` |
 | Organize graph | `Ctrl+Shift+O` |

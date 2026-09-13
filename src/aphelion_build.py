@@ -8,6 +8,10 @@ Everything required to ship the editor lives in this one file:
 * **installer** — cx_Freeze ``bdist_msi`` options, the custom wizard
   tables (install scope, PATH, desktop shortcut, SDK install) and the
   post-build MSI layout patch.
+* **fresh app data** — every artifact bundles a pristine ``userdata/`` and an
+  empty ``logs/`` folder, so a build never ships the author's recent
+  projects, saved custom nodes, preferences, plugins, or session logs. The
+  built tree and the finished installer are both verified afterwards.
 * **SDK bundling** — builds the sibling ``aphelion-sdk`` wheel so plugin
   authors can pip-install it straight from the installer.
 
@@ -22,13 +26,15 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Any, Final, Iterable
 
+from config.constants import LOG_DIR_NAME, PLUGINS_DIR_NAME, USERDATA_DIR_NAME
 from utils.paths import ensure_directory, resource_path
 
 # ============================================================================
@@ -44,6 +50,15 @@ BUILD_BASE_DIR: Final[Path] = REPO_ROOT / "build"
 DIST_DIR: Final[Path] = REPO_ROOT / "dist"
 EDITOR_RELEASES_DIR: Final[Path] = REPO_ROOT / "releases"
 SDK_RELEASES_DIR: Final[Path] = PLUGIN_SDK_ROOT / "releases"
+
+#: Scratch area for packaging inputs generated at release time. Holds the
+#: pristine ``userdata/``/``logs/`` payload that every freeze bundles.
+PACKAGING_STAGE_DIR: Final[Path] = BUILD_BASE_DIR / "_packaging"
+
+#: Legacy frozen tree that used to live in the repository root. It is a build
+#: artifact (its ``aphelion-host.json`` records absolute machine paths), so
+#: ``--clean`` removes it like any other output.
+LEGACY_FROZEN_TREE_DIR: Final[Path] = REPO_ROOT / "AphelionEditor"
 
 _INSTALL_SDK_CMD: Final[Path] = REPO_ROOT / "installer" / "install_sdk.cmd"
 _WINDOWS_PLATFORM: Final[str] = "win32"
@@ -107,6 +122,9 @@ class BuildConfig:
     )
 
     #: ``(source, destination)`` pairs copied next to the frozen executable.
+    #: ``userdata/`` and ``logs/`` are placeholders: :func:`freeze_include_files`
+    #: swaps them for the pristine staged payload, so the working tree's own
+    #: documents and session logs can never reach an artifact.
     include_files: tuple[tuple[str, str], ...] = (
         ("resources/", "resources/"),
         ("userdata/", "userdata/"),
@@ -131,6 +149,8 @@ VERSION: Final[str] = CONFIG.version
 DESCRIPTION: Final[str] = CONFIG.description
 APP_PACKAGES: Final[list[str]] = list(CONFIG.app_packages)
 THIRD_PARTY_PACKAGES: Final[list[str]] = list(CONFIG.third_party_packages)
+#: Declarative source list. Prefer :func:`freeze_include_files` when building:
+#: this raw list still points at the working tree's own ``userdata/``/``logs/``.
 INCLUDE_FILES: Final[list[tuple[str, str]]] = list(CONFIG.include_files)
 DEFAULT_EXCLUDES: Final[list[str]] = list(CONFIG.excludes)
 MSI_UPGRADE_CODE: Final[str] = CONFIG.upgrade_code
@@ -160,6 +180,318 @@ class InstallerUiError(BuildError):
 
 class SdkReleaseError(BuildError):
     """Raised when the SDK pip artifacts cannot be built."""
+
+
+# ============================================================================
+# Fresh application data
+# ============================================================================
+#
+# ``userdata/`` holds whatever the person running the editor accumulated:
+# recent project paths, saved custom-node definitions, and preferences. The
+# companion ``logs/`` folder holds their session logs. Both live in the
+# working tree during development, so freezing them "as found" shipped the
+# author's own history to every user.
+#
+# A freeze therefore never copies the working-tree folders. Instead:
+#
+# 1. :func:`stage_fresh_userdata` writes a pristine payload to a scratch dir.
+# 2. :func:`freeze_include_files` points ``include_files`` at that payload.
+# 3. :func:`reset_tree_app_data` rewrites the folders in the built tree, and
+#    :func:`verify_tree_app_data` / :func:`verify_msi_app_data` refuse to let
+#    a build that still carries user documents pass as finished.
+
+#: Runtime documents the editor owns under ``userdata/``. They are literals
+#: rather than imports so packaging stays free of Qt/OpenCV; the test suite
+#: asserts they still match ``core``'s constants.
+PREFERENCES_FILENAME: Final[str] = "preferences.json"
+RECENT_PROJECTS_FILENAME: Final[str] = "recent_projects.json"
+CUSTOM_NODES_FILENAME: Final[str] = "custom_nodes.json"
+CUSTOM_NODES_FORMAT_ID: Final[str] = "aphelion-custom-nodes"
+CUSTOM_NODES_FORMAT_VERSION: Final[int] = 1
+
+#: Marker written into every staged folder. Installers drop directories that
+#: contain no files, and the editor recreates these folders at runtime, so a
+#: marker keeps the shipped layout self-explanatory and non-empty.
+_KEEP_FILE_NAME: Final[str] = "README.txt"
+
+_USERDATA_README: Final[str] = (
+    "Aphelion Editor application data\n"
+    "===============================\n\n"
+    "This folder holds your personal editor state and is created fresh on\n"
+    "install:\n\n"
+    "  preferences.json     editor, theme, performance, and audio settings\n"
+    "  recent_projects.json projects you have opened recently\n"
+    "  custom_nodes.json    reusable custom nodes you have saved\n"
+    "  plugins/             drop-in SDK plugins (*.py) loaded at startup\n\n"
+    "Deleting a file here resets that part of the editor to its defaults.\n"
+)
+
+_PLUGINS_README: Final[str] = (
+    "Drop-in plugin folder\n"
+    "=====================\n\n"
+    "Place Aphelion SDK plugins (*.py) in this folder; they are imported at\n"
+    "startup and their nodes appear alongside the built-in ones.\n"
+)
+
+_LOGS_README: Final[str] = (
+    "Session logs\n"
+    "============\n\n"
+    "Aphelion writes aphelion.log here at runtime. The folder is emptied on\n"
+    "install so a fresh build never ships someone else's session history.\n"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class StagedAppData:
+    """Pristine ``userdata/`` and ``logs/`` folders ready for a freeze."""
+
+    root: Path
+    userdata: Path
+    logs: Path
+
+
+def default_preferences_document() -> dict[str, Any]:
+    """Return the editor's factory-default preference document.
+
+    The live model is imported when available so the shipped defaults can
+    never drift from the ones the editor writes on first run. A minimal
+    document is used when the application package is not importable.
+
+    Returns:
+        JSON-compatible mapping matching ``AppPreferences.defaults()``.
+    """
+    try:
+        from core.preferences.models import AppPreferences
+    except ImportError:
+        return {"version": 1}
+    return dict(AppPreferences.defaults().to_dict())
+
+
+def fresh_userdata_documents() -> dict[str, dict[str, Any]]:
+    """Return the pristine JSON documents a build ships in ``userdata/``.
+
+    Returns:
+        Mapping of filename to an empty/default document.
+    """
+    return {
+        PREFERENCES_FILENAME: default_preferences_document(),
+        RECENT_PROJECTS_FILENAME: {"projects": []},
+        CUSTOM_NODES_FILENAME: {
+            "format": CUSTOM_NODES_FORMAT_ID,
+            "version": CUSTOM_NODES_FORMAT_VERSION,
+            "definitions": [],
+        },
+    }
+
+
+def _write_text(path: Path, text: str) -> None:
+    """Write ``text`` to ``path`` with a trailing newline."""
+    path.write_text(text, encoding="utf-8")
+
+
+def _write_document(path: Path, document: dict[str, Any]) -> None:
+    """Write ``document`` as indented JSON with a trailing newline."""
+    _write_text(
+        path,
+        json.dumps(document, indent=2, ensure_ascii=False) + "\n",
+    )
+
+
+def _reset_directory(path: Path) -> Path:
+    """Delete ``path`` when present and return it, empty and created."""
+    if path.exists():
+        shutil.rmtree(path, ignore_errors=True)
+    return ensure_directory(path)
+
+
+def stage_fresh_userdata(stage_root: Path | None = None) -> StagedAppData:
+    """Write a pristine ``userdata/`` + ``logs/`` payload for packaging.
+
+    Parameters:
+        stage_root: Directory that receives the staged folders. Defaults to
+            ``build/_packaging``.
+
+    Returns:
+        The staged folders, ready to hand to ``include_files``.
+
+    Side effects:
+        Recreates the staged folders from scratch on every call, so a build
+        can never pick up leftovers from an earlier run.
+    """
+    root: Path = ensure_directory(stage_root or PACKAGING_STAGE_DIR)
+    userdata: Path = _reset_directory(root / USERDATA_DIR_NAME)
+    logs: Path = _reset_directory(root / LOG_DIR_NAME)
+
+    for filename, document in fresh_userdata_documents().items():
+        _write_document(userdata / filename, document)
+
+    plugins: Path = ensure_directory(userdata / PLUGINS_DIR_NAME)
+    _write_text(userdata / _KEEP_FILE_NAME, _USERDATA_README)
+    _write_text(plugins / _KEEP_FILE_NAME, _PLUGINS_README)
+    _write_text(logs / _KEEP_FILE_NAME, _LOGS_README)
+    return StagedAppData(root=root, userdata=userdata, logs=logs)
+
+
+def freeze_include_files(*extra: tuple[str, str]) -> list[tuple[str, str]]:
+    """Return ``include_files`` pairs that bundle pristine application data.
+
+    The working tree's ``userdata/`` and ``logs/`` are replaced by the staged
+    payload, so the freeze cannot inherit recent projects, saved custom
+    nodes, preferences, user plugins, or session logs.
+
+    Parameters:
+        *extra: Additional ``(source, destination)`` pairs to append.
+
+    Returns:
+        Copy list for the ``build_exe`` options.
+    """
+    staged: StagedAppData = stage_fresh_userdata()
+    replacements: dict[str, Path] = {
+        USERDATA_DIR_NAME: staged.userdata,
+        LOG_DIR_NAME: staged.logs,
+    }
+    pairs: list[tuple[str, str]] = []
+    for source, destination in CONFIG.include_files:
+        replacement: Path | None = replacements.get(destination.rstrip("/\\"))
+        pairs.append((str(replacement) if replacement is not None else source, destination))
+    pairs.extend(extra)
+    return pairs
+
+
+def _expected_userdata_entries() -> set[str]:
+    """Return the names a pristine ``userdata/`` folder may contain."""
+    return {*fresh_userdata_documents(), _KEEP_FILE_NAME, PLUGINS_DIR_NAME}
+
+
+def _read_document(path: Path) -> Any:
+    """Return the parsed JSON at ``path``, or ``None`` when unreadable."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _describe_stale_document(filename: str, document: Any) -> str:
+    """Return a short, human-readable reason a document is not pristine."""
+    if not isinstance(document, dict):
+        return "unreadable or non-object contents"
+    if filename == RECENT_PROJECTS_FILENAME:
+        projects = document.get("projects")
+        count = len(projects) if isinstance(projects, list) else "?"
+        return f"{count} recent project(s)"
+    if filename == CUSTOM_NODES_FILENAME:
+        definitions = document.get("definitions")
+        count = len(definitions) if isinstance(definitions, list) else "?"
+        return f"{count} custom node definition(s)"
+    return "non-default settings"
+
+
+def reset_tree_app_data(tree_root: Path) -> list[Path]:
+    """Rewrite ``userdata/``/``logs/`` inside a built tree as pristine copies.
+
+    cx_Freeze never empties its output directory, so freezing into an existing
+    ``dist/`` (or any reused tree) can otherwise keep documents from an
+    earlier run.
+
+    Parameters:
+        tree_root: Frozen application tree.
+
+    Returns:
+        Folders that were rewritten.
+    """
+    staged: StagedAppData = stage_fresh_userdata()
+    rewritten: list[Path] = []
+    for name, source in (
+        (USERDATA_DIR_NAME, staged.userdata),
+        (LOG_DIR_NAME, staged.logs),
+    ):
+        target: Path = tree_root / name
+        if not target.exists():
+            continue
+        shutil.rmtree(target, ignore_errors=True)
+        shutil.copytree(source, target, dirs_exist_ok=True)
+        rewritten.append(target)
+    return rewritten
+
+
+def verify_tree_app_data(tree_root: Path) -> None:
+    """Fail when a built tree still carries user documents, plugins, or logs.
+
+    Both the file *set* and the *contents* of the documents are checked, so a
+    working-tree ``recent_projects.json`` cannot slip through just because its
+    filename matches the pristine one.
+
+    Parameters:
+        tree_root: Frozen application tree.
+
+    Raises:
+        BuildError: If ``userdata/`` holds anything outside the pristine set,
+            if a document is not the factory-default one, or if ``logs/``
+            holds a real log file.
+    """
+    userdata: Path = tree_root / USERDATA_DIR_NAME
+    if userdata.is_dir():
+        allowed: set[str] = _expected_userdata_entries()
+        unexpected: list[str] = sorted(
+            entry.name for entry in userdata.iterdir() if entry.name not in allowed
+        )
+        if unexpected:
+            raise BuildError(
+                f"{userdata} still contains user data: {', '.join(unexpected)}. "
+                "A build must ship a pristine userdata folder."
+            )
+
+        for filename, document in fresh_userdata_documents().items():
+            path: Path = userdata / filename
+            if not path.is_file():
+                # Absent documents are fine: the editor writes defaults.
+                continue
+            actual: Any = _read_document(path)
+            if actual != document:
+                raise BuildError(
+                    f"{path} is not the pristine document a build must ship "
+                    f"({_describe_stale_document(filename, actual)}). "
+                    "Rebuild so the freeze stages a fresh userdata folder."
+                )
+
+        plugins: Path = userdata / PLUGINS_DIR_NAME
+        if plugins.is_dir():
+            strays: list[str] = sorted(
+                entry.name
+                for entry in plugins.iterdir()
+                if entry.name != _KEEP_FILE_NAME
+            )
+            if strays:
+                raise BuildError(
+                    f"{plugins} still contains user plugins: {', '.join(strays)}."
+                )
+
+    logs: Path = tree_root / LOG_DIR_NAME
+    if logs.is_dir():
+        leftovers: list[str] = sorted(
+            entry.name for entry in logs.iterdir() if entry.name != _KEEP_FILE_NAME
+        )
+        if leftovers:
+            raise BuildError(
+                f"{logs} still contains log files: {', '.join(leftovers)}."
+            )
+
+
+def _require_icon() -> Path:
+    """Return the packaged application icon, or raise if it is missing.
+
+    Raises:
+        BuildError: When ``resources/icon.ico`` is absent. Freezing without it
+            fails deep inside cx_Freeze with an opaque error, so it is checked
+            up front.
+    """
+    icon: Path = resource_path(CONFIG.icon_name)
+    if not icon.is_file():
+        raise BuildError(
+            f"Missing packaging asset: {icon}. The application icon is "
+            "required to freeze the executable and to stamp the installer."
+        )
+    return icon
 
 
 # ============================================================================
@@ -193,6 +525,9 @@ def create_exe_build_options(
     Parameters:
         excludes: Optional module names to omit from the freeze.
         include_files: Optional ``(source, dest)`` pairs copied into the freeze.
+            Defaults to :func:`freeze_include_files`, which bundles a pristine
+            ``userdata/`` and an empty ``logs/`` folder instead of the working
+            tree copies.
         optimize_level: Bytecode optimization level; defaults to the config.
 
     Returns:
@@ -202,7 +537,7 @@ def create_exe_build_options(
         "packages": [*APP_PACKAGES, *THIRD_PARTY_PACKAGES],
         "includes": ["aphelion_cli"],
         "excludes": excludes if excludes is not None else list(DEFAULT_EXCLUDES),
-        "include_files": include_files if include_files is not None else list(INCLUDE_FILES),
+        "include_files": include_files if include_files is not None else freeze_include_files(),
         "optimize": CONFIG.optimize if optimize_level is None else optimize_level,
         "path": _module_finder_path(),
     }
@@ -675,6 +1010,176 @@ def _execute(database: object, sql: str) -> None:
 
 
 # ============================================================================
+# MSI payload verification
+# ============================================================================
+#
+# Staging pristine documents is what keeps user data out of an installer; this
+# check proves the file *set* afterwards. cx_Freeze stores names as
+# ``SHORT|long`` and links every file to a directory through the Component
+# table, so the install-relative path of each bundled file can be rebuilt from
+# the MSI tables alone — no need to unpack the cabinet.
+#
+# Filenames cannot prove a JSON document's contents (the pristine
+# ``recent_projects.json`` legitimately exists, just empty), so document
+# contents are verified in the frozen tree the MSI is authored from, via
+# :func:`verify_tree_app_data`. This check catches what names *can* prove:
+# stray user files, user plugins, ``__pycache__``, and session logs.
+
+
+def _msi_long_name(value: str) -> str:
+    """Return the long half of an MSI ``FileName``/``DefaultDir`` value."""
+    return value.rsplit("|", 1)[-1]
+
+
+def _msi_rows(database: object, sql: str, columns: int) -> list[tuple[str, ...]]:
+    """Run ``sql`` and return every row as strings.
+
+    Parameters:
+        database: Open ``msilib`` database handle.
+        sql: Query selecting ``columns`` textual columns.
+        columns: Number of columns to read from each record.
+
+    Returns:
+        Rows in fetch order.
+    """
+    view = getattr(database, "OpenView")(sql)
+    view.Execute(None)
+    rows: list[tuple[str, ...]] = []
+    try:
+        while True:
+            record = view.Fetch()
+            if record is None:
+                break
+            rows.append(
+                tuple(
+                    str(record.GetString(index)) for index in range(1, columns + 1)
+                )
+            )
+    finally:
+        view.Close()
+    return rows
+
+
+def _msi_directory_paths(database: object) -> dict[str, str]:
+    """Return the install-relative path of every MSI ``Directory`` row."""
+    parents: dict[str, tuple[str, str]] = {
+        directory: (parent, _msi_long_name(default_dir))
+        for directory, parent, default_dir in _msi_rows(
+            database,
+            "SELECT `Directory`, `Directory_Parent`, `DefaultDir` FROM `Directory`",
+            3,
+        )
+    }
+    cache: dict[str, str] = {}
+
+    def resolve(directory: str, depth: int = 0) -> str:
+        if directory in cache:
+            return cache[directory]
+        if depth > 32 or directory not in parents:
+            return ""
+        parent, segment = parents[directory]
+        if not parent or parent == directory:
+            cache[directory] = ""
+        else:
+            prefix: str = resolve(parent, depth + 1)
+            cache[directory] = f"{prefix}/{segment}" if prefix else segment
+        return cache[directory]
+
+    for directory in parents:
+        resolve(directory)
+    return cache
+
+
+def _msi_file_paths(database: object) -> list[str]:
+    """Return the install-relative path of every file the MSI lays down."""
+    directories: dict[str, str] = _msi_directory_paths(database)
+    components: dict[str, str] = {
+        component: directory
+        for component, directory in _msi_rows(
+            database, "SELECT `Component`, `Directory_` FROM `Component`", 2
+        )
+    }
+    paths: list[str] = []
+    for _key, component, file_name in _msi_rows(
+        database, "SELECT `File`, `Component_`, `FileName` FROM `File`", 3
+    ):
+        directory: str = directories.get(components.get(component, ""), "")
+        name: str = _msi_long_name(file_name)
+        paths.append(f"{directory}/{name}" if directory else name)
+    return paths
+
+
+def _expected_userdata_paths() -> set[str]:
+    """Return the install-relative ``userdata/`` paths a pristine build may hold."""
+    entries: set[str] = {*fresh_userdata_documents(), _KEEP_FILE_NAME}
+    entries.add(f"{PLUGINS_DIR_NAME}/{_KEEP_FILE_NAME}")
+    return entries
+
+
+def unexpected_app_data_paths(paths: Iterable[str]) -> list[str]:
+    """Return bundled paths that would carry user data into an install.
+
+    Only names are inspected, so this catches stray documents, user plugins,
+    bytecode caches, and session logs — not the contents of a document that
+    happens to share a pristine filename.
+
+    Parameters:
+        paths: Install-relative paths of every file an artifact lays down.
+
+    Returns:
+        Sorted offending paths.
+    """
+    userdata_prefix: str = f"{USERDATA_DIR_NAME}/"
+    logs_prefix: str = f"{LOG_DIR_NAME}/"
+    allowed: set[str] = _expected_userdata_paths()
+    offenders: list[str] = []
+    for path in paths:
+        if path.startswith(userdata_prefix):
+            if path[len(userdata_prefix):] not in allowed:
+                offenders.append(path)
+        elif path.startswith(logs_prefix):
+            if path[len(logs_prefix):] != _KEEP_FILE_NAME:
+                offenders.append(path)
+    return sorted(set(offenders))
+
+
+def verify_msi_app_data(msi_path: Path) -> int:
+    """Fail when an installer would lay down stray user data or logs.
+
+    Parameters:
+        msi_path: Installer produced by cx_Freeze ``bdist_msi``.
+
+    Returns:
+        Number of bundled files that were inspected.
+
+    Raises:
+        InstallerUiError: If the MSI cannot be opened for reading.
+        InstallerBuildError: If stray user data survived into the installer.
+    """
+    try:
+        from msilib import MSIDBOPEN_READONLY, OpenDatabase
+    except ImportError as exc:
+        raise InstallerUiError(
+            "python-msilib is required to verify the installer payload."
+        ) from exc
+
+    try:
+        database = OpenDatabase(str(msi_path), MSIDBOPEN_READONLY)
+        paths: list[str] = _msi_file_paths(database)
+    except Exception as exc:
+        raise InstallerUiError(f"Failed to read {msi_path}: {exc}") from exc
+
+    offenders: list[str] = unexpected_app_data_paths(paths)
+    if offenders:
+        raise InstallerBuildError(
+            "Installer would ship personal application data: "
+            + ", ".join(offenders)
+            + ". Rebuild so the freeze bundles a pristine userdata folder."
+        )
+    return len(paths)
+
+
+# ============================================================================
 # Plugin SDK wheel
 # ============================================================================
 
@@ -701,6 +1206,12 @@ def installer_include_files(wheel: Path) -> list[tuple[str, str]]:
     files: list[tuple[str, str]] = [(str(wheel.resolve()), f"sdk/{wheel.name}")]
     if _INSTALL_SDK_CMD.is_file():
         files.append((str(_INSTALL_SDK_CMD.resolve()), "install_sdk.cmd"))
+    else:
+        print(
+            f"warning: {_INSTALL_SDK_CMD} is missing; this installer will not "
+            "bundle the SDK pip helper.",
+            file=sys.stderr,
+        )
     return files
 
 
@@ -787,7 +1298,7 @@ def create_executable(
     """
     from cx_Freeze import Executable
 
-    icon_path: Path = resource_path(CONFIG.icon_name)
+    icon_path: Path = _require_icon()
     options: dict[str, object] = {
         "script": entry or CONFIG.entry_script,
         "target_name": target_name or CONFIG.target_name,
@@ -832,6 +1343,9 @@ def build_standalone(build_dir: str | None = None) -> Path:
     base_dir: Path
     output_dir: Path
     base_dir, output_dir = _resolve_freeze_directories(requested)
+    # Stage before freezing: include_files must point at pristine documents,
+    # never at the working tree's own userdata/logs.
+    stage_fresh_userdata()
     build_options: dict[str, object] = create_exe_build_options()
     original_argv: list[str] = sys.argv.copy()
     try:
@@ -852,6 +1366,8 @@ def build_standalone(build_dir: str | None = None) -> Path:
         )
     finally:
         sys.argv = original_argv
+    reset_tree_app_data(output_dir)
+    verify_tree_app_data(output_dir)
     return output_dir
 
 
@@ -902,6 +1418,8 @@ def _run_bdist_msi(base_dir: Path, msi_dir: Path) -> Path:
     """Invoke cx_Freeze ``bdist_msi`` with Aphelion freeze and MSI options."""
     from cx_Freeze import setup
 
+    # Stage before freezing: the installer must bundle pristine documents.
+    stage_fresh_userdata()
     original_argv: list[str] = sys.argv.copy()
     try:
         sys.argv = [original_argv[0], "bdist_msi"]
@@ -920,12 +1438,28 @@ def _run_bdist_msi(base_dir: Path, msi_dir: Path) -> Path:
         )
     finally:
         sys.argv = original_argv
+
+    # The frozen tree the installer was authored from is verified so a
+    # regression in include_files fails the build instead of shipping.
+    for tree in _freeze_exe_dirs(base_dir):
+        reset_tree_app_data(tree)
+        verify_tree_app_data(tree)
+
     msi_path: Path = _require_msi_file(msi_dir)
     try:
         enhance_installer_ui(msi_path)
     except InstallerUiError as exc:
         raise InstallerBuildError(str(exc)) from exc
+    verify_msi_app_data(msi_path)
     return msi_path
+
+
+def _freeze_exe_dirs(base_dir: Path) -> list[Path]:
+    """Return the frozen ``exe.*`` trees cx_Freeze produced under ``base_dir``."""
+    return sorted(
+        (entry for entry in base_dir.glob("exe.*") if entry.is_dir()),
+        key=lambda path: path.name,
+    )
 
 
 def _require_msi_file(msi_dir: Path) -> Path:
@@ -944,7 +1478,7 @@ def _msi_setup_options(base_dir: Path, msi_dir: Path) -> dict[str, object]:
     """Return cx_Freeze ``setup(options=...)`` for an MSI build."""
     extras: list[tuple[str, str]] = installer_include_files(ensure_sdk_release())
     build_options: dict[str, object] = create_exe_build_options(
-        include_files=[*INCLUDE_FILES, *extras],
+        include_files=freeze_include_files(*extras),
     )
     build_options["include_msvcr"] = True
     return {
@@ -952,18 +1486,23 @@ def _msi_setup_options(base_dir: Path, msi_dir: Path) -> dict[str, object]:
         "build_exe": build_options,
         "bdist_msi": create_msi_options(
             dist_dir=msi_dir,
-            install_icon=resource_path(CONFIG.icon_name),
+            install_icon=_require_icon(),
         ),
     }
 
 
 def clean_build_artifacts() -> list[Path]:
-    """Delete freeze output trees and return the paths that were removed."""
+    """Delete freeze output trees and return the paths that were removed.
+
+    Also removes the legacy in-repo frozen tree, so ``--clean`` leaves behind
+    no artifact that could be committed by accident.
+    """
     removed: list[Path] = []
-    for directory in (BUILD_BASE_DIR, DIST_DIR, REPO_ROOT / "build"):
-        if directory.is_dir():
-            shutil.rmtree(directory, ignore_errors=True)
-            removed.append(directory)
+    for directory in (BUILD_BASE_DIR, DIST_DIR, LEGACY_FROZEN_TREE_DIR):
+        if not directory.is_dir():
+            continue
+        shutil.rmtree(directory, ignore_errors=True)
+        removed.append(directory)
     return removed
 
 
@@ -1027,9 +1566,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.installer:
             msi_path = build_installer(build_dir=args.build_dir)
             print(f"Wrote installer: {msi_path}")
+            print("Bundled userdata/ and logs/ are pristine (no user content).")
             return 0
         dist = build_standalone(build_dir=args.build_dir)
         print(f"Wrote frozen build: {dist}")
+        print("Bundled userdata/ and logs/ are pristine (no user content).")
         return 0
     except BuildError as exc:
         print(str(exc), file=sys.stderr)

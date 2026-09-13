@@ -53,6 +53,9 @@ class AppIcon(Enum):
     MEDIA = auto()
     CLEAR_CACHE = auto()
     LOGS = auto()
+    TIDY = auto()
+    SPOTLIGHT = auto()
+    BYPASS = auto()
 
 
 def make_dot_icon(
@@ -189,6 +192,12 @@ def _draw_icon(
             _draw_clear_cache(painter, rect, color)
         case AppIcon.LOGS:
             _draw_logs(painter, rect, color)
+        case AppIcon.TIDY:
+            _draw_tidy(painter, rect, color)
+        case AppIcon.SPOTLIGHT:
+            _draw_spotlight(painter, rect, color)
+        case AppIcon.BYPASS:
+            _draw_bypass(painter, rect, color)
 
 
 def _draw_play(painter: QPainter, rect: QRectF, _color: QColor) -> None:
@@ -569,6 +578,48 @@ def _draw_logs(painter: QPainter, rect: QRectF, _color: QColor) -> None:
     for _ in range(3):
         painter.drawLine(QPointF(rect.left() + 3, y), QPointF(rect.right() - 3, y))
         y += 3.5
+
+
+def _draw_tidy(painter: QPainter, rect: QRectF, _color: QColor) -> None:
+    """A 2x2 grid of aligned squares (pack the selection)."""
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    side = rect.width() * 0.4
+    painter.drawRect(QRectF(rect.left(), rect.top(), side, side))
+    painter.drawRect(QRectF(rect.right() - side, rect.top(), side, side))
+    painter.drawRect(QRectF(rect.left(), rect.bottom() - side, side, side))
+    painter.drawRect(QRectF(rect.right() - side,
+                     rect.bottom() - side, side, side))
+
+
+def _draw_spotlight(painter: QPainter, rect: QRectF, _color: QColor) -> None:
+    """A cone of light narrowing toward a lit target."""
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawLine(
+        QPointF(rect.left() + 1, rect.bottom()),
+        QPointF(rect.center().x() - 2, rect.top() + 3),
+    )
+    painter.drawLine(
+        QPointF(rect.right() - 1, rect.bottom()),
+        QPointF(rect.center().x() + 2, rect.top() + 3),
+    )
+    painter.drawEllipse(QRectF(rect.center().x() - 3, rect.top() + 1, 6, 4))
+
+
+def _draw_bypass(painter: QPainter, rect: QRectF, _color: QColor) -> None:
+    """A power toggle glyph."""
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    radius = rect.width() * 0.4
+    arc = QRectF(
+        rect.center().x() - radius,
+        rect.center().y() - radius + 1.5,
+        radius * 2,
+        radius * 2,
+    )
+    painter.drawArc(arc, 60 * 16, 240 * 16)
+    painter.drawLine(
+        QPointF(rect.center().x(), rect.top()),
+        QPointF(rect.center().x(), rect.center().y() - 1),
+    )
 
 
 def icon_size() -> QSize:

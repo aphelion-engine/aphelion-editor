@@ -92,7 +92,7 @@ def build_custom_node_definition(
         return None
 
     # --- group boundary crossings ----------------------------------------
-    input_groups: dict[tuple[str, str], Connection] = {}
+    input_groups: dict[tuple[str, str], Connection | None] = {}
     output_groups: dict[tuple[str, str], list[Connection]] = {}
     for conn in connections:
         out_inside = conn.output_node_id in internal
@@ -107,6 +107,17 @@ def build_custom_node_definition(
                 (conn.output_node_id, conn.output_slot),
                 [],
             ).append(conn)
+
+    # Unwired boundary sockets must remain usable on the collapsed node.
+    connected_inputs = {(c.input_node_id, c.input_slot) for c in connections}
+    connected_outputs = {(c.output_node_id, c.output_slot) for c in connections}
+    for node_id in internal_ids:
+        for slot in nodes[node_id].inputs:
+            if (node_id, slot) not in connected_inputs and not slot.startswith("in_"):
+                input_groups.setdefault((node_id, slot), None)
+        for slot in nodes[node_id].outputs:
+            if (node_id, slot) not in connected_outputs:
+                output_groups.setdefault((node_id, slot), [])
 
     # --- terminal placement ----------------------------------------------
     xs = [float(nodes[node_id].x) for node_id in internal_ids]
@@ -158,7 +169,8 @@ def build_custom_node_definition(
         node_blobs[terminal_id] = terminal.to_dict()
 
         input_ports.append(CustomPort(port_name, socket_type, terminal_id))
-        wiring.inputs.append((port_name, conn.output_node_id, conn.output_slot))
+        if conn is not None:
+            wiring.inputs.append((port_name, conn.output_node_id, conn.output_slot))
         new_connections.append(
             {
                 "output_node_id": terminal_id,

@@ -109,6 +109,25 @@ class PreferencesDialog(QDialog):
         if apply_btn is not None:
             apply_btn.clicked.connect(self._on_apply_clicked)
         root.addWidget(buttons)
+        from ui.widgets.tooltips import apply_form_tooltips
+        help_text = {
+            self._frame_cache_mb: "Maximum RAM for evaluated frames, including audio. Larger budgets retain more reusable frames; leave memory for the OS and other apps.",
+            self._decode_cache_frames: "Decoded source frames retained per decoder. High values increase RAM usage, especially with multiple high-resolution clips.",
+            self._max_prefetch: "Maximum future frames evaluated in the background. Lower this for heavy graphs; overloaded playback skips prefetch automatically.",
+            self._drop_frames: "Show completed frames even when the playhead has advanced. Helps heavy effects keep updating during playback.",
+            self._hardware_decode: "Request hardware video decoding where supported; unsupported codecs or devices may use software decoding.",
+            self._show_overlay: "Show actual displayed FPS, preview dimensions, and frame-cache memory usage in the viewport.",
+            self._adaptive_preview: "When rendering misses the frame budget, reduce preview width every two seconds down to 320 px. Pausing restores the normal preview width. Exports are unaffected.",
+            self._proxy_override_enabled: "Use the selected lower preview width during playback and restore the Viewer width when paused. Does not change export resolution.",
+            self._proxy_width: "Maximum playback preview width in pixels. Smaller frames reduce decoding and effect-processing work.",
+            self._latency_preset: "Lower latency responds sooner; a safer, larger audio buffer tolerates processing delays better.",
+            self._buffer_size: "Number of audio chunks queued ahead. More chunks help absorb timing jitter but increase playback latency.",
+            self._master_volume: "Master preview audio gain. 100% keeps the source level; values above 100% amplify it.",
+        }
+        for widget, text in help_text.items():
+            widget.setToolTip(text)
+        apply_form_tooltips(self)
+
 
     @property
     def preferences(self) -> AppPreferences:
@@ -273,6 +292,15 @@ class PreferencesDialog(QDialog):
         self._drop_frames.setChecked(perf.drop_frames_during_playback)
         playback_form.addRow(self._drop_frames)
 
+        self._adaptive_preview = QCheckBox("Automatically reduce preview resolution when playback is slow")
+        self._adaptive_preview.setChecked(perf.adaptive_preview_enabled)
+        playback_form.addRow(self._adaptive_preview)
+        preset = QPushButton("Use low-lag preset")
+        preset.setToolTip("Enable adaptive preview and a 640 px playback proxy, limit prefetch to one frame, and show performance statistics. Apply to save.")
+        preset.clicked.connect(self._use_low_lag_preset)
+        playback_form.addRow(preset)
+
+
         self._hardware_decode = QCheckBox("Use hardware-accelerated decode (if available)")
         self._hardware_decode.setChecked(perf.hardware_decode_enabled)
         playback_form.addRow(self._hardware_decode)
@@ -321,6 +349,14 @@ class PreferencesDialog(QDialog):
         layout.addWidget(hint)
         layout.addStretch(1)
         return page
+
+    def _use_low_lag_preset(self) -> None:
+        self._adaptive_preview.setChecked(True)
+        self._proxy_override_enabled.setChecked(True)
+        self._proxy_width.setValue(640)
+        self._max_prefetch.setValue(1)
+        self._drop_frames.setChecked(True)
+        self._show_overlay.setChecked(True)
 
     def _build_audio_tab(self) -> QWidget:
         page = QWidget()
@@ -885,6 +921,7 @@ class PreferencesDialog(QDialog):
             playback_proxy_width=int(self._proxy_width.value()),
             drop_frames_during_playback=self._drop_frames.isChecked(),
             show_performance_overlay=self._show_overlay.isChecked(),
+            adaptive_preview_enabled=self._adaptive_preview.isChecked(),
         )
         self._working.audio = AudioSettings(
             audio_enabled=self._audio_enabled.isChecked(),

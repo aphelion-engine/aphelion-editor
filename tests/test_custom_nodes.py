@@ -10,16 +10,21 @@ from pathlib import Path
 from app_io.node_loader import NodeLoader
 from core.custom_node_store import CustomNodeStore, global_custom_node_store
 from core.history import HistoryStack
-from core.nodes.base import NodeSocketType
+from core.nodes.base import NodePropertyInputType, NodeSocketType
 from core.nodes.color_effects import ExposureContrastNode
 from core.nodes.custom_nodes import (CUSTOM_NODE_CATEGORY, PORT_SLOT,
                                      SUBGRAPH_INPUT_TYPE, SUBGRAPH_OUTPUT_TYPE,
                                      CustomNode, CustomNodeDefinition,
-                                     CustomPort, SubgraphInputNode,
-                                     SubgraphOutputNode,
+                                     CustomPort, CustomProperty,
+                                     SubgraphInputNode, SubgraphOutputNode,
+                                     bindable_property_targets,
+                                     build_node_property,
+                                     custom_property_from_target,
                                      definition_from_project,
+                                     format_property_value,
                                      make_custom_node_class,
-                                     sanitize_port_name, unique_port_name)
+                                     parse_property_value, sanitize_port_name,
+                                     sanitize_property_key, unique_port_name)
 from core.nodes.filter_effects import GaussianBlurNode
 from core.nodes.generator_nodes import SolidColorNode
 from core.nodes.registry import global_node_registry
@@ -326,6 +331,136 @@ class EditPropagationTests(CustomNodeTestCase):
             list(clone.definition.nodes),
             list(source.definition.nodes),
         )
+
+
+class CustomPropertyTests(CustomNodeTestCase):
+    """Exposed parameters on custom nodes."""
+
+    def _param_definition(self, name: str = "Param Custom") -> CustomNodeDefinition:
+        scratch = Project("Scratch")
+        scratch.add_node(SubgraphInputNode("In"), node_id="in1")
+        exposure = ExposureContrastNode()
+        scratch.add_node(exposure, node_id="ex")
+        scratch.add_node(SubgraphOutputNode("Out"), node_id="out1")
+        scratch.connect_nodes("in1", PORT_SLOT, "ex", "frame")
+        scratch.connect_nodes("ex", "frame", "out1", PORT_SLOT)
+
+        spec = custom_property_from_target(exposure, "ex", "exposure")
+        assert spec is not None
+        spec.name = "exposure_amount"
+        return definition_from_project(
+            scratch,
+            name,
+            properties=[spec],
+        )
+
+    def test_property_helpers(self) -> None:
+        self.assertEqual(sanitize_property_key(
+            "Exposure Amount"), "exposure_amount")
+        self.assertEqual(sanitize_property_key("2 fast!"), "parameter_2_fast")
+        spec = CustomProperty(
+            name="tint",
+            label="Tint",
+            input_type=NodePropertyInputType.Color,
+            default=(10, 20, 30),
+        )
+        self.assertEqual(format_property_value(spec), "10, 20, 30")
+        self.assertEqual(parse_property_value(
+            spec, "255, 0, 128"), (255, 0, 128))
+
+        toggle = CustomProperty(
+            name="on", input_type=NodePropertyInputType.Checkbox, default=True
+        )
+        self.assertEqual(format_property_value(toggle), "true")
+        self.assertTrue(parse_property_value(toggle, "false") is False)
+
+    def test_definition_round_trips_properties(self) -> None:
+        definition = self._param_definition()
+        restored = CustomNodeDefinition.from_dict(definition.to_dict())
+        self.assertEqual(len(restored.properties), 1)
+        spec = restored.properties[0]
+        self.assertEqual(spec.name, "exposure_amount")
+        self.assertEqual(spec.target_node_id, "ex")
+        self.assertEqual(spec.target_key, "exposure")
+        self.assertEqual(spec.input_type, NodePropertyInputType.Slider)
+        self.assertEqual(spec.min_value, -400.0)
+        self.assertEqual(spec.max_value, 400.0)
+
+    def test_custom_node_exposes_parameter_and_drives_inner_node(self) -> None:
+        global_custom_node_store.upsert(self._param_definition())
+
+        project = Project("Host")
+        project.add_node(SolidColorNode(), node_id="s1")
+        node = global_node_registry.create_node(
+            "Param Custom", category=CUSTOM_NODE_CATEGORY
+        )
+        self.assertIsInstance(node, CustomNode)
+        project.add_node(node, node_id="c1")
+        self.assertTrue(project.connect_nodes("s1", "frame", "c1", "In"))
+
+        # The parameter shows up as a normal, editable node property.
+        prop = node.get_property("exposure_amount")
+        self.assertIsNotNone(prop)
+        self.assertEqual(prop.input_type, NodePropertyInputType.Slider)
+        self.assertEqual(prop.label, "Exposure")
+        self.assertEqual(prop.slider_min_value, -400.0)
+
+        node.set_property("exposure_amount", 250.0)
+        project.set_preview_width_override(32)
+        self.assertIsNotNone(project.evaluate_node("c1", 0, "Out"))
+
+        inner = node.embedded_project().nodes["ex"]
+        self.assertAlmostEqual(inner.properties["exposure"].value, 250.0)
+
+        # A changed parameter must invalidate and re-evaluate.
+        node.set_property("exposure_amount", 10.0)
+        project.invalidate_cache("c1")
+        project.evaluate_node("c1", 0, "Out")
+        self.assertAlmostEqual(inner.properties["exposure"].value, 10.0)
+
+    def test_parameter_value_survives_project_round_trip(self) -> None:
+        global_custom_node_store.upsert(
+            self._param_definition("Round Trip Param"))
+
+        project = Project("Host")
+        project.add_node(SolidColorNode(), node_id="s1")
+        node = global_node_registry.create_node(
+            "Round Trip Param", category=CUSTOM_NODE_CATEGORY
+        )
+        project.add_node(node, node_id="c1")
+        project.connect_nodes("s1", "frame", "c1", "In")
+        node.set_property("exposure_amount", 123.0)
+
+        reloaded = Project.from_dict(project.to_dict())
+        reloaded_node = reloaded.nodes["c1"]
+        self.assertIsInstance(reloaded_node, CustomNode)
+        self.assertAlmostEqual(
+            float(reloaded_node.get_property("exposure_amount").value),
+            123.0,
+        )
+        self.assertEqual(list(reloaded_node.inputs), ["In"])
+
+    def test_bindable_targets_skip_internal_socket_keys(self) -> None:
+        exposure = ExposureContrastNode()
+        keys = [key for key, _prop in bindable_property_targets(exposure)]
+        self.assertIn("exposure", keys)
+        self.assertNotIn("in_exposure", keys)
+
+    def test_build_node_property_honours_spec(self) -> None:
+        spec = CustomProperty(
+            name="amount",
+            label="Amount",
+            input_type=NodePropertyInputType.Number,
+            default=2.5,
+            min_value=0.0,
+            max_value=10.0,
+            group="Params",
+        )
+        prop = build_node_property(spec, priority=3)
+        self.assertEqual(prop.input_type, NodePropertyInputType.Number)
+        self.assertEqual(prop.value, 2.5)
+        self.assertEqual(prop.label, "Amount")
+        self.assertEqual(prop.group, "Params")
 
 
 if __name__ == "__main__":

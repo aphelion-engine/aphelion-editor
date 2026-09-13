@@ -67,6 +67,16 @@ class EditorActions:
             icon=AppIcon.SELECT_ALL,
         )
         self._register(
+            KeyAction.INVERT_SELECTION,
+            editor.node_graph.invert_selection,
+            icon=AppIcon.SELECT_ALL,
+        )
+        self._register(
+            KeyAction.TOGGLE_BYPASS,
+            editor.node_graph.toggle_selection_bypass,
+            icon=AppIcon.BYPASS,
+        )
+        self._register(
             KeyAction.DUPLICATE,
             editor.duplicate_selected_nodes,
             icon=AppIcon.DUPLICATE,
@@ -101,6 +111,30 @@ class EditorActions:
             KeyAction.ORGANIZE_GRAPH,
             editor.node_graph.organize_graph,
             icon=AppIcon.DISTRIBUTE_H,
+            widget_scope=editor.node_graph,
+        )
+        self._register(
+            KeyAction.SELECT_CONNECTED,
+            editor.node_graph.select_connected,
+            icon=AppIcon.SELECT_ALL,
+            widget_scope=editor.node_graph,
+        )
+        self._register(
+            KeyAction.TIDY_SELECTION,
+            editor.node_graph.tidy_selection,
+            icon=AppIcon.TIDY,
+            widget_scope=editor.node_graph,
+        )
+        self._register(
+            KeyAction.FIT_SELECTION,
+            editor.node_graph.fit_selection,
+            icon=AppIcon.FIT_VIEW,
+            widget_scope=editor.node_graph,
+        )
+        self._register(
+            KeyAction.TOGGLE_SPOTLIGHT,
+            editor.node_graph.toggle_spotlight,
+            icon=AppIcon.SPOTLIGHT,
             widget_scope=editor.node_graph,
         )
         self._register(

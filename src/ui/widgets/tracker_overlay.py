@@ -12,12 +12,13 @@ that curve at the current frame instead of the seed.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import QPointF, QRect, QRectF, Qt
-from PyQt6.QtGui import QColor, QMouseEvent, QPaintEvent, QPainter, QPen
-from PyQt6.QtWidgets import QHBoxLayout, QPushButton, QWidget
+from PyQt6.QtGui import QColor, QMouseEvent, QPaintEvent, QPainter, QPen, QPolygonF
+from PyQt6.QtWidgets import QGridLayout, QLayout, QPushButton, QSizePolicy, QWidget
 
 from core.animation import AnimationCurve
 from core.history import (
@@ -26,6 +27,8 @@ from core.history import (
     SetPropertyCommand,
     SetTrackCommand,
 )
+from core.nodes.shape_tracker import ShapeTrackerNode
+from core.nodes.enums import TrackerShape
 from core.nodes.tracking_nodes import PlanarTrackerNode, TrackerNode
 from ui.widgets.tracking_actions import CORNER_NAMES, clear_tracking, run_tracking
 
@@ -121,6 +124,8 @@ class _TrackerToolbar(QWidget):
     ) -> None:
         super().__init__(parent)
         self.setObjectName("TrackerOverlayToolbar")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setStyleSheet(
             "QWidget#TrackerOverlayToolbar { background-color: rgba(20, 20, 20, 200);"
             " border-radius: 4px; }"
@@ -129,25 +134,39 @@ class _TrackerToolbar(QWidget):
             " font-size: 11px; }"
             "QPushButton:hover { background-color: rgba(255, 255, 255, 40); }"
         )
-        layout = QHBoxLayout(self)
+        layout = QGridLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
+        layout.setSpacing(8)
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
         self.track_backward_button = QPushButton("◄ Track")
         self.track_backward_button.setToolTip("Track backward to frame 0")
         self.track_backward_button.clicked.connect(on_track_backward)
-        layout.addWidget(self.track_backward_button)
+        layout.addWidget(self.track_backward_button, 0, 0)
 
         self.track_forward_button = QPushButton("Track ►")
         self.track_forward_button.setToolTip("Track forward to the last frame")
         self.track_forward_button.clicked.connect(on_track_forward)
-        layout.addWidget(self.track_forward_button)
+        layout.addWidget(self.track_forward_button, 0, 1)
 
         self.clear_button = QPushButton("Clear")
         self.clear_button.setToolTip("Remove all tracked keyframes")
         self.clear_button.clicked.connect(on_clear)
-        layout.addWidget(self.clear_button)
+        layout.addWidget(self.clear_button, 0, 2)
 
+        self.draw_button = QPushButton("Draw polygon")
+        self.draw_button.setCheckable(True)
+        self.draw_button.setToolTip("Toggle polygon drawing, then click the image to add vertices. Turn off to move the tracking point. At least three vertices form a mask.")
+        self.remove_vertex_button = QPushButton("Undo vertex")
+        self.remove_vertex_button.setToolTip("Remove the last polygon vertex. This edit can also be undone with Undo.")
+        self.clear_shape_button = QPushButton("Clear polygon")
+        self.clear_shape_button.setToolTip("Remove polygon vertices without clearing the tracked motion.")
+        for column, button in enumerate((self.draw_button,self.remove_vertex_button,self.clear_shape_button)):
+            layout.addWidget(button,1,column)
+            button.hide()
+        for button in self.findChildren(QPushButton):
+            button.setMinimumHeight(30)
+            button.setMinimumWidth(button.sizeHint().width())
         self.adjustSize()
 
 
@@ -189,6 +208,9 @@ class TrackerOverlayWidget(QWidget):
             parent=self,
         )
         self._toolbar.move(8, 8)
+        self._toolbar.remove_vertex_button.clicked.connect(lambda: self._edit_polygon(remove=True))
+        self._toolbar.clear_shape_button.clicked.connect(lambda: self._edit_polygon(clear=True))
+        self._toolbar.hide()
 
         self.hide()
 
@@ -197,6 +219,10 @@ class TrackerOverlayWidget(QWidget):
         node = self.project.nodes.get(node_id) if node_id is not None else None
         self._node_id = node_id if isinstance(node, (TrackerNode, PlanarTrackerNode)) else None
         self._cancel_drag()
+        self._toolbar.draw_button.setChecked(False)
+        for button in (self._toolbar.draw_button,self._toolbar.remove_vertex_button,self._toolbar.clear_shape_button):
+            button.setVisible(isinstance(node,ShapeTrackerNode))
+        self._toolbar.setVisible(self._node_id is not None)
         self.setVisible(self._node_id is not None)
         if self._node_id is not None:
             self.setFocus(Qt.FocusReason.OtherFocusReason)
@@ -249,6 +275,10 @@ class TrackerOverlayWidget(QWidget):
             return
         node = self._node()
         if node is None:
+            return
+        if isinstance(node,ShapeTrackerNode) and self._toolbar.draw_button.isChecked():
+            self._edit_polygon(point=self._to_normalized(a0.position()))
+            a0.accept()
             return
         key = self._hit_test(a0.position())
         if key is None:
@@ -363,6 +393,32 @@ class TrackerOverlayWidget(QWidget):
         self._drag_old_seed = None
         self._drag_old_curves = None
 
+    def _edit_polygon(self, *, point=None, remove=False, clear=False) -> None:
+        node = self._node()
+        if not isinstance(node,ShapeTrackerNode) or self._node_id is None:
+            return
+        vertices = node.polygon_vertices()
+        if clear:
+            vertices = []
+        elif remove:
+            vertices = vertices[:-1]
+        elif point is not None:
+            if len(vertices) >= 512:
+                return
+            center_x,center_y = _display_position(node,"point",self.project.current_frame)
+            vertices.append(((point[0]-center_x)*100,(point[1]-center_y)*100))
+        value = json.dumps(vertices)
+        if self.history is not None:
+            self.history.push(CompositeCommand([
+                SetPropertyCommand(self._node_id,"vertices",value),
+                SetPropertyCommand(self._node_id,"shape",TrackerShape.Polygon),
+            ],"Edit tracked polygon"))
+        else:
+            node.set_property("vertices",value)
+            node.set_property("shape",TrackerShape.Polygon)
+            self.project.invalidate_cache(self._node_id)
+        self.update()
+
     def _on_clear_clicked(self) -> None:
         node = self._node()
         if node is None or self._node_id is None or self.history is None:
@@ -414,6 +470,17 @@ class TrackerOverlayWidget(QWidget):
             painter.setPen(outline_pen)
             for i in range(4):
                 painter.drawLine(centers[i], centers[(i + 1) % 4])
+        if isinstance(node,ShapeTrackerNode):
+            points = [self._to_widget_pos(float(x),float(y)) for x,y in node.outline(frame)]
+            painter.setPen(QPen(_TRACKED_COLOR,2))
+            painter.setBrush(QColor(90,220,130,35))
+            if len(points) >= 3:
+                painter.drawPolygon(QPolygonF(points))
+            elif len(points) == 2:
+                painter.drawLine(points[0],points[1])
+            if node.enum_value("shape",TrackerShape,TrackerShape.Ellipse) == TrackerShape.Polygon:
+                for point in points:
+                    painter.drawEllipse(point,3,3)
         painter.end()
 
     def _draw_point(

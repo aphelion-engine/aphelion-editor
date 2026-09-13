@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
+from config.keybinds import KeyAction, KeybindStore
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QAction, QKeySequence
-
-from config.keybinds import KeyAction, KeybindStore
 
 
 def apply_menu_hint(
@@ -37,6 +36,7 @@ def status_hint_line(store: KeybindStore, *, context: str) -> str:
             ("Fit", KeyAction.FIT_GRAPH),
             ("Copy", KeyAction.COPY),
             ("Paste", KeyAction.PASTE),
+            ("Spotlight", KeyAction.TOGGLE_SPOTLIGHT),
         ]
         parts.extend(f"{store.hint(action)} {label}" for label, action in pairs)
         for slot in store.bound_node_create_slots()[:3]:

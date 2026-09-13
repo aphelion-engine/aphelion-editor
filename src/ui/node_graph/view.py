@@ -6,6 +6,7 @@ from typing import Any, ClassVar
 
 import ui.node_graph.custom_node_ops as custom_node_ops
 import ui.node_graph.operations as node_ops
+import ui.node_graph.selection_ops as selection_ops
 from config.keybinds import KeybindStore
 from core.custom_node_store import global_custom_node_store
 from core.events import Connection, ObserverEvent
@@ -14,7 +15,7 @@ from core.history import (AddNodeCommand, CompositeCommand, ConnectCommand,
                           RemoveNodesCommand)
 from core.nodes import global_node_registry
 from core.project import Project
-from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer
+from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (QBrush, QColor, QKeyEvent, QLinearGradient, QPainter,
                          QPainterPath, QPen, QRadialGradient, QWheelEvent)
 from PyQt6.QtWidgets import (QDialog, QFrame, QGraphicsScene, QGraphicsView,
@@ -24,11 +25,16 @@ from ui.node_graph.connection_item import ConnectionItem, PreviewWireItem
 from ui.node_graph.constants import GRID_SPACING_PX, SOCKET_SNAP_DISTANCE_PX
 from ui.node_graph.node_item import NodeItem
 from ui.node_graph.search_palette import NodeSearchPalette
+from ui.node_graph.selection_bar import SelectionActionBar
+from ui.node_graph.selection_ops import SelectionTraversal
 from ui.node_graph.theme_state import current_graph_palette
 
 
 class NodeGraphView(QGraphicsView):
     """Interactive node graph canvas."""
+
+    #: Emitted with the number of selected nodes whenever the selection changes.
+    selection_changed = pyqtSignal(int)
 
     _MIN_ZOOM: ClassVar[float] = 0.2
     _MAX_ZOOM: ClassVar[float] = 3.0
@@ -64,10 +70,13 @@ class NodeGraphView(QGraphicsView):
         self._cursor_scene_pos: QPointF = QPointF(0.0, 0.0)
         self._paste_generation: int = 0
         self._search_palette: NodeSearchPalette | None = None
+        self._selection_bar: SelectionActionBar | None = None
+        self._spotlight: bool = False
         self.layout_mode = node_ops.GraphLayoutMode.HIERARCHICAL
 
         self._configure_view()
         self.project.subscribe(self.on_project_changed)
+        self.scene.selectionChanged.connect(self._on_scene_selection_changed)
         for node_id in self.project.nodes:
             self.add_node_to_view(node_id)
         for connection in self.project.connections:
@@ -82,6 +91,9 @@ class NodeGraphView(QGraphicsView):
         self.history = history
         self.clipboard.clear()
         self._paste_generation = 0
+        self._spotlight = False
+        if self._selection_bar is not None:
+            self._selection_bar.hide()
         self.node_items.clear()
         self.connection_items.clear()
         self.scene.clear()
@@ -91,6 +103,170 @@ class NodeGraphView(QGraphicsView):
         for connection in self.project.connections:
             self.add_connection_to_view(connection)
         QTimer.singleShot(40, self.fit_all_nodes)
+
+    def resizeEvent(self, event: Any) -> None:
+        """Keep the selection quick-action bar pinned to the viewport top."""
+        super().resizeEvent(event)
+        if self._selection_bar is not None:
+            self._selection_bar.reposition()
+
+    # ==================================================================
+    # Selection highlight / quick actions
+    # ==================================================================
+
+    def notify(self, text: str, timeout: int = 2000) -> None:
+        """Show a transient message on the editor status bar, if present."""
+        window = self.window()
+        status_bar = getattr(window, "statusBar", None)
+        if not callable(status_bar):
+            return
+        status = status_bar()
+        if status is not None:
+            status.showMessage(text, timeout)
+
+    def selection_count(self) -> int:
+        """Return how many nodes are currently selected."""
+        return len(self.selected_nodes())
+
+    def is_spotlight_enabled(self) -> bool:
+        """Whether unselected nodes are dimmed to highlight the selection."""
+        return self._spotlight
+
+    def set_spotlight(self, enabled: bool) -> None:
+        """Dim everything outside the selection (or restore full brightness)."""
+        enabled = bool(enabled)
+        if enabled == self._spotlight:
+            return
+        self._spotlight = enabled
+        self._sync_selection_visuals()
+
+    def toggle_spotlight(self) -> bool:
+        """Flip spotlight mode and return the new state."""
+        self.set_spotlight(not self._spotlight)
+        return self._spotlight
+
+    def invert_selection(self) -> None:
+        """Select every node that was not selected."""
+        count = selection_ops.invert_selection(self)
+        self.notify(f"Inverted selection — {count} node(s) selected")
+
+    def select_connected(self) -> None:
+        """Add every node connected to the selection through the graph."""
+        self._report_expansion(
+            selection_ops.select_related(self, SelectionTraversal.CONNECTED),
+            "connected",
+        )
+
+    def select_upstream(self) -> None:
+        """Add every node that feeds the selection."""
+        self._report_expansion(
+            selection_ops.select_related(self, SelectionTraversal.UPSTREAM),
+            "upstream",
+        )
+
+    def select_downstream(self) -> None:
+        """Add every node the selection feeds into."""
+        self._report_expansion(
+            selection_ops.select_related(self, SelectionTraversal.DOWNSTREAM),
+            "downstream",
+        )
+
+    def select_same_type(self) -> None:
+        """Add every node sharing a type with the selection."""
+        self._report_expansion(
+            selection_ops.select_same_type(self),
+            "same type",
+        )
+
+    def fit_selection(self) -> None:
+        """Frame just the selected nodes."""
+        items = self.selected_nodes()
+        if not items:
+            self.notify("Select at least one node to frame it")
+            return
+        selection_ops.fit_selection(self, items)
+
+    def tidy_selection(self) -> None:
+        """Pack the selected nodes into a compact grid."""
+        items = self.selected_nodes()
+        if len(items) < 2:
+            self.notify("Select two or more nodes to tidy them")
+            return
+        if selection_ops.tidy_selection(self, items):
+            self.notify(f"Tidied {len(items)} nodes")
+
+    def tidy_all_nodes(self) -> None:
+        """Pack every node in the graph into a compact grid."""
+        items = list(self.node_items.values())
+        if len(items) < 2:
+            return
+        if selection_ops.tidy_selection(self, items):
+            self.notify(f"Tidied {len(items)} nodes")
+
+    def toggle_selection_bypass(self) -> None:
+        """Bypass or re-enable every selected effect node."""
+        items = self.selected_nodes()
+        if not items:
+            self.notify("Select at least one effect node to bypass")
+            return
+        count = selection_ops.toggle_selection_bypass(self, items)
+        if count == 0:
+            self.notify("None of the selected nodes can be bypassed")
+            return
+        self.notify(f"Toggled {count} node(s)")
+
+    def remove_selection_wires(self) -> None:
+        """Disconnect every wire attached to the selection."""
+        items = self.selected_nodes()
+        if not items:
+            return
+        count = selection_ops.remove_selection_wires(self, items)
+        self.notify(
+            f"Disconnected {count} wire(s)" if count else "No wires attached"
+        )
+
+    def _report_expansion(self, count: int, label: str) -> None:
+        """Report the result of a selection-expansion action."""
+        if count == 0:
+            self.notify("Select a node first")
+            return
+        self.notify(f"Selected {count} {label} node(s)")
+
+    def _on_scene_selection_changed(self) -> None:
+        """Keep visuals and the quick-action bar in sync with the selection."""
+        self._sync_selection_visuals()
+        self._update_selection_bar()
+        self.selection_changed.emit(self.selection_count())
+
+    def _sync_selection_visuals(self) -> None:
+        """Apply (or clear) spotlight dimming across nodes and wires."""
+        selected_ids = {
+            item.node_id
+            for item in self.scene.selectedItems()
+            if isinstance(item, NodeItem)
+        }
+        for node_id, item in self.node_items.items():
+            item.set_dimmed(self._spotlight and node_id not in selected_ids)
+        for connection, item in self.connection_items.items():
+            touches_selection = (
+                connection.output_node_id in selected_ids
+                or connection.input_node_id in selected_ids
+            )
+            item.set_dimmed(self._spotlight and not touches_selection)
+
+    def _update_selection_bar(self) -> None:
+        """Show, refresh, or hide the floating selection action bar."""
+        items = self.selected_nodes()
+        if not items:
+            if self._selection_bar is not None:
+                self._selection_bar.hide()
+            return
+        if self._selection_bar is None:
+            self._selection_bar = SelectionActionBar(self, self.viewport())
+        self._selection_bar.refresh(items)
+        self._selection_bar.reposition()
+        self._selection_bar.show()
+        self._selection_bar.raise_()
 
     @property
     def is_connection_dragging(self) -> bool:
@@ -482,6 +658,11 @@ class NodeGraphView(QGraphicsView):
             on_select_all=self.select_all_nodes,
             on_fit_view=self.fit_all_nodes,
             on_organize_graph=self.organize_graph,
+            on_invert_selection=self.invert_selection,
+            on_select_connected=self.select_connected,
+            on_toggle_spotlight=self.toggle_spotlight,
+            spotlight_enabled=self._spotlight,
+            can_select_related=bool(self.selected_nodes()),
             keybinds=self.keybinds,
             parent=self,
         )
@@ -712,20 +893,28 @@ class NodeGraphView(QGraphicsView):
                 return
 
             item = self.itemAt(event.pos())
+            if isinstance(item, NodeItem):
+                super().mousePressEvent(event)
+                return
             if isinstance(item, ConnectionItem):
                 super().mousePressEvent(event)
                 return
-            if item is None:
-                self._start_panning(event)
-                return
-            if not isinstance(item, NodeItem):
-                self.selection_start = event.pos()
-                self.selection_rect = QRect(self.selection_start, self.selection_start)
-                if not (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
-                    self.scene.clearSelection()
-                event.accept()
-                return
+            # Empty canvas: rubber-band select. Ctrl keeps the existing
+            # selection so several sweeps can be accumulated; middle-drag
+            # (handled above) remains the way to pan.
+            self._begin_marquee(event)
+            event.accept()
+            return
         super().mousePressEvent(event)
+
+    def _begin_marquee(self, event: Any) -> None:
+        """Start a rubber-band selection over empty canvas."""
+        self.selection_start = event.pos()
+        self.selection_rect = QRect(self.selection_start, self.selection_start)
+        if not (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+            self.scene.clearSelection()
+        self.setFocus(Qt.FocusReason.MouseFocusReason)
+        self._update_selection_bar()
 
     def mouseMoveEvent(self, event: Any) -> None:
         self._cursor_scene_pos = self._event_scene_pos(event)
@@ -855,6 +1044,8 @@ class NodeGraphView(QGraphicsView):
                 palette.close_palette()
             elif self.is_connection_dragging:
                 self.cancel_connection_drag()
+            elif self.scene.selectedItems():
+                self.scene.clearSelection()
             else:
                 super().keyPressEvent(event)
                 return
@@ -866,4 +1057,39 @@ class NodeGraphView(QGraphicsView):
                 event.accept()
                 return
 
+        if key in (
+            Qt.Key.Key_Left,
+            Qt.Key.Key_Right,
+            Qt.Key.Key_Up,
+            Qt.Key.Key_Down,
+        ):
+            if self._nudge_from_key(event, key):
+                event.accept()
+                return
+
         super().keyPressEvent(event)
+
+    def _nudge_from_key(self, event: QKeyEvent, key: int) -> bool:
+        """Move the selection with Shift+Arrow keys (+Ctrl for big steps)."""
+        modifiers = event.modifiers()
+        if not (modifiers & Qt.KeyboardModifier.ShiftModifier):
+            return False
+        items = self.selected_nodes()
+        if not items:
+            return False
+        step = (
+            selection_ops.NUDGE_STEP_COARSE_PX
+            if modifiers & Qt.KeyboardModifier.ControlModifier
+            else selection_ops.NUDGE_STEP_PX
+        )
+        dx = (
+            -step
+            if key == Qt.Key.Key_Left
+            else step
+            if key == Qt.Key.Key_Right
+            else 0.0
+        )
+        dy = (
+            -step if key == Qt.Key.Key_Up else step if key == Qt.Key.Key_Down else 0.0
+        )
+        return selection_ops.nudge_selection(self, items, dx, dy)

@@ -24,6 +24,12 @@ class KeyAction(Enum):
     COPY = "copy"
     PASTE = "paste"
     SELECT_ALL = "select_all"
+    INVERT_SELECTION = "invert_selection"
+    SELECT_CONNECTED = "select_connected"
+    TIDY_SELECTION = "tidy_selection"
+    FIT_SELECTION = "fit_selection"
+    TOGGLE_BYPASS = "toggle_bypass"
+    TOGGLE_SPOTLIGHT = "toggle_spotlight"
     DUPLICATE = "duplicate"
     DELETE = "delete"
     CREATE_CUSTOM_NODE = "create_custom_node"
@@ -167,6 +173,20 @@ DEFAULT_KEYBINDS: tuple[KeybindSpec, ...] = (
     KeybindSpec(KeyAction.COPY, "Copy", "Edit", "Ctrl+C", "Copy selected nodes"),
     KeybindSpec(KeyAction.PASTE, "Paste", "Edit", "Ctrl+V", "Paste nodes from the clipboard"),
     KeybindSpec(KeyAction.SELECT_ALL, "Select All", "Edit", "Ctrl+A", "Select all nodes"),
+    KeybindSpec(
+        KeyAction.INVERT_SELECTION,
+        "Invert Selection",
+        "Edit",
+        "Ctrl+Shift+I",
+        "Select every node that is not currently selected",
+    ),
+    KeybindSpec(
+        KeyAction.TOGGLE_BYPASS,
+        "Toggle Bypass",
+        "Edit",
+        "Ctrl+Shift+B",
+        "Bypass or re-enable the selected effect nodes",
+    ),
     KeybindSpec(KeyAction.DUPLICATE, "Duplicate", "Edit", "Ctrl+D", "Duplicate the selection"),
     KeybindSpec(KeyAction.DELETE, "Delete", "Edit", "Delete", "Delete the selection"),
     KeybindSpec(
@@ -204,6 +224,34 @@ DEFAULT_KEYBINDS: tuple[KeybindSpec, ...] = (
         "Graph",
         "Ctrl+Shift+O",
         "Auto-layout nodes by data flow",
+    ),
+    KeybindSpec(
+        KeyAction.SELECT_CONNECTED,
+        "Select Connected",
+        "Graph",
+        "Ctrl+Shift+C",
+        "Grow the selection along the graph",
+    ),
+    KeybindSpec(
+        KeyAction.TIDY_SELECTION,
+        "Tidy Selection",
+        "Graph",
+        "Ctrl+Shift+T",
+        "Pack the selected nodes into a grid",
+    ),
+    KeybindSpec(
+        KeyAction.FIT_SELECTION,
+        "Fit Selection to View",
+        "Graph",
+        "Shift+S",
+        "Frame just the selected nodes",
+    ),
+    KeybindSpec(
+        KeyAction.TOGGLE_SPOTLIGHT,
+        "Toggle Selection Spotlight",
+        "Graph",
+        "Ctrl+Shift+H",
+        "Dim everything outside the selection",
     ),
     KeybindSpec(
         KeyAction.TOGGLE_FULLSCREEN,
