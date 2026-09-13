@@ -501,8 +501,10 @@ class CustomNode(Node):
             inner_prop = target.properties.get(spec.target_key)
             if inner_prop is None:
                 continue
-            inner_prop.value = self.custom_value(spec.name, spec.default)
-            subgraph.invalidate_cache(spec.target_node_id)
+            value = self.custom_value(spec.name, spec.default)
+            if inner_prop.value != value:
+                inner_prop.value = value
+                subgraph.invalidate_cache(spec.target_node_id)
 
     # -- evaluation --------------------------------------------------------
 

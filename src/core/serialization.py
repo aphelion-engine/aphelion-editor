@@ -12,6 +12,7 @@ from core.nodes.enums import (AnaglyphMode, AutoBalanceMode, BendAxis,
                               EaseMode, EdgeDisplayMode, GradientMode,
                               LogicOperation, MaskChannel, PixelSortMode,
                               SwitchInput, TransformBorderMode, Waveform)
+from core.tracking.model import GapPolicy
 from core.nodes.enums import TrackerShape
 from render.preview import ViewerBackground, ViewportFitMode
 
@@ -21,6 +22,7 @@ APH_FORMAT_VERSION: int = 1
 # Named enum types that may appear in saved property values.
 _ENUM_TYPES: dict[str, type[Enum]] = {
     "TrackerShape": TrackerShape,
+    "GapPolicy": GapPolicy,
     "MediaEdgeMode": MediaEdgeMode,
     "MediaLoopMode": MediaLoopMode,
     "VideoFrameErrorMethod": VideoFrameErrorMethod,

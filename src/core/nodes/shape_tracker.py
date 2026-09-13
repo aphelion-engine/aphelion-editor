@@ -25,6 +25,9 @@ class ShapeTrackerNode(TrackerNode):
         self.set_property("vertices",text_property("[]",priority=30,group="Shape",label="Polygon vertices",
             description="JSON list of [x,y] offsets from the tracked point in frame percent. Use Draw polygon above the preview to place vertices."))
 
+    def input_required(self, slot: str) -> bool:
+        return True
+
     def polygon_vertices(self):
         try:
             values = json.loads(self.string_value("vertices","[]"))
@@ -44,6 +47,8 @@ class ShapeTrackerNode(TrackerNode):
 
     def outline(self, frame_num):
         position = super().evaluate(frame_num)
+        if position["x"] is None or position["y"] is None:
+            return np.empty((0,2),np.float32)
         center = np.array([position["x"],position["y"]],dtype=np.float32)
         shape = self.enum_value("shape",TrackerShape,TrackerShape.Ellipse)
         if shape == TrackerShape.Polygon:

@@ -436,9 +436,12 @@ class SetTrackCommand(Command):
         track_x: AnimationCurve,
         track_y: AnimationCurve,
         *,
+        samples: dict | None = None,
         old_track_x: AnimationCurve | None = None,
         old_track_y: AnimationCurve | None = None,
     ) -> None:
+        self._samples = samples
+        self._old_samples = None
         self._node_id = node_id
         self._new_x = track_x
         self._new_y = track_y
@@ -452,6 +455,15 @@ class SetTrackCommand(Command):
         if self._old_x is None:
             self._old_x = node.track_x
             self._old_y = node.track_y
+        if self._old_samples is None:
+            self._old_samples = dict(node.track_samples)
+        node.track_samples = dict(self._samples) if self._samples is not None else ({} if self._new_x.is_empty else dict(self._old_samples))
+        if self._samples is None and node.track_samples:
+            from core.tracking.model import TrackingSample
+            for frame,x in self._new_x.keyframes.items():
+                y = self._new_y.value_at(frame)
+                if self._old_x is not None and self._old_y is not None and (x != self._old_x.value_at(frame) or y != self._old_y.value_at(frame)):
+                    node.track_samples[frame] = TrackingSample(frame,x,y,1.0,True,reason="manual")
         node.track_x = self._new_x
         node.track_y = self._new_y
         project.invalidate_cache(self._node_id)
@@ -461,6 +473,7 @@ class SetTrackCommand(Command):
         node = project.nodes.get(self._node_id)
         if not isinstance(node, TrackerNode) or self._old_x is None or self._old_y is None:
             return
+        node.track_samples = dict(self._old_samples or {})
         node.track_x = self._old_x
         node.track_y = self._old_y
         project.invalidate_cache(self._node_id)

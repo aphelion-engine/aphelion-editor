@@ -84,9 +84,16 @@ def _split_xy_curves(
     """Split a tracker's ``{frame: (x, y)}`` result into two curves."""
     curve_x = AnimationCurve()
     curve_y = AnimationCurve()
-    for frame_num, (x, y) in result.items():
-        curve_x.set_keyframe(frame_num, x)
-        curve_y.set_keyframe(frame_num, y)
+    from core.tracking.model import TrackingSample
+    for frame_num, value in result.items():
+        if isinstance(value,TrackingSample):
+            if not value.valid:
+                continue
+            x,y = value.x,value.y
+        else:
+            x,y = value
+        curve_x.set_keyframe(frame_num,x)
+        curve_y.set_keyframe(frame_num,y)
     return curve_x, curve_y
 
 
@@ -517,11 +524,18 @@ class PropertiesPanel(QWidget):
         # here would create a circular import.
         from ui.dialogs import TrackingProgressDialog
 
+        try:
+            options = node.tracking_options() if isinstance(node,TrackerNode) else None
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid tracking settings", str(exc))
+            return 
+
         request = TrackingRequest(
             node_id=node_id,
             frame_numbers=frame_numbers,
             region_size=node.region_size_normalized(),
             search_radius=node.search_radius_normalized(),
+            options=options,
         )
         if isinstance(node, PlanarTrackerNode):
             self._run_planar_tracking(node_id, node, request, TrackingProgressDialog)
@@ -543,7 +557,7 @@ class PropertiesPanel(QWidget):
                 QMessageBox.warning(self, "Tracking Failed", dialog.error)
             return
         curve_x, curve_y = _split_xy_curves(dialog.result or {})
-        self.history.push(SetTrackCommand(node_id, curve_x, curve_y))
+        self.history.push(SetTrackCommand(node_id, curve_x, curve_y, samples=dialog.result or {}))
         self._reload_current_node()
 
     def _run_planar_tracking(

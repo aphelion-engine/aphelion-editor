@@ -15,7 +15,8 @@ from typing import Any
 from core.animation import AnimationCurve
 from core.nodes.base import NodeSocketType, NodeValue
 from core.nodes.frame_base import FrameNode
-from core.nodes.property_factory import number_property
+from core.nodes.property_factory import number_property, choice_property
+from core.tracking.model import TrackingOptions, TrackingSample, GapPolicy, resolve_gap
 
 TRACKING_CATEGORY: str = "Tracking"
 
@@ -47,6 +48,7 @@ class TrackerNode(FrameNode, Tracker):
     node_color: tuple[int, int, int] = (206, 100, 130)
 
     def __init__(self, name: str | None = None) -> None:
+        self.track_samples: dict[int, TrackingSample] = {}
         self.track_x: AnimationCurve = AnimationCurve()
         self.track_y: AnimationCurve = AnimationCurve()
         super().__init__(name)
@@ -109,6 +111,45 @@ class TrackerNode(FrameNode, Tracker):
             ),
         )
 
+        self.add_output("valid",NodeSocketType.Number)
+        self.add_output("confidence",NodeSocketType.Number)
+        self.add_output("predicted",NodeSocketType.Number)
+        for key,value,low,high,help_text in (
+            ("track_threshold",0.45,0.0,0.99,"Minimum appearance confidence while tracking."),
+            ("reacquire_threshold",0.65,0.01,1.0,"Stricter minimum confidence after losing the feature."),
+            ("max_lost_frames",30,0,300,"Maximum missing-frame duration for automatic recovery; restart tracking after timeout."),
+            ("confirmation_frames",2,1,5,"Consecutive consistent strong matches required for reacquisition."),
+            ("max_search_multiplier",4,1,16,"Maximum expansion relative to the normal search radius."),
+            ("max_jump",10,0.1,100,"Maximum deviation from predicted motion, in frame percent."),
+            ("ambiguity_margin",0.08,0,1,"Required confidence lead over a separate competing match."),
+        ):
+            self.set_property(key,number_property(value,low,high,priority=30+len(self.properties),
+                group="Tracking Recovery",label=key.replace("_"," ").title(),description=help_text))
+        self.set_property("gap_policy",choice_property(GapPolicy.Hold,priority=60,
+            group="Tracking Recovery",label="During Gaps",description="Interpret missing frames without changing raw samples. Connect Valid to an effect's Enabled control to disable it during gaps."))
+
+    def tracking_options(self) -> TrackingOptions:
+        return TrackingOptions(
+            track_threshold=self.float_value("track_threshold",0.45),
+            reacquire_threshold=self.float_value("reacquire_threshold",0.65),
+            max_lost_frames=self.int_value("max_lost_frames",30),
+            confirmation_frames=self.int_value("confirmation_frames",2),
+            max_search_multiplier=self.float_value("max_search_multiplier",4),
+            ambiguity_margin=self.float_value("ambiguity_margin",0.08),
+            max_jump=self.float_value("max_jump",10)/100)
+
+    def input_required(self, slot: str) -> bool:
+        # Source images are sampled explicitly by the tracking worker, not playback.
+        return slot != "frame"
+
+    def tracking_position(self, frame_num):
+        sample = self.track_samples.get(frame_num)
+        if sample is not None:
+            return resolve_gap(self.track_samples,frame_num,self.enum_value("gap_policy",GapPolicy,GapPolicy.Hold))
+        if self.track_x.is_empty or self.track_y.is_empty:
+            return self.seed_position()
+        return self.track_x.value_at(frame_num),self.track_y.value_at(frame_num)
+
     def seed_position(self) -> tuple[float, float]:
         """Return the normalized seed position from the Center X/Y properties."""
         return (
@@ -127,17 +168,19 @@ class TrackerNode(FrameNode, Tracker):
 
     def evaluate(self, frame_num: int) -> NodeValue:
         """Resolve the tracked (or seed) X/Y at ``frame_num`` as percents."""
-        if self.track_x.is_empty or self.track_y.is_empty:
-            x, y = self.seed_position()
-        else:
-            x = self.track_x.value_at(frame_num)
-            y = self.track_y.value_at(frame_num)
-        # Number outputs use the same 0–100 percent scale as transform nodes.
-        return {"x": x * 100.0, "y": y * 100.0}
+        position = self.tracking_position(frame_num)
+        sample = self.track_samples.get(frame_num)
+        valid = sample.valid if sample is not None else not self.track_x.is_empty
+        predicted = sample is not None and not sample.valid and position is not None
+        return {"x": position[0]*100 if position else None,
+                "y": position[1]*100 if position else None,
+                "valid": float(valid),"confidence": sample.confidence if sample else float(valid),
+                "predicted": float(predicted)}
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize base node data plus the tracked X/Y curves."""
         data = super().to_dict()
+        data["track_samples"] = [sample.to_dict() for sample in self.track_samples.values()]
         data["track_x"] = self.track_x.to_dict()
         data["track_y"] = self.track_y.to_dict()
         return data
@@ -145,6 +188,8 @@ class TrackerNode(FrameNode, Tracker):
     def apply_document(self, data: dict[str, Any]) -> None:
         """Restore base node data plus the tracked X/Y curves."""
         super().apply_document(data)
+        self.track_samples = {int(blob["frame_number"]): TrackingSample.from_dict(blob)
+                              for blob in data.get("track_samples",[])}
         self.track_x = AnimationCurve.from_dict(data.get("track_x") or {})
         self.track_y = AnimationCurve.from_dict(data.get("track_y") or {})
 
@@ -256,6 +301,9 @@ class PlanarTrackerNode(FrameNode, Tracker):
     def search_radius_normalized(self) -> float:
         """Return the search radius as a normalized fraction of frame width."""
         return self.float_value("search_radius", 12.0) / 100.0
+
+    def input_required(self, slot: str) -> bool:
+        return slot != "frame"
 
     def evaluate(self, frame_num: int) -> NodeValue:
         """Resolve every corner's tracked (or seed) X/Y at ``frame_num`` as percents."""

@@ -1045,6 +1045,8 @@ class Project:
 
         for conn in input_connections:
             input_slot = conn.input_slot
+            if not node.input_required(input_slot):
+                continue
 
             in_sock = node.inputs[
                 input_slot
@@ -1112,16 +1114,14 @@ class Project:
             else:
                 result = raw_result
 
-            # Viewer is intentionally not cached because it is just a
-            # passthrough endpoint.
-            if node.node_type != "Viewer":
+            # Store every produced output once. A downstream branch requesting a
+            # second socket must not rerun the complete node (or custom graph).
+            values = raw_result if isinstance(raw_result,dict) else {output_slot:result}
+            for slot,value in values.items():
                 if export_cache is not None:
-                    export_cache[cache_key] = result
+                    export_cache[(node_id,frame_num,slot)] = value
                 else:
-                    self._frame_cache.set_fast(
-                        cache_key,
-                        result,
-                    )
+                    self._frame_cache.set_fast((node_id,frame_num,f"{slot}@{settings.max_width}"),value)
 
             return result
 

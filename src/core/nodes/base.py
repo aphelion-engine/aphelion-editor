@@ -187,6 +187,10 @@ class Node(ABC):
     def set_input_value(self, slot: str, value: Any) -> None:
         self._input_values[slot] = value
 
+    def input_required(self, slot: str) -> bool:
+        """Whether evaluating outputs needs this connected input."""
+        return True
+
     def get_input_value(self, slot: str) -> Any | None:
         return self._input_values.get(slot)
 

@@ -105,6 +105,14 @@ def _is_tracked(node: TrackerLike, key: str) -> bool:
 
 def _display_position(node: TrackerLike, key: str, frame: int) -> tuple[float, float]:
     """Return ``key``'s normalized position to draw at ``frame``."""
+    if isinstance(node,TrackerNode) and frame in node.track_samples:
+        position = node.tracking_position(frame)
+        sample = node.track_samples[frame]
+        if position is not None:
+            return position
+        if sample.predicted_x is not None:
+            return sample.predicted_x,sample.predicted_y
+        return node.seed_position()
     curve_x, curve_y = _curve_pair(node, key)
     if not curve_x.is_empty and not curve_y.is_empty:
         return curve_x.value_at(frame), curve_y.value_at(frame)
@@ -460,8 +468,9 @@ class TrackerOverlayWidget(QWidget):
                 region_w,
                 region_h,
                 search_radius,
-                tracked=_is_tracked(node, key),
-                label=key.replace("_", " ").title() if is_planar else None,
+                tracked=(_is_tracked(node,key) and (not isinstance(node,TrackerNode)
+                         or frame not in node.track_samples or node.track_samples[frame].valid)),
+                label=(key.replace("_", " ").title() if is_planar else self._sample_label(node,frame)),
             )
 
         if is_planar and len(centers) == 4:
@@ -482,6 +491,19 @@ class TrackerOverlayWidget(QWidget):
                 for point in points:
                     painter.drawEllipse(point,3,3)
         painter.end()
+
+    @staticmethod
+    def _sample_label(node, frame):
+        sample = node.track_samples.get(frame) if isinstance(node,TrackerNode) else None
+        if sample is None:
+            return None
+        if sample.reacquired:
+            return "Reacquired"
+        if sample.valid:
+            return "Tracked"
+        if sample.predicted_x is not None:
+            return f"{sample.state.value.title()} (prediction)"
+        return "Lost"
 
     def _draw_point(
         self,

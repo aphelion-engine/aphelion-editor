@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from core.tracking.model import TrackingOptions
 from core.tracking import track_planar_range, track_point_range
 
 if TYPE_CHECKING:
@@ -26,6 +27,7 @@ class TrackingRequest:
     frame_numbers: list[int]
     region_size: NormalizedPoint
     search_radius: float
+    options: TrackingOptions | None = None
 
 
 class PointTrackingWorker(QThread):
@@ -67,6 +69,7 @@ class PointTrackingWorker(QThread):
                 sampler,
                 self._request.frame_numbers,
                 initial_center=self._initial_center,
+                options=self._request.options,
                 region_size=self._request.region_size,
                 search_radius=self._request.search_radius,
                 should_cancel=lambda: self._cancelled,
@@ -81,7 +84,7 @@ class PointTrackingWorker(QThread):
             )
             return
 
-        if not result:
+        if not any(sample.valid for sample in result.values()):
             self.failed.emit(
                 "Tracking failed: no frames could be matched."
             )

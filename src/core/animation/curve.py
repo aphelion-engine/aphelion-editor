@@ -26,6 +26,8 @@ def interpolate_curve(keyframes: dict[int, float], frame: int) -> float:
         The interpolated value. Held at the first/last keyframe outside the
         keyed range. ``0.0`` when there are no keyframes.
     """
+    if frame in keyframes:
+        return keyframes[frame]
     if not keyframes:
         return 0.0
 

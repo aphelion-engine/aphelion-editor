@@ -18,3 +18,10 @@ logs/
 lib/
 
 *.zip
+
+*.mp4
+*.aph
+tests/
+.vscode/
+AphelionEditor/
+.pytest_cache/

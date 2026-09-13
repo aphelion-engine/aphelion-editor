@@ -1,34 +1,14 @@
-"""Fixed-template 2D point tracking over a frame range.
+"""Fixed-template tracking with measured gaps and bounded motion-guided recovery.
 
-The tracker deliberately uses a simple fixed-template approach:
-
-    1. Capture a template once at the seed frame.
-    2. Predict the feature position from the previous successful result.
-    3. Search for the template inside a local search window.
-    4. Accept the result when normalized cross-correlation is sufficiently
-       confident.
-    5. Keep the original template for the entire track.
-
-No optical flow or online template adaptation is used.
-
-Frames supplied by ``sample_frame`` may be RGB/RGBA arrays using either
-floating-point 0..1 values, floating-point 0..255 values, or integer
-0..255 values.
-
-The tracker intentionally distinguishes between:
-
-    - a frame that cannot be sampled,
-    - an invalid seed/template,
-    - a successfully matched frame,
-    - a low-confidence match.
-
-This prevents a frame-sampling failure from being mistaken for a tracking
-failure.
+Matching processes only local search windows; larger searches are split into
+cancellable tiles. Point and planar workers share the same tracking engine.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
+import logging
+from core.tracking.model import TrackingOptions, TrackingSample, TrackingState
 
 import cv2
 import numpy as np
@@ -63,270 +43,211 @@ NormalizedPoint = tuple[float, float]
 
 
 def track_point_range(
+    sample_frame: FrameSampler, frame_numbers: list[int], *,
+    initial_center: NormalizedPoint, region_size: NormalizedPoint,
+    search_radius: float, should_cancel: CancelPoll | None = None,
+    on_progress: ProgressCallback | None = None, options: TrackingOptions | None = None,
+) -> dict[int, TrackingSample]:
+    """Return measured and explicitly missing samples in processing order."""
+    return {sample.frame_number:sample for sample in _track_point_samples(
+        sample_frame,frame_numbers,initial_center=initial_center,region_size=region_size,
+        search_radius=search_radius,should_cancel=should_cancel,on_progress=on_progress,
+        options=options)}
+
+
+def _track_point_samples(
     sample_frame: FrameSampler,
     frame_numbers: list[int],
-    *,
-    initial_center: NormalizedPoint,
-    region_size: NormalizedPoint,
-    search_radius: float,
-    should_cancel: CancelPoll | None = None,
+    *, initial_center: NormalizedPoint, region_size: NormalizedPoint,
+    search_radius: float, should_cancel: CancelPoll | None = None,
     on_progress: ProgressCallback | None = None,
-) -> dict[int, NormalizedPoint]:
-    """Track one point across a sequence of frames.
-
-    ``sample_frame`` is expected to return an RGB/RGBA numpy array for the
-    requested frame number.
-
-    The first frame is used only to create the fixed reference template.
-    Every following frame searches around the previous successful position.
-
-    Frames which cannot be sampled or do not produce a confident match are
-    omitted from the returned dictionary.
-
-    Args:
-        sample_frame:
-            Callable receiving a frame number and returning a numpy frame or
-            ``None`` if that frame cannot be sampled.
-
-        frame_numbers:
-            Ordered frame numbers to process.
-
-        initial_center:
-            Normalized ``(x, y)`` position of the tracked feature on the
-            first frame.
-
-        region_size:
-            Normalized ``(width, height)`` size of the reference template.
-
-        search_radius:
-            Maximum normalized per-frame search distance.
-
-        should_cancel:
-            Optional cooperative cancellation callback.
-
-        on_progress:
-            Optional callback receiving ``(completed, total)``.
-
-    Returns:
-        Dictionary mapping successfully tracked frame numbers to normalized
-        ``(x, y)`` positions.
-    """
-
-    if not frame_numbers:
-        return {}
-
-    total = len(frame_numbers)
-
-    results: dict[int, NormalizedPoint] = {}
-
-    # ------------------------------------------------------------------
-    # Normalize inputs
-    # ------------------------------------------------------------------
-
-    seed_center = _clamp_point(initial_center)
-
-    region_width = abs(float(region_size[0]))
-    region_height = abs(float(region_size[1]))
-
-    search_radius = abs(float(search_radius))
-
-    if region_width <= 0.0 or region_height <= 0.0:
-        return {}
-
-    # ------------------------------------------------------------------
-    # Seed frame
-    # ------------------------------------------------------------------
-
-    seed_frame_number = int(frame_numbers[0])
-
-    seed_frame = _safe_sample_frame(
-        sample_frame,
-        seed_frame_number,
-    )
-
-    if seed_frame is None:
-        # The caller's sampler could not provide the seed frame.
-        #
-        # Do not attempt matching because there is no reference template.
-        if on_progress is not None:
-            on_progress(0, total)
-
-        return {}
-
-    if not _is_valid_frame(seed_frame):
-        if on_progress is not None:
-            on_progress(0, total)
-
-        return {}
-
-    seed_height, seed_width = seed_frame.shape[:2]
-
-    if seed_width <= 0 or seed_height <= 0:
-        if on_progress is not None:
-            on_progress(0, total)
-
-        return {}
-
-    # ------------------------------------------------------------------
-    # Extract reference template
-    # ------------------------------------------------------------------
-
-    template = _extract_patch(
-        seed_frame,
-        seed_center,
-        (region_width, region_height),
-        seed_width,
-        seed_height,
-    )
-
-    if template is None:
-        if on_progress is not None:
-            on_progress(0, total)
-
-        return {}
-
-    # CCOEFF_NORMED requires texture/variance.
-    if _template_is_degenerate(template):
-        if on_progress is not None:
-            on_progress(0, total)
-
-        return {}
-
-    # Pre-filter template to reduce noise and improve correlation stability.
-    template = _preprocess_template(template)
-
-    # Seed is always considered tracked because the user explicitly placed
-    # the initial point there.
-    results[seed_frame_number] = seed_center
-
-    current_center = seed_center
-
-    if on_progress is not None:
-        on_progress(1, total)
-
-    # ------------------------------------------------------------------
-    # Sequential tracking
-    # ------------------------------------------------------------------
-
-    for index, frame_number in enumerate(frame_numbers[1:], start=1):
-        if should_cancel is not None and should_cancel():
+    options: TrackingOptions | None = None,
+):
+    """Track fixed appearance with explicit loss, bounded recovery, and raw gaps."""
+    options = options or TrackingOptions()
+    log = logging.getLogger(__name__)
+    if not frame_numbers or (should_cancel and should_cancel()):
+        return
+    seed_number = int(frame_numbers[0])
+    seed = _safe_sample_frame(sample_frame,seed_number)
+    valid_seed = seed is not None and _is_valid_frame(seed)
+    width,height = (seed.shape[1],seed.shape[0]) if valid_seed else (0,0)
+    center = tuple(float(v) for v in initial_center)
+    valid_center = all(np.isfinite(v) and 0 <= v <= 1 for v in center)
+    template = (_extract_patch(seed,center,region_size,width,height)
+                if valid_seed and valid_center and all(np.isfinite(v) and v > 0 for v in region_size) else None)
+    if template is not None:
+        template = _preprocess_template(template)
+    if template is None or _template_is_degenerate(template):
+        for index, number in enumerate(frame_numbers):
+            if should_cancel and should_cancel():
+                break
+            yield TrackingSample(number,None,None,0,False,state=TrackingState.LOST,reason="invalid_template")
+            if on_progress:
+                on_progress(index+1,len(frame_numbers))
+        log.debug("Tracker rejected seed at frame %s: invalid/low-variance template",seed_number)
+        return
+    yield TrackingSample(seed_number,*center,1.0,True)
+    if on_progress:
+        on_progress(1,len(frame_numbers))
+    last_frame,last_position = seed_number,np.array(center)
+    velocity = np.zeros(2)
+    lost = 0
+    confirmations = 0
+    candidate_previous = None
+    state = TrackingState.TRACKING
+    previous_radius = None
+    normal_radius = max(0.001,abs(float(search_radius)))
+    for index, number in enumerate(frame_numbers[1:],1):
+        if should_cancel and should_cancel():
             break
+        number = int(number)
+        elapsed = number-last_frame
+        predicted = last_position+velocity*elapsed
+        confidence = 0.0
+        candidate = None
+        reason = "no_match"
+        if lost <= options.max_lost_frames:
+            radius = normal_radius * min(options.max_search_multiplier,2 ** min(lost//2,4))
+            if lost and radius != previous_radius:
+                log.debug("Reacquisition radius increased to %.0f px",radius*width)
+            previous_radius = radius
+            if lost and state != TrackingState.REACQUIRING:
+                log.debug("Entering reacquisition at frame %s",number)
+            state = TrackingState.REACQUIRING if lost else TrackingState.TRACKING
+            frame = _safe_sample_frame(sample_frame,number)
+            if should_cancel and should_cancel():
+                break
+            if frame is not None and _is_valid_frame(frame) and frame.shape[:2] == (height,width):
+                candidate,confidence = _match_candidate(frame,template,predicted,radius,
+                    options.ambiguity_margin,should_cancel)
+            else:
+                reason = "unavailable_frame"
+            if should_cancel and should_cancel():
+                break
+            if not lost and not all(0 <= v <= 1 for v in predicted):
+                candidate,reason = None,"out_of_frame"
+            threshold = options.reacquire_threshold if lost else options.track_threshold
+            if candidate is not None:
+                deviation = float(np.linalg.norm(np.array(candidate)-predicted))
+                # Expanding the search is not permission to accept an impossible jump.
+                if deviation > options.max_jump:
+                    log.debug("Candidate rejected at frame %s: excessive position jump",number)
+                    candidate,reason = None,"position_jump"
+                elif confidence < threshold:
+                    candidate,reason = None,"low_confidence"
+                elif lost:
+                    if candidate_previous is not None:
+                        old_number,old_position = candidate_previous
+                        consistent = np.linalg.norm(np.array(candidate)-old_position-velocity*(number-old_number)) <= options.max_jump/2
+                        confirmations = confirmations+1 if consistent else 1
+                    else:
+                        confirmations = 1
+                    candidate_previous = number,np.array(candidate)
+                    if confirmations < options.confirmation_frames:
+                        candidate,reason = None,"confirming"
+            if candidate is None and reason != "confirming":
+                confirmations,candidate_previous = 0,None
+        else:
+            reason = "timeout"
+        if candidate is not None:
+            new_position = np.array(candidate)
+            if elapsed:
+                velocity = (new_position-last_position)/elapsed
+            reacquired = lost > 0
+            if reacquired:
+                log.debug("Tracker reacquired at frame %s, confidence=%.3f",number,confidence)
+            last_position,last_frame = new_position,number
+            lost,confirmations,candidate_previous = 0,0,None
+            state = TrackingState.TRACKING
+            yield TrackingSample(number,*candidate,confidence,True,reacquired=reacquired)
+        else:
+            lost += abs(number-int(frame_numbers[index-1]))
+            if lost == abs(number-int(frame_numbers[index-1])):
+                log.debug("Tracker lost at frame %s, confidence=%.3f",number,confidence)
+                state = TrackingState.LOST
+            elif lost > options.max_lost_frames:
+                if state != TrackingState.LOST:
+                    log.debug("Reacquisition expired at frame %s",number)
+                state = TrackingState.LOST
+            yield TrackingSample(number,None,None,confidence,False,
+                state=state,predicted_x=float(predicted[0]),predicted_y=float(predicted[1]),reason=reason)
+        if on_progress:
+            on_progress(index+1,len(frame_numbers))
+    return
 
-        frame_number = int(frame_number)
 
-        frame = _safe_sample_frame(
-            sample_frame,
-            frame_number,
-        )
-
-        if frame is not None and _is_valid_frame(frame):
-            matched = _match_patch(
-                frame,
-                template,
-                current_center,
-                search_radius,
-                seed_width,
-                seed_height,
-            )
-
-            if matched is not None:
-                current_center = matched
-                results[frame_number] = matched
-
-        if on_progress is not None:
-            on_progress(index + 1, total)
-
-    return results
+def _match_candidate(frame, template, predicted, radius, ambiguity_margin, should_cancel):
+    """Bounded, tiled correlation; check cancellation between OpenCV calls."""
+    height,width = frame.shape[:2]
+    th,tw = template.shape
+    cx,cy = predicted[0]*width,predicted[1]*height
+    x0,x1 = max(0,int(cx-radius*width-tw/2)),min(width,int(cx+radius*width+tw/2)+1)
+    y0,y1 = max(0,int(cy-radius*height-th/2)),min(height,int(cy+radius*height+th/2)+1)
+    if x1-x0 < tw or y1-y0 < th:
+        return None,0.0
+    # Convert only the ROI, never the full frame; retain the fixed template.
+    window = cv2.GaussianBlur(_to_gray_u8(frame[y0:y1,x0:x1]),(3,3),0)
+    peaks = []
+    for ty in range(0,window.shape[0]-th+1,128):
+        for tx in range(0,window.shape[1]-tw+1,128):
+            if should_cancel and should_cancel():
+                return None,0.0
+            tile = window[ty:ty+128+th-1,tx:tx+128+tw-1]
+            correlation = cv2.matchTemplate(tile,template,cv2.TM_CCOEFF_NORMED)
+            np.nan_to_num(correlation,copy=False,nan=-1,posinf=-1,neginf=-1)
+            # Keep distinct secondary peaks to reject ambiguous repeated textures.
+            for _ in range(2):
+                _,score,_,loc = cv2.minMaxLoc(correlation)
+                rx,ry = _refine_peak_subpixel(correlation,loc)
+                peaks.append((score,tx+rx,ty+ry))
+                px,py = loc
+                correlation[max(0,py-th//2):py+th//2+1,max(0,px-tw//2):px+tw//2+1] = -1
+    peaks.sort(reverse=True)
+    if not peaks:
+        return None,0.0
+    score,x,y = peaks[0]
+    for second,sx,sy in peaks[1:]:
+        if abs(x-sx) > tw/2 or abs(y-sy) > th/2:
+            if score-second < ambiguity_margin:
+                return None,float(score)
+            break
+    return ((x0+x+tw/2)/width,(y0+y+th/2)/height),float(score)
 
 
 def track_planar_range(
-    sample_frame: FrameSampler,
-    frame_numbers: list[int],
-    *,
-    initial_corners: tuple[
-        NormalizedPoint,
-        NormalizedPoint,
-        NormalizedPoint,
-        NormalizedPoint,
-    ],
-    region_size: NormalizedPoint,
-    search_radius: float,
-    should_cancel: CancelPoll | None = None,
-    on_progress: ProgressCallback | None = None,
-) -> tuple[
-    dict[int, NormalizedPoint],
-    dict[int, NormalizedPoint],
-    dict[int, NormalizedPoint],
-    dict[int, NormalizedPoint],
-]:
-    """Track four independent planar-tracking corner points.
+    sample_frame: FrameSampler, frame_numbers: list[int], *,
+    initial_corners: tuple[NormalizedPoint, NormalizedPoint, NormalizedPoint, NormalizedPoint],
+    region_size: NormalizedPoint, search_radius: float,
+    should_cancel: CancelPoll | None = None, on_progress: ProgressCallback | None = None,
+) -> tuple[dict, dict, dict, dict]:
+    """Advance the four existing point trackers together, sampling each image once.
 
-    The returned tuple is:
-
-        (
-            top_left,
-            top_right,
-            bottom_right,
-            bottom_left,
-        )
-
-    Each entry is a dictionary mapping frame numbers to normalized points.
+    Only the current source frame is retained, independent of job duration.
+    The planar API keeps its historical curve-pair format.
     """
-
-    empty_result = ({}, {}, {}, {})
-
-    if not frame_numbers:
-        return empty_result
-
-    corners = (
-        initial_corners[0],
-        initial_corners[1],
-        initial_corners[2],
-        initial_corners[3],
-    )
-
-    results: list[dict[int, NormalizedPoint]] = []
-
-    corner_count = 4
-
-    for corner_index, corner in enumerate(corners):
-        if should_cancel is not None and should_cancel():
-            results.append({})
-            continue
-
-        def corner_progress(
-            done: int,
-            total: int,
-            *,
-            _corner_index: int = corner_index,
-        ) -> None:
-            if on_progress is not None:
-                on_progress(
-                    (_corner_index * total) + done,
-                    total * corner_count,
-                )
-
-        result = track_point_range(
-            sample_frame,
-            frame_numbers,
-            initial_center=corner,
-            region_size=region_size,
-            search_radius=search_radius,
-            should_cancel=should_cancel,
-            on_progress=corner_progress,
-        )
-
-        results.append(result)
-
-    while len(results) < 4:
-        results.append({})
-
-    return (
-        results[0],
-        results[1],
-        results[2],
-        results[3],
-    )
+    cached_number = None
+    cached_frame = None
+    def shared_sample(number):
+        nonlocal cached_number,cached_frame
+        if number != cached_number:
+            cached_frame = _safe_sample_frame(sample_frame,number)
+            cached_number = number
+        return cached_frame
+    trackers = [_track_point_samples(shared_sample,frame_numbers,initial_center=corner,
+                region_size=region_size,search_radius=search_radius,should_cancel=should_cancel)
+                for corner in initial_corners]
+    results = ({},{},{},{})
+    for index,_ in enumerate(frame_numbers):
+        if should_cancel and should_cancel():
+            break
+        for tracker,result in zip(trackers,results):
+            sample = next(tracker,None)
+            if sample is not None and sample.valid:
+                result[sample.frame_number] = sample.x,sample.y
+        if on_progress:
+            on_progress((index+1)*4,len(frame_numbers)*4)
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -689,204 +610,6 @@ def _preprocess_template(
 # ---------------------------------------------------------------------------
 # Matching
 # ---------------------------------------------------------------------------
-
-
-def _match_patch(
-    frame: np.ndarray,
-    template_u8: np.ndarray,
-    predicted_center: NormalizedPoint,
-    search_radius: float,
-    width: int,
-    height: int,
-) -> NormalizedPoint | None:
-    """Find the best template match around a predicted position."""
-
-    if not _is_valid_frame(frame):
-        return None
-
-    frame_height, frame_width = frame.shape[:2]
-
-    if frame_width != width:
-        return None
-
-    if frame_height != height:
-        return None
-
-    template_height, template_width = (
-        template_u8.shape[:2]
-    )
-
-    if template_width <= 0:
-        return None
-
-    if template_height <= 0:
-        return None
-
-    if template_width > width:
-        return None
-
-    if template_height > height:
-        return None
-
-    if _template_is_degenerate(template_u8):
-        return None
-
-    # ---------------------------------------------------------------
-    # Calculate search region
-    # ---------------------------------------------------------------
-
-    # Slightly more generous margin to better handle fast motion.
-    margin_x = max(
-        _MIN_HALF_EXTENT_PX,
-        int(round(abs(search_radius) * width * 1.25)),
-    )
-
-    margin_y = max(
-        _MIN_HALF_EXTENT_PX,
-        int(round(abs(search_radius) * height * 1.25)),
-    )
-
-    cx = int(round(
-        predicted_center[0] * width
-    ))
-
-    cy = int(round(
-        predicted_center[1] * height
-    ))
-
-    # Include the complete template around every possible center in the
-    # search radius.
-    half_search_x = (
-        margin_x
-        + template_width // 2
-    )
-
-    half_search_y = (
-        margin_y
-        + template_height // 2
-    )
-
-    x0 = max(
-        0,
-        cx - half_search_x,
-    )
-
-    y0 = max(
-        0,
-        cy - half_search_y,
-    )
-
-    x1 = min(
-        width,
-        cx + half_search_x,
-    )
-
-    y1 = min(
-        height,
-        cy + half_search_y,
-    )
-
-    if x1 - x0 < template_width:
-        return None
-
-    if y1 - y0 < template_height:
-        return None
-
-    window = frame[
-        y0:y1,
-        x0:x1,
-    ]
-
-    if window.size == 0:
-        return None
-
-    window_u8 = _to_gray_u8(window)
-
-    if window_u8.shape[1] < template_width:
-        return None
-
-    if window_u8.shape[0] < template_height:
-        return None
-
-    # Light denoising of the search window to stabilize correlation.
-    try:
-        window_u8 = cv2.GaussianBlur(
-            window_u8,
-            (3, 3),
-            0.0,
-        )
-    except cv2.error:
-        # If blur fails, keep the original window.
-        pass
-
-    # ---------------------------------------------------------------
-    # Perform normalized cross-correlation
-    # ---------------------------------------------------------------
-
-    try:
-        correlation = cv2.matchTemplate(
-            window_u8,
-            template_u8,
-            cv2.TM_CCOEFF_NORMED,
-        )
-    except cv2.error:
-        return None
-
-    if correlation.size == 0:
-        return None
-
-    # OpenCV may generate NaN for pathological low-variance inputs.
-    correlation = np.nan_to_num(
-        correlation,
-        nan=-1.0,
-        posinf=-1.0,
-        neginf=-1.0,
-    )
-
-    _min_value, max_value, _min_location, max_location = (
-        cv2.minMaxLoc(correlation)
-    )
-
-    if not np.isfinite(max_value):
-        return None
-
-    if max_value < _MATCH_CONFIDENCE_FLOOR:
-        return None
-
-    # ---------------------------------------------------------------
-    # Subpixel refinement of the correlation peak
-    # ---------------------------------------------------------------
-
-    refined_x, refined_y = _refine_peak_subpixel(
-        correlation,
-        max_location,
-    )
-
-    # ---------------------------------------------------------------
-    # Convert match location to template center
-    # ---------------------------------------------------------------
-
-    match_x = (
-        x0
-        + refined_x
-        + template_width * 0.5
-    )
-
-    match_y = (
-        y0
-        + refined_y
-        + template_height * 0.5
-    )
-
-    normalized_x = match_x / width
-    normalized_y = match_y / height
-
-    return _clamp_point(
-        (
-            normalized_x,
-            normalized_y,
-        )
-    )
 
 
 def _refine_peak_subpixel(
