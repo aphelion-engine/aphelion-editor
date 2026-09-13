@@ -1,6 +1,8 @@
 """Installed console-script entry for Aphelion Editor."""
 
 from __future__ import annotations
+from utils.logging_setup import (configure_logging, get_logger,
+                                 install_exception_hooks, log_banner)
 
 import sys
 
@@ -14,7 +16,6 @@ from pathlib import Path
 
 from config.constants import APP_VERSION
 from ui.windows.runtime import AphelionRuntime
-from utils.logging_setup import configure_logging, get_logger, install_exception_hooks, log_banner
 
 # Strong process-lifetime reference (prevents GC of the session/windows).
 _RUNTIME: AphelionRuntime | None = None
@@ -52,6 +53,15 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Output directory for --build (frozen tree) or --build-installer (MSI).",
     )
+    # ``--benchmark-playback`` and friends. Imported lazily so a normal
+    # editor launch never pays for the benchmark module's imports.
+    try:
+        from tools.playback_benchmark import \
+            add_arguments as _add_benchmark_args
+
+        _add_benchmark_args(parser)
+    except Exception:  # noqa: BLE001 - benchmark tooling must not block launch
+        pass
     return parser
 
 
@@ -129,6 +139,17 @@ def main() -> int:
         Process exit code.
     """
     args = _build_parser().parse_args()
+
+    # Performance test mode: measure and exit, never launch the editor.
+    try:
+        from tools.playback_benchmark import main_from_args
+
+        benchmark_exit = main_from_args(args)
+    except Exception:  # noqa: BLE001
+        benchmark_exit = None
+    if benchmark_exit is not None:
+        return benchmark_exit
+
     packaged = _run_packaging(args)
     if packaged is not None:
         return packaged

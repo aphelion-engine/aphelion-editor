@@ -18,6 +18,7 @@ from core.nodes.video_input import VideoInputNode
 from core.preferences.models import PluginSettings
 from core.preferences.store import PreferencesStore
 from core.project import Project
+from render.video_decoder import prepare_media
 from utils.logging_setup import get_logger
 
 _LOG = get_logger("boot.driver")
@@ -330,6 +331,17 @@ class EditorBootDriver:
 
             if info is not None:
                 probed += 1
+                # Queue the two artefacts that make *later* interaction
+                # fast: an all-intra editing proxy and a keyframe index.
+                # Both run on the background scheduler, which yields to
+                # interactive work and pauses during playback, so opening a
+                # project never waits for them.
+                if len(info) >= 4:
+                    prepare_media(
+                        path_value,
+                        fps=float(info[0]),
+                        frame_count=round(float(info[1]) * float(info[0])),
+                    )
             else:
                 missing += 1
 

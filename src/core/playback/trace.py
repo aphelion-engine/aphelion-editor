@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
-__all__ = ["FrameRecord", "FrameTrace", "StallReport"]
+__all__ = ["FrameRecord", "FrameTrace", "StallReport", "get_frame_trace"]
 
 #: Stages tracked per frame, in pipeline order.
 STAGES: tuple[str, ...] = ("decode_ms", "graph_ms", "convert_ms", "upload_ms")
@@ -441,3 +441,28 @@ def summarise_stages(records: Iterable[FrameRecord]) -> dict[str, float]:
         stage: statistics.fmean(record.stage_ms(stage) for record in items)
         for stage in STAGES
     }
+
+
+# ----------------------------------------------------------------------
+# Process-wide trace
+# ----------------------------------------------------------------------
+
+_TRACE: FrameTrace | None = None
+
+
+def get_frame_trace() -> FrameTrace:
+    """Return the process-wide frame trace.
+
+    One trace per process keeps the overlay, the worker, and the trace-dump
+    command reading the same records instead of three separate rings.
+    """
+    global _TRACE
+    if _TRACE is None:
+        _TRACE = FrameTrace()
+    return _TRACE
+
+
+def reset_frame_trace() -> None:
+    """Discard the process-wide trace (used by tests and benchmarks)."""
+    global _TRACE
+    _TRACE = None

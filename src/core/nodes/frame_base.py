@@ -7,15 +7,9 @@ from enum import Enum
 from typing import TypeVar
 
 import numpy as np
-
 from core.audio import AudioData, FrameWithAudio
-from core.nodes.base import (
-    NEUTRAL_COLOR_RGB,
-    ColorRgb,
-    Node,
-    NodeProperty,
-    NodeSocketType,
-)
+from core.nodes.base import (NEUTRAL_COLOR_RGB, ColorRgb, Node, NodeProperty,
+                             NodeSocketType)
 from core.nodes.property_factory import slider_property, toggle_property
 from effects.frame_ops import ensure_rgb_f32, mix_frames
 

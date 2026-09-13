@@ -5,7 +5,6 @@ from __future__ import annotations
 from enum import IntEnum, auto
 
 import numpy as np
-
 from config.constants import DEFAULT_FPS, DEFAULT_PREVIEW_MAX_WIDTH
 from core.audio import AudioData, FrameWithAudio
 from core.nodes.base import (FRAME_DTYPE, MediaEdgeMode, Node, NodeProperty,

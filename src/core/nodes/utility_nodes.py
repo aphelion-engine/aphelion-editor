@@ -3,16 +3,12 @@
 from __future__ import annotations
 
 import numpy as np
-
 from core.audio import FrameWithAudio
 from core.nodes.base import NodeSocketType
 from core.nodes.enums import MaskChannel, SwitchInput
 from core.nodes.frame_base import FrameNode
-from core.nodes.property_factory import (
-    choice_property,
-    slider_property,
-    toggle_property,
-)
+from core.nodes.property_factory import (choice_property, slider_property,
+                                         toggle_property)
 from effects.masks import channel_mask, invert_mask
 
 

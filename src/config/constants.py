@@ -1,8 +1,8 @@
 """Shared project defaults used across core and UI."""
 
-APP_NAME: str = "Aphelion"
+APP_NAME: str = "Aphelion Editor"
 APP_ORGANIZATION: str = "Aphelion"
-APP_VERSION: str = "0.1.0"
+APP_VERSION: str = "0.1.1"
 
 # Drop-in plugin folders: bundled ``plugins/`` and writable ``userdata/plugins/``.
 USERDATA_DIR_NAME: str = "userdata"

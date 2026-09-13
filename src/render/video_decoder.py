@@ -42,6 +42,19 @@ _LOGGING_CONFIGURED = False
 _DECODE_CACHE_FRAMES: int = DEFAULT_DECODE_CACHE_FRAMES
 _HARDWARE_DECODE_ENABLED: bool = False
 
+#: Whether verified editing proxies may be substituted for originals.
+_PROXY_ENABLED: bool = True
+
+
+def set_proxy_enabled(enabled: bool) -> None:
+    """Enable or disable editing-proxy substitution for newly opened media.
+
+    Already-open captures keep whatever they opened with; the change takes
+    effect the next time a ``VideoDecoder`` opens a file.
+    """
+    global _PROXY_ENABLED
+    _PROXY_ENABLED = bool(enabled)
+
 # ----------------------------------------------------------------
 # Media metadata cache (Section 58: never re-probe an unchanged file)
 # ----------------------------------------------------------------
@@ -143,6 +156,12 @@ class VideoDecoder:
     def __init__(self) -> None:
         self._capture: cv2.VideoCapture | None = None
         self._path: str | None = None
+        #: Original media path; differs from ``_path`` when a proxy is used.
+        self._source_path: str | None = None
+        #: Proxy actually being decoded, when one is in use.
+        self._proxy_path: str | None = None
+        #: Cached keyframe index for the source, when one has been built.
+        self._keyframes = None
         self._fps: float = 30.0
         self._frame_count: int = 0
         self._width: int = 0
@@ -158,22 +177,84 @@ class VideoDecoder:
 
     @property
     def path(self) -> str | None:
+        """Path currently being decoded (the proxy, when one is in use)."""
         return self._path
+
+    @property
+    def source_path(self) -> str | None:
+        """Path of the original media, regardless of proxy substitution."""
+        return self._source_path
+
+    @property
+    def is_proxy(self) -> bool:
+        """Whether pixels are coming from a generated editing proxy."""
+        return self._proxy_path is not None
 
     @property
     def is_open(self) -> bool:
         return self._capture is not None and self._capture.isOpened()
 
+    def decode_distance(self, frame_num: int) -> int:
+        """Frames needing decode after a keyframe to reach ``frame_num``.
+
+        ``0`` means the frame is a keyframe and is reachable instantly. The
+        deadline scheduler uses this to estimate seek cost before starting
+        work, instead of discovering it after the fact.
+        """
+        index = self._keyframes
+        if index is None or not index.complete:
+            return -1
+        return index.decode_distance(frame_num)
+
+    def _adopt_proxy(self, path: str) -> tuple[str, dict[str, object]] | None:
+        """Return ``(decode_path, source_meta)`` when a proxy is usable.
+
+        Source metadata is taken from the proxy manifest so the original
+        container never has to be re-opened (which would both cost a probe
+        and risk a lock-order problem with the capture lock).
+        """
+        if not _PROXY_ENABLED:
+            return None
+        try:
+            from core.media.proxy import get_proxy_manager
+
+            entry = get_proxy_manager().lookup_with_info(path)
+        except Exception:  # noqa: BLE001 - proxies are strictly optional
+            return None
+
+        if entry is None:
+            return None
+
+        proxy_path, manifest = entry
+        return str(proxy_path), manifest
+
     def open(self, path: str) -> MediaInfo | None:
-        """Open ``path`` and return media info, or ``None`` on failure."""
+        """Open ``path`` and return media info, or ``None`` on failure.
+
+        When a verified editing proxy exists for ``path`` and proxy use is
+        enabled, pixels are read from the proxy while the *source's*
+        properties are reported to the timeline. The substitution is
+        invisible above this class: frame numbers, frame rate, dimensions,
+        and audio all still describe the original media.
+        """
+        adopted = self._adopt_proxy(path)
+        decode_path = adopted[0] if adopted is not None else path
+
         with _CAPTURE_LOCK:
-            if self._path == path and self.is_open:
+            if self._path == decode_path and self._source_path == path and self.is_open:
                 return self.info()
 
             self._close_unlocked()
-            capture = cv2.VideoCapture(path, cv2.CAP_FFMPEG)
+            capture = cv2.VideoCapture(decode_path, cv2.CAP_FFMPEG)
             if _HARDWARE_DECODE_ENABLED:
                 _try_enable_hardware_acceleration(capture)
+            if not capture.isOpened() and adopted is not None:
+                # A broken proxy must never make the media unopenable: fall
+                # back to the original file and carry on.
+                capture.release()
+                adopted = None
+                decode_path = path
+                capture = cv2.VideoCapture(path, cv2.CAP_FFMPEG)
             if not capture.isOpened():
                 capture.release()
                 return None
@@ -188,14 +269,35 @@ class VideoDecoder:
                 capture.release()
                 return None
 
+            if adopted is not None:
+                # Prefer the source's own metadata over the proxy's.
+                manifest = adopted[1]
+                source_width = _manifest_int(manifest, "source_width")
+                source_height = _manifest_int(manifest, "source_height")
+                source_frames = _manifest_int(manifest, "frame_count")
+                source_fps = _manifest_float(manifest, "fps")
+                if source_width > 0 and source_height > 0:
+                    width, height = source_width, source_height
+                if source_frames > 0:
+                    frame_count = source_frames
+                if source_fps > 0.0:
+                    fps = source_fps
+
             self._capture = capture
-            self._path = path
+            self._path = decode_path
+            self._source_path = path
+            self._proxy_path = decode_path if adopted is not None else None
             self._fps = fps
             self._frame_count = max(0, frame_count)
             self._width = width
             self._height = height
             self._next_index = 0
             self._frame_cache.clear()
+
+            # A keyframe index makes seeks exact instead of probe-and-walk.
+            # It is looked up (never built) here so opening media stays fast;
+            # building happens on the background scheduler.
+            self._keyframes = _lookup_keyframe_index(path, fps)
 
             # Open audio decoder
             self._audio_info = self._audio_decoder.open(path)
@@ -240,6 +342,9 @@ class VideoDecoder:
             self._capture.release()
         self._capture = None
         self._path = None
+        self._source_path = None
+        self._proxy_path = None
+        self._keyframes = None
         self._next_index = 0
         self._frame_cache.clear()
         self._audio_decoder.close()
@@ -281,6 +386,16 @@ class VideoDecoder:
         while len(self._frame_cache) > max(1, _DECODE_CACHE_FRAMES):
             self._frame_cache.popitem(last=False)
 
+    def clear_frame_cache(self) -> None:
+        """Drop the decoded-frame LRU.
+
+        Public because benchmarks need to measure genuinely cold seeks, and
+        a private-attribute poke from outside the class is exactly the kind
+        of coupling this module should not encourage.
+        """
+        with _CAPTURE_LOCK:
+            self._frame_cache.clear()
+
     def _held_frame(self, max_width: int) -> np.ndarray | None:
         if not self._frame_cache:
             return None
@@ -312,23 +427,49 @@ class VideoDecoder:
             self._next_index = target
             return True
 
-        # Prefer time-based seek — slightly more stable than POS_FRAMES on H.264.
-        time_ms = (target / max(self._fps, 0.001)) * 1000.0
+        # --------------------------------------------------------------
+        # Precise seek using the keyframe index when one is available.
+        #
+        # Without an index this has to seek, read back where the decoder
+        # actually landed, then walk forward towards the target — a probe
+        # loop whose length depends on the GOP structure it is discovering.
+        # With an index we already know the keyframe that starts the target
+        # GOP, so we can seek straight to it and count the remaining frames
+        # without guessing.
+        # --------------------------------------------------------------
+        seek_target = target
+        index = self._keyframes
+        if index is not None and index.complete:
+            seek_target = index.nearest_before(target)
+
+        time_ms = (seek_target / max(self._fps, 0.001)) * 1000.0
         with profiler.scope("seek"):
             seeked = self._capture.set(cv2.CAP_PROP_POS_MSEC, time_ms)
             if not seeked:
-                seeked = self._capture.set(cv2.CAP_PROP_POS_FRAMES, float(target))
+                seeked = self._capture.set(
+                    cv2.CAP_PROP_POS_FRAMES, float(seek_target))
         if not seeked:
             return False
 
         # After a hard seek, reported position can be a nearby keyframe.
-        reported = int(self._capture.get(cv2.CAP_PROP_POS_FRAMES) or target)
+        reported = int(self._capture.get(
+            cv2.CAP_PROP_POS_FRAMES) or seek_target)
         self._next_index = max(0, reported)
-        if self._next_index < target:
-            for _ in range(min(target - self._next_index, _MAX_FORWARD_GRABS)):
-                if not self._capture.grab():
-                    break
-                self._next_index += 1
+
+        remaining = target - self._next_index
+        if remaining <= 0:
+            return True
+
+        # A known GOP lets us cap the walk; an unknown one falls back to the
+        # historical heuristic rather than risking a very long grab loop.
+        horizon = _MAX_FORWARD_GRABS
+        if index is not None and index.complete:
+            horizon = max(_MAX_FORWARD_GRABS, remaining)
+
+        for _ in range(min(remaining, horizon)):
+            if not self._capture.grab():
+                break
+            self._next_index += 1
         return True
 
     @staticmethod
@@ -370,6 +511,89 @@ class VideoDecoder:
                 channels=self._audio_info.num_channels if self._audio_info else 2,
             )
         return self._audio_decoder.extract_audio_for_time_range(start_time_sec, duration_sec)
+
+
+def _lookup_keyframe_index(path: str, fps: float):
+    """Return a cached keyframe index for ``path``, or ``None``.
+
+    Deliberately lookup-only: opening media must never block on indexing.
+    :func:`prepare_media` queues the build on the background scheduler.
+    """
+    try:
+        from core.media.index import get_keyframe_index_cache
+
+        return get_keyframe_index_cache().cached(path, fps)
+    except Exception:  # noqa: BLE001 - indexing is best-effort
+        return None
+
+
+def _manifest_int(manifest: dict[str, object], key: str) -> int:
+    """Read an integer from a proxy manifest, tolerating missing/garbage data."""
+    try:
+        return int(manifest.get(key) or 0)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0
+
+
+def _manifest_float(manifest: dict[str, object], key: str) -> float:
+    """Read a float from a proxy manifest, tolerating missing/garbage data."""
+    try:
+        return float(manifest.get(key) or 0.0)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def prepare_media(
+    path: str,
+    *,
+    fps: float = 0.0,
+    frame_count: int = 0,
+    generate_proxy: bool = True,
+    build_index: bool = True,
+) -> None:
+    """Queue background proxy generation and keyframe indexing for ``path``.
+
+    Called when media enters a project. It returns immediately: the original
+    file is usable straight away, and the two artefacts that make *later*
+    interaction fast are produced on the background scheduler, which yields
+    to interactive work and pauses entirely during playback.
+
+    Parameters:
+        path: Media file to prepare.
+        fps: Source frame rate; probed when omitted.
+        frame_count: Source frame count; probed when omitted.
+        generate_proxy: Queue an editing proxy when none exists.
+        build_index: Queue a keyframe index when none exists.
+    """
+    if not path:
+        return
+
+    resolved_fps = float(fps)
+    resolved_frames = int(frame_count)
+
+    if resolved_fps <= 0.0 or resolved_frames <= 0:
+        info = probe_video(path)
+        if info is not None:
+            resolved_fps = resolved_fps or info.fps
+            resolved_frames = resolved_frames or info.frame_count
+
+    if build_index and resolved_fps > 0.0 and resolved_frames > 0:
+        try:
+            from core.media.index import get_keyframe_index_cache
+
+            get_keyframe_index_cache().ensure(path, resolved_fps, resolved_frames)
+        except Exception:  # noqa: BLE001
+            pass
+
+    if generate_proxy:
+        try:
+            from core.media.proxy import get_proxy_manager
+
+            manager = get_proxy_manager()
+            if manager.enabled:
+                manager.ensure(path)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _probe_video_metadata(path: str) -> tuple[float, int, int, int] | None:

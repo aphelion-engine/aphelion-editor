@@ -115,6 +115,11 @@ class PreferencesDialog(QDialog):
             self._high_quality_after_scrub: "Render the frame under the playhead at full quality after a drag ends.",
             self._worker_threads: "Worker threads for background jobs. Auto leaves capacity for the UI, decoder, FFmpeg, and OpenCV.",
             self._pause_background: "Hold low-priority jobs (media probing, cache warming) while playback is running.",
+            self._use_proxies: "Decode from a generated all-intra proxy when one exists. Cuts seek and decode cost dramatically on long-GOP camera media.",
+            self._generate_proxies: "Create proxies in the background as media enters a project. Generation yields to playback.",
+            self._proxy_height: "Resolution of generated proxies. Lower is faster to scrub; 540p is a good default for 1080p and 4K sources.",
+            self._render_cache_mode: "Off never caches. Smart detects branches that cannot meet the frame deadline and caches them. User caches what you mark.",
+            self._disk_cache_limit: "Maximum disk space for generated proxies and render cache.",
             self._hardware_decode: "Request hardware video decoding where supported; unsupported codecs or devices may use software decoding.",
             self._show_overlay: "Show actual displayed FPS, preview dimensions, and frame-cache memory usage in the viewport.",
             self._adaptive_preview: "When rendering misses the frame budget, reduce preview resolution with hysteresis. Pausing restores the normal preview width. Exports are unaffected.",
@@ -498,6 +503,67 @@ class PreferencesDialog(QDialog):
         layout.addWidget(proxy_group)
 
         # ------------------------------------------------------------------
+        # Media engine: editing proxies and the render cache
+        # ------------------------------------------------------------------
+        media_group = QGroupBox("Media Engine")
+        media_group.setObjectName("PreferencesGroup")
+        media_form = QFormLayout(media_group)
+
+        self._use_proxies = QCheckBox("Use generated editing proxies")
+        self._use_proxies.setChecked(perf.use_editing_proxies)
+        media_form.addRow(self._use_proxies)
+
+        self._generate_proxies = QCheckBox(
+            "Generate proxies automatically for new media"
+        )
+        self._generate_proxies.setChecked(perf.generate_proxies_automatically)
+        media_form.addRow(self._generate_proxies)
+
+        self._proxy_height = QComboBox()
+        self._proxy_height.addItem("Auto", 0)
+        self._proxy_height.addItem("720p", 720)
+        self._proxy_height.addItem("540p", 540)
+        self._proxy_height.addItem("360p", 360)
+        proxy_index = self._proxy_height.findData(int(perf.proxy_height))
+        self._proxy_height.setCurrentIndex(max(0, proxy_index))
+        media_form.addRow("Proxy resolution", self._proxy_height)
+
+        self._render_cache_mode = QComboBox()
+        self._render_cache_mode.addItem("Off", "off")
+        self._render_cache_mode.addItem("Smart (auto-cache heavy branches)", "smart")
+        self._render_cache_mode.addItem("User (cache what you mark)", "user")
+        cache_index = self._render_cache_mode.findData(perf.render_cache_mode)
+        self._render_cache_mode.setCurrentIndex(max(0, cache_index))
+        media_form.addRow("Render cache", self._render_cache_mode)
+
+        self._disk_cache_limit = QSpinBox()
+        self._disk_cache_limit.setObjectName("PreferencesSpin")
+        self._disk_cache_limit.setRange(0, 262_144)
+        self._disk_cache_limit.setSingleStep(512)
+        self._disk_cache_limit.setSuffix(" MB")
+        self._disk_cache_limit.setValue(perf.disk_cache_limit_mb)
+        media_form.addRow("Disk cache limit", self._disk_cache_limit)
+
+        clear_proxies = QPushButton("Clear Proxy Cache")
+        clear_proxies.setToolTip(
+            "Delete generated proxies. They are rebuilt in the background"
+            " the next time their media is used."
+        )
+        clear_proxies.clicked.connect(self._clear_proxy_cache_requested)
+        media_form.addRow(clear_proxies)
+
+        media_hint = QLabel(
+            "Proxies are all-intra, low-resolution copies of your media used"
+            " only for editing. Originals are never modified and export always"
+            " uses the original."
+        )
+        media_hint.setObjectName("PreferencesHint")
+        media_hint.setWordWrap(True)
+        media_form.addRow(media_hint)
+
+        layout.addWidget(media_group)
+
+        # ------------------------------------------------------------------
         # Debugging
         # ------------------------------------------------------------------
         diag_group = QGroupBox("Performance Diagnostics")
@@ -619,6 +685,27 @@ class PreferencesDialog(QDialog):
     def _clear_caches_requested(self) -> None:
         """Ask the editor to flush caches; the editor owns the live state."""
         self.clear_caches_requested.emit()
+
+    def _clear_proxy_cache_requested(self) -> None:
+        """Delete generated editing proxies and report how much was freed."""
+        try:
+            from core.media.proxy import get_proxy_manager
+
+            manager = get_proxy_manager()
+            freed = manager.cache_size_bytes()
+            removed = manager.clear()
+        except Exception as exc:  # noqa: BLE001 - never block on cleanup
+            QMessageBox.warning(
+                self, "Clear Proxy Cache", f"Could not clear the proxy cache.\n\n{exc}"
+            )
+            return
+
+        QMessageBox.information(
+            self,
+            "Clear Proxy Cache",
+            f"Removed {removed} file(s), freeing {freed / (1024 * 1024):.1f} MB.\n\n"
+            "Proxies are regenerated in the background when their media is used again.",
+        )
 
     def _use_low_lag_preset(self) -> None:
         """Apply the Eco profile, which is the modern low-lag preset."""
@@ -1214,6 +1301,11 @@ class PreferencesDialog(QDialog):
         self._working.performance = replace(
             previous_perf,
             performance_profile=str(self._profile_combo.currentData()),
+            use_editing_proxies=self._use_proxies.isChecked(),
+            generate_proxies_automatically=self._generate_proxies.isChecked(),
+            proxy_height=int(self._proxy_height.currentData() or 0),
+            render_cache_mode=str(self._render_cache_mode.currentData()),
+            disk_cache_limit_mb=int(self._disk_cache_limit.value()),
             frame_cache_mb=int(self._frame_cache_mb.value()),
             decode_cache_frames=int(self._decode_cache_frames.value()),
             prefetch_enabled=self._prefetch_enabled.isChecked(),

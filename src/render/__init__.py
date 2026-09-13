@@ -2,7 +2,8 @@
 
 from render.frame_evaluator import FrameEvaluationWorker
 from render.preview import PreviewSettings, ViewerBackground, ViewportFitMode
-from render.video_decoder import MediaInfo, VideoDecoder, probe_video
+from render.video_decoder import (MediaInfo, VideoDecoder, prepare_media,
+                                  probe_video)
 
 __all__ = [
     "FrameEvaluationWorker",
@@ -11,5 +12,6 @@ __all__ = [
     "VideoDecoder",
     "ViewerBackground",
     "ViewportFitMode",
+    "prepare_media",
     "probe_video",
 ]

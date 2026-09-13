@@ -214,6 +214,7 @@ class ProxyManager:
         self._cache_root = Path(cache_root) if cache_root else _default_cache_root()
         self._status: "OrderedDict[str, ProxyStatus]" = OrderedDict()
         self._durations: dict[str, float] = {}
+        self._source_dimensions: dict[str, tuple[int, int]] = {}
         self._lock = threading.RLock()
         self._in_flight: set[str] = set()
         self._enabled = True
@@ -297,6 +298,19 @@ class ProxyManager:
         This is a pure filesystem/registration check: it never starts work,
         so it is safe to call from the evaluation hot path.
         """
+        entry = self.lookup_with_info(source)
+        return entry[0] if entry is not None else None
+
+    def lookup_with_info(
+        self, source: str | Path
+    ) -> tuple[Path, dict[str, object]] | None:
+        """Return ``(proxy_path, manifest)`` for a usable proxy.
+
+        The manifest carries the *source's* frame count, frame rate, and
+        dimensions, which lets the decoder adopt a proxy for pixels while
+        still reporting the original media's properties to the timeline —
+        without re-opening the original container.
+        """
         path = Path(source)
         if not path.is_file():
             return None
@@ -316,7 +330,7 @@ class ProxyManager:
         if data.get("verified") is not True:
             return None
 
-        return proxy
+        return proxy, data
 
     def status(self, source: str | Path) -> ProxyStatus:
         """Return the current proxy status for ``source``."""
@@ -431,6 +445,10 @@ class ProxyManager:
             if not verified:
                 raise RuntimeError("proxy verification failed")
 
+            dimensions = self._source_dimensions.get(
+                os.path.normcase(os.path.abspath(str(source))), (0, 0)
+            )
+
             temporary.replace(proxy)
             self.manifest_path(proxy).write_text(
                 json.dumps(
@@ -440,6 +458,8 @@ class ProxyManager:
                         "verified": True,
                         "frame_count": frame_count,
                         "fps": fps,
+                        "source_width": dimensions[0],
+                        "source_height": dimensions[1],
                         "spec": {
                             "height": self._spec.height,
                             "crf": self._spec.crf,
@@ -565,8 +585,8 @@ class ProxyManager:
         if source_info is None or proxy_info is None:
             return False, 0, 0.0
 
-        src_frames, src_fps = source_info
-        out_frames, out_fps = proxy_info
+        src_frames, src_fps, src_width, src_height = source_info
+        out_frames, out_fps, _out_width, _out_height = proxy_info
 
         if src_frames <= 0 or out_frames <= 0:
             return False, out_frames, out_fps
@@ -585,16 +605,18 @@ class ProxyManager:
             _LOG.debug("Proxy fps mismatch for %s: %s vs %s", source.name, out_fps, src_fps)
             return False, out_frames, out_fps
 
-        if src_fps > 0.0:
-            with self._lock:
-                self._durations[os.path.normcase(os.path.abspath(str(source)))] = (
-                    src_frames / src_fps
-                )
+        key = os.path.normcase(os.path.abspath(str(source)))
+        with self._lock:
+            if src_fps > 0.0:
+                self._durations[key] = src_frames / src_fps
+            if src_width > 0 and src_height > 0:
+                self._source_dimensions[key] = (src_width, src_height)
+
         return True, out_frames, out_fps
 
     @staticmethod
-    def _ffprobe_stream(ffprobe: str, path: Path) -> tuple[int, float] | None:
-        """Return ``(frame_count, fps)`` for the first video stream."""
+    def _ffprobe_stream(ffprobe: str, path: Path) -> tuple[int, float, int, int] | None:
+        """Return ``(frame_count, fps, width, height)`` for the first video stream."""
         command = [
             ffprobe,
             "-v", "error",
@@ -729,5 +751,7 @@ def _default_cache_root() -> Path:
 
 
 def _no_window_flag() -> int:
+    """Return the subprocess flag that suppresses a console window on Windows."""
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0)
     """Return the subprocess flag that suppresses a console window on Windows."""
     return getattr(subprocess, "CREATE_NO_WINDOW", 0)

@@ -9,12 +9,12 @@ import numpy as np
 from config.constants import PERF_OVERLAY_REFRESH_MS
 from core.audio import AudioData, FrameWithAudio
 from core.events import ObserverEvent
-from core.nodes.base import FRAME_DTYPE
 from core.perf.profiler import profiler, set_profiling_enabled
+from core.playback.clock import ClockSource
 from core.preferences.models import PerformanceSettings
 from core.project import Project
 from effects.frame_ops import to_display_u8
-from PyQt6.QtCore import QEvent, QRect, Qt
+from PyQt6.QtCore import QEvent, QRect, Qt, QTimer
 from PyQt6.QtGui import QCloseEvent, QImage, QPixmap, QResizeEvent
 from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
 from render.audio_playback import get_audio_engine
@@ -35,6 +35,21 @@ def _qt_image_buffer(frame: np.ndarray) -> bytes:
     """Expose an ndarray buffer to Qt without allocating a second copy."""
     # PyQt accepts the Python buffer protocol, but its stub declares only bytes.
     return cast(bytes, frame.data)
+
+
+class _NullTrace:
+    """Stand-in used when the frame-trace module is unavailable."""
+
+    __slots__ = ()
+
+    def set_enabled(self, _enabled: bool) -> None:
+        """Accept and ignore the enable request."""
+
+    def note_dropped(self, _count: int = 1) -> None:
+        """Accept and ignore a drop notification."""
+
+
+_NULL_TRACE = _NullTrace()
 
 
 def _viewer_preview_width(project: Project) -> int:
@@ -84,6 +99,14 @@ class ViewportWidget(QWidget):
         self._displayed_frame_ms: float = 0.0
         self._overlay_last_refresh: float = 0.0
 
+        # Audio-master clock: a low-rate timer samples how much audio the
+        # device has actually consumed and corrects video timing to match.
+        # 10 Hz is plenty when corrections are slew-limited rather than
+        # applied as jumps.
+        self._audio_clock_timer = QTimer(self)
+        self._audio_clock_timer.setInterval(100)
+        self._audio_clock_timer.timeout.connect(self._sync_audio_clock)
+
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
 
@@ -127,10 +150,43 @@ class ViewportWidget(QWidget):
         self._worker = FrameEvaluationWorker(project)
         self._worker.frame_ready.connect(self._on_frame_ready)
         self._worker.frame_discarded.connect(self._on_frame_discarded)
+        self._worker.quality_suggested.connect(self._on_quality_suggested)
         self._worker.start()
 
         self.project.subscribe(self.on_project_changed)
         self.request_update()
+
+    def _sync_audio_clock(self) -> None:
+        """Correct the playback clock against the audio device's progress.
+
+        Audio is the only clock the user actually hears, so video timing is
+        slaved to it. ``presented_seconds`` counts from playback start, which
+        is exactly the elapsed-timeline-seconds value the clock wants.
+        """
+        if not self._playback_active or self._scrubbing:
+            return
+        if not self._audio_engine.is_enabled():
+            return
+        presented = self._audio_engine.presented_seconds()
+        if presented <= 0.0:
+            return
+        self._worker.resync_clock_to_audio(presented)
+
+    def _on_quality_suggested(self, scale_percent: int) -> None:
+        """Apply a preview-scale decision from the quality governor.
+
+        The governor only emits when it has actually stepped, and it already
+        applies hysteresis, so this never fires frame-to-frame. The scale is
+        resolved against the Viewer's own width (not the currently
+        overridden one) so repeated steps cannot ratchet the proxy down.
+        """
+        base_width = _viewer_preview_width(self.project)
+        target = max(160, int(base_width * max(1, scale_percent) / 100))
+        if target >= base_width:
+            self._adaptive_width = None
+        else:
+            self._adaptive_width = target
+        self._sync_playback_proxy_override()
 
     def apply_performance_settings(self, performance: PerformanceSettings) -> None:
         """Apply Performance preferences: prefetch, dropping, proxies, overlay.
@@ -139,10 +195,10 @@ class ViewportWidget(QWidget):
             performance: Resolved global performance preferences.
 
         Side effects:
-            Updates the evaluation worker's prefetch/drop policy, clears and
-            re-applies the playback proxy override, toggles the on-screen
-            performance overlay, and enables profiling when diagnostics are
-            requested.
+            Updates the evaluation worker's prefetch/drop policy and
+            governor range, clears and re-applies the playback proxy
+            override, toggles the on-screen performance overlay, and enables
+            profiling/tracing when diagnostics are requested.
         """
         self._adaptive_width = None
         self._performance = performance
@@ -150,17 +206,42 @@ class ViewportWidget(QWidget):
         self._worker.set_prefetch_enabled(performance.prefetch_enabled)
         self._worker.set_adaptive_prefetch(performance.adaptive_prefetch)
         self._worker.set_drop_mode(performance.effective_drop_mode)
+        self._worker.set_frames_behind(performance.frames_behind)
         self._worker.set_target_fps(
             performance.target_preview_fps or self.project.fps
         )
+
+        # The governor and the legacy fixed-step adapter are two answers to
+        # the same question; only one may be active at a time.
+        self._worker.set_adaptive_quality(performance.adaptive_preview_enabled)
+        self._worker.set_quality_range(
+            performance.min_preview_scale_percent,
+            performance.max_preview_scale_percent,
+        )
+
         set_profiling_enabled(
             performance.performance_diagnostics
+            or performance.show_performance_overlay
+        )
+        self._trace().set_enabled(
+            performance.performance_trace_enabled
+            or performance.performance_diagnostics
             or performance.show_performance_overlay
         )
         self._sync_playback_proxy_override()
         self._overlay.setVisible(performance.show_performance_overlay)
         if performance.show_performance_overlay:
             self._refresh_overlay_text(force=True)
+
+    @staticmethod
+    def _trace():
+        """Return the process-wide frame trace, or a no-op stub."""
+        try:
+            from core.playback.trace import get_frame_trace
+
+            return get_frame_trace()
+        except Exception:  # noqa: BLE001 - tracing is strictly optional
+            return _NULL_TRACE
 
     # ------------------------------------------------------------------
     # Preview quality resolution
@@ -504,22 +585,54 @@ class ViewportWidget(QWidget):
             mode = "play"
         else:
             mode = "paused"
-        proxy_note = f" [{mode}]" if mode != "paused" or self._adaptive_width else ""
 
         target_fps = self._performance.target_preview_fps or self.project.fps
+        budget_ms = 1000.0 / max(1.0, float(target_fps))
+
+        # Per-stage timings come from the profiler's rolling samples. They
+        # are process-wide "most recent" values rather than being attributed
+        # to one specific frame, which is the honest reading for a live HUD.
+        snapshots = profiler.snapshots()
+
+        def stage_ms(name: str) -> float:
+            snapshot = snapshots.get(name)
+            return snapshot.last_ms if snapshot is not None and snapshot.count else 0.0
+
+        decode_ms = stage_ms("decode")
+        graph_ms = stage_ms("graph")
+        convert_ms = stage_ms("display_convert")
+        upload_ms = stage_ms("qt_upload")
+        total_ms = decode_ms + graph_ms + convert_ms + upload_ms
+
+        trace = self._trace()
+        try:
+            summary = trace.summary()
+        except Exception:  # noqa: BLE001
+            summary = {}
 
         lines = [
             f"{self._displayed_fps:5.1f} / {target_fps:.0f} fps   "
-            f"frame {self._displayed_frame_ms:5.1f} ms",
-            f"{width}x{height}{proxy_note}   graph {worker['last_ms']:.1f} ms   "
-            f"budget {worker['frame_budget_ms']:.1f} ms",
-            f"drop {worker['drop_mode']} · {worker['dropped']} skipped · "
-            f"{worker['stale_discarded']} stale",
-            f"cache {cache['size_mb']:.0f}/{cache['max_mb']:.0f} MB · "
-            f"{cache['hit_rate'] * 100:.0f}% hit",
-            f"prefetch {worker['prefetch_hits']}/{worker['prefetch_hits'] + worker['prefetch_wasted']}"
-            f" ({worker['prefetch_hit_ratio'] * 100:.0f}%) · queue {worker['pending']}",
+            f"budget {budget_ms:5.1f} ms",
+            f"{width}x{height}  {mode}  scale {worker.get('scale_percent', 100)}%",
+            f"decode {decode_ms:5.1f}  graph {graph_ms:5.1f}  "
+            f"convert {convert_ms:5.1f}  upload {upload_ms:5.1f}  "
+            f"= {total_ms:5.1f} ms",
+            f"dropped {worker['dropped']}  late {worker['late_dropped']}  "
+            f"stale {worker['stale_discarded']}  ahead {worker['pending']}",
+            f"cache {cache['size_mb']:.0f}/{cache['max_mb']:.0f} MB  "
+            f"hit {cache['hit_rate'] * 100:.0f}%   "
+            f"raw8 {'yes' if self.project.render_plan().u8_source_ids else 'no'}",
+            f"prefetch {worker['prefetch_hits']}/"
+            f"{worker['prefetch_hits'] + worker['prefetch_wasted']} "
+            f"({worker['prefetch_hit_ratio'] * 100:.0f}%)",
         ]
+
+        if summary.get("frames"):
+            lines.append(
+                f"trace {summary['frames']}f  p95 {summary['p95_ms']:.1f} ms  "
+                f"miss {summary['miss_rate'] * 100:.1f}%  "
+                f"reused {summary['reused']}"
+            )
 
         if self._performance.performance_diagnostics:
             hot = profiler.hot_spots(3)
@@ -651,8 +764,17 @@ class ViewportWidget(QWidget):
         if active and self._audio_engine.is_enabled():
             self._prime_audio_playback()
             self._audio_engine.start()
+
+            # Audio becomes the master clock as soon as the device is
+            # actually consuming samples; until the first resync lands, the
+            # clock free-runs on wall time so playback still starts
+            # immediately rather than waiting for audio to spin up.
+            self._worker.set_clock_source(ClockSource.AUDIO_MASTER)
+            self._audio_clock_timer.start()
         else:
             self._audio_engine.stop()
+            self._audio_clock_timer.stop()
+            self._worker.set_clock_source(ClockSource.FREE_RUNNING)
             if not active:
                 # Show the existing fast preview immediately, then asynchronously
                 # replace it with a full-quality render.
@@ -662,6 +784,7 @@ class ViewportWidget(QWidget):
 
     def shutdown(self) -> None:
         """Stop background evaluation before the editor window is torn down."""
+        self._audio_clock_timer.stop()
         self._audio_engine.stop()
         self._worker.stop()
 

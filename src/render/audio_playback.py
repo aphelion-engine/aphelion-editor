@@ -79,6 +79,31 @@ class AudioPlaybackEngine:
         self._stop_event = threading.Event()
         self._stream: object | None = None
         self._stream_device_index: int | None = None
+        #: Frames handed to the output device since playback started. Used as
+        #: the master clock for video synchronisation.
+        self._samples_presented: int = 0
+
+    @property
+    def samples_presented(self) -> int:
+        """Return how many audio frames the device has consumed."""
+        with self._lock:
+            return self._samples_presented
+
+    def presented_seconds(self) -> float:
+        """Return playback position implied by the audio device, in seconds.
+
+        Returns ``0.0`` when no stream has consumed anything yet, so callers
+        can treat zero as "audio is not yet authoritative".
+        """
+        with self._lock:
+            if self._samples_presented <= 0:
+                return 0.0
+            return self._samples_presented / float(max(1, self._sample_rate))
+
+    def reset_presented(self) -> None:
+        """Zero the presented-sample counter (called when playback starts)."""
+        with self._lock:
+            self._samples_presented = 0
 
     @property
     def is_playing(self) -> bool:
@@ -163,12 +188,18 @@ class AudioPlaybackEngine:
         return self._current_device
 
     def start(self) -> None:
-        """Start audio playback."""
+        """Start audio playback.
+
+        Resets the presented-sample counter so the audio clock restarts at
+        zero for this playback session; the video clock anchors to the same
+        instant, which is what keeps the two in step.
+        """
         with self._lock:
             if self._playing or not self._enabled:
                 return
             self._playing = True
             self._paused = False
+            self._samples_presented = 0
             self._stop_event.clear()
             self._playback_thread = threading.Thread(target=self._playback_loop, daemon=True)
             self._playback_thread.start()
@@ -365,6 +396,17 @@ class AudioPlaybackEngine:
                         with self._lock:
                             self._sample_rate = active_rate
                     stream.write(chunk)
+
+                    # Presented-sample counter. This is the only signal in
+                    # the process that reflects what the user has actually
+                    # *heard*, which makes the audio device the correct
+                    # master clock for video (see ``core.playback.clock``).
+                    # ``stream.write`` blocks until the device accepts the
+                    # block, so the count trails reality by at most one
+                    # device buffer.
+                    frames_written = int(chunk.shape[0])
+                    with self._lock:
+                        self._samples_presented += frames_written
                 except Exception as exc:  # noqa: BLE001
                     if not stream_failed:
                         _LOG.warning("Audio playback chunk failed: %s", exc, exc_info=exc)

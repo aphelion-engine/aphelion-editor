@@ -142,6 +142,51 @@ class PerformanceSettings:
     # --- Profile -----------------------------------------------------
     performance_profile: str = "balanced"
 
+    # --- Playback engine --------------------------------------------
+    #: ``auto`` / ``gpu`` / ``cpu``. Currently selects whether the engine
+    #: *prefers* GPU-resident paths; CPU remains the fallback everywhere.
+    playback_engine: str = "auto"
+    #: Ask the OS for higher scheduling priority during playback.
+    realtime_priority: bool = True
+
+    # --- Editing proxies --------------------------------------------
+    #: Decode from a generated all-intra proxy when one exists.
+    use_editing_proxies: bool = True
+    #: Generate proxies in the background when media enters a project.
+    generate_proxies_automatically: bool = True
+    #: Proxy target height (720 / 540 / 360), or ``0`` for auto.
+    proxy_height: int = 540
+    #: Rebuild proxies at this cost level automatically.
+    proxy_autogenerate_limit: int = 0
+
+    # --- Render cache -----------------------------------------------
+    #: ``off`` / ``smart`` / ``user``.
+    render_cache_mode: str = "smart"
+    #: Disk budget for the persistent render/proxy cache, in megabytes.
+    disk_cache_limit_mb: int = 4096
+    #: Let the engine start caching branches that cannot meet deadline.
+    cache_heavy_nodes_automatically: bool = True
+
+    # --- Decoder ------------------------------------------------------
+    #: ``auto`` / ``native`` / ``compatibility``.
+    decoder_backend: str = "auto"
+
+    # --- GPU ----------------------------------------------------------
+    gpu_enabled: bool = True
+    gpu_memory_budget_mb: int = 1024
+
+    # --- Queue depths (advanced) ------------------------------------
+    #: Frames requested ahead of the playhead during playback.
+    frames_ahead: int = 4
+    #: Frames retained behind the playhead for reverse/step-back access.
+    frames_behind: int = 2
+    #: Decode-ahead ring depth.
+    decode_queue_depth: int = 4
+
+    # --- Diagnostics --------------------------------------------------
+    #: Record a per-frame stage trace and expose the trace dump.
+    performance_trace_enabled: bool = False
+
     # --- Memory / cache ---------------------------------------------
     frame_cache_mb: int = FRAME_CACHE_MAX_MB
     decode_cache_frames: int = DEFAULT_DECODE_CACHE_FRAMES
@@ -255,6 +300,22 @@ class PerformanceSettings:
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "performance_profile": self.performance_profile,
+            "playback_engine": self.playback_engine,
+            "realtime_priority": self.realtime_priority,
+            "use_editing_proxies": self.use_editing_proxies,
+            "generate_proxies_automatically": self.generate_proxies_automatically,
+            "proxy_height": self.proxy_height,
+            "proxy_autogenerate_limit": self.proxy_autogenerate_limit,
+            "render_cache_mode": self.render_cache_mode,
+            "disk_cache_limit_mb": self.disk_cache_limit_mb,
+            "cache_heavy_nodes_automatically": self.cache_heavy_nodes_automatically,
+            "decoder_backend": self.decoder_backend,
+            "gpu_enabled": self.gpu_enabled,
+            "gpu_memory_budget_mb": self.gpu_memory_budget_mb,
+            "frames_ahead": self.frames_ahead,
+            "frames_behind": self.frames_behind,
+            "decode_queue_depth": self.decode_queue_depth,
+            "performance_trace_enabled": self.performance_trace_enabled,
             "frame_cache_mb": self.frame_cache_mb,
             "thumbnail_cache_mb": self.thumbnail_cache_mb,
             "automatic_cache_distribution": self.automatic_cache_distribution,
@@ -348,8 +409,63 @@ class PerformanceSettings:
             MAX_WORKER_THREADS,
         )
 
+        # Newer engine controls. Every one of these is optional: a
+        # preferences file written before the field existed simply gets the
+        # default, and an unrecognised value falls back rather than raising.
+        playback_engine = str(
+            data.get("playback_engine", "auto")).strip().lower()
+        if playback_engine not in _VALID_ENGINES:
+            playback_engine = "auto"
+
+        decoder_backend = str(
+            data.get("decoder_backend", "auto")).strip().lower()
+        if decoder_backend not in _VALID_DECODER_BACKENDS:
+            decoder_backend = "auto"
+
+        render_cache_mode = str(
+            data.get("render_cache_mode", "smart")).strip().lower()
+        if render_cache_mode not in _VALID_RENDER_CACHE_MODES:
+            render_cache_mode = "smart"
+
+        proxy_height = int(data.get("proxy_height", 540))
+        if proxy_height not in (0, 360, 540, 720, 1080):
+            proxy_height = 540
+
         return cls(
             performance_profile=profile,
+            playback_engine=playback_engine,
+            realtime_priority=bool(data.get("realtime_priority", True)),
+            use_editing_proxies=bool(data.get("use_editing_proxies", True)),
+            generate_proxies_automatically=bool(
+                data.get("generate_proxies_automatically", True)
+            ),
+            proxy_height=proxy_height,
+            proxy_autogenerate_limit=_clamp(
+                int(data.get("proxy_autogenerate_limit", 0)), 0, 999
+            ),
+            render_cache_mode=render_cache_mode,
+            disk_cache_limit_mb=_clamp(
+                int(data.get("disk_cache_limit_mb", 4096)), 0, 262_144
+            ),
+            cache_heavy_nodes_automatically=bool(
+                data.get("cache_heavy_nodes_automatically", True)
+            ),
+            decoder_backend=decoder_backend,
+            gpu_enabled=bool(data.get("gpu_enabled", True)),
+            gpu_memory_budget_mb=_clamp(
+                int(data.get("gpu_memory_budget_mb", 1024)), 0, 65_536
+            ),
+            frames_ahead=_clamp(
+                int(data.get("frames_ahead", 4)), 0, MAX_MAX_PREFETCH_FRAMES),
+            frames_behind=_clamp(
+                int(data.get("frames_behind", 2)), 0, MAX_MAX_PREFETCH_FRAMES),
+            decode_queue_depth=_clamp(
+                int(data.get("decode_queue_depth", 4)
+                    ), 1, MAX_MAX_PREFETCH_FRAMES
+            ),
+            performance_trace_enabled=bool(
+                data.get("performance_trace_enabled", False)
+            ),
             frame_cache_mb=_clamp(
                 int(data.get("frame_cache_mb", FRAME_CACHE_MAX_MB)),
                 FRAME_CACHE_MIN_MB,
@@ -487,6 +603,17 @@ _VALID_PROFILES: frozenset[str] = frozenset(
 
 _VALID_TRACKING_QUALITY: frozenset[str] = frozenset(
     {"fast", "balanced", "accurate"})
+
+#: Accepted values for the newer engine controls. Unknown values fall back
+#: to the default rather than raising, so a preferences file written by a
+#: different build always loads.
+_VALID_ENGINES: frozenset[str] = frozenset({"auto", "gpu", "cpu"})
+
+_VALID_DECODER_BACKENDS: frozenset[str] = frozenset(
+    {"auto", "native", "compatibility"}
+)
+
+_VALID_RENDER_CACHE_MODES: frozenset[str] = frozenset({"off", "smart", "user"})
 
 
 

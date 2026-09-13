@@ -75,6 +75,45 @@ def _apply_performance_settings(
     # only after the next eviction cycle.
     editor.project.relieve_memory_pressure(0.75)
 
+    _apply_media_settings(performance)
+
+
+def _apply_media_settings(performance: PerformanceSettings) -> None:
+    """Push proxy, decoder-backend, and tracing preferences to the media layer.
+
+    Everything here is best-effort: a missing FFmpeg, an unusable proxy
+    directory, or an unavailable trace path must never stop the editor from
+    applying the rest of the user's preferences.
+    """
+    video_decoder.set_proxy_enabled(bool(performance.use_editing_proxies))
+
+    try:
+        from core.media.proxy import ProxySpec, get_proxy_manager
+
+        manager = get_proxy_manager()
+        manager.set_enabled(bool(performance.generate_proxies_automatically))
+        height = int(performance.proxy_height)
+        if height > 0 and height != manager.spec.height:
+            manager.set_spec(ProxySpec(height=height))
+    except Exception:  # noqa: BLE001 - proxy support is optional
+        pass
+
+    # The frame trace is the diagnostic that makes a stutter actionable, so
+    # it follows the diagnostics toggle rather than needing its own hidden
+    # switch.
+    try:
+        from core.playback.trace import get_frame_trace
+
+        get_frame_trace().set_enabled(
+            bool(
+                performance.performance_trace_enabled
+                or performance.performance_diagnostics
+                or performance.show_performance_overlay
+            )
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
 
 def _apply_audio_settings(editor: "Editor", audio: AudioSettings) -> None:
     """Push audio preferences into the shared preview playback engine."""
