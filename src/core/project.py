@@ -20,6 +20,7 @@ from core.nodes.property_link import (PROPERTY_DRIVE_PROPERTY_KEY,
                                       PROPERTY_DRIVE_VALUE_SLOT,
                                       property_drive_target_id,
                                       sockets_compatible)
+from core.perf.profiler import profiler
 from core.project_settings import ProjectSettings
 from core.serialization import APH_FORMAT_ID, APH_FORMAT_VERSION
 from render.preview import PreviewSettings
@@ -279,6 +280,28 @@ class Project:
             cache.max_mb,
             cache.entry_count,
         )
+
+    def cache_detailed_stats(self) -> dict[str, float | int]:
+        """Return byte usage plus hit/miss/eviction counters.
+
+        Used by the performance overlay and by the benchmark harness; the
+        tuple-returning :meth:`cache_stats` stays for cheap call sites.
+        """
+        return self._frame_cache.stats()
+
+    def relieve_memory_pressure(self, target_fraction: float = 0.75) -> int:
+        """Evict cold cache entries until usage is below ``target_fraction``.
+
+        Returns:
+            Approximate bytes released. Zero when the cache is already
+            comfortably below budget, which is the common case.
+        """
+        cache = self._frame_cache
+
+        if cache.utilization < 0.90:
+            return 0
+
+        return cache.trim_to_fraction(target_fraction)
 
     def set_frame_cache_budget_mb(
         self,
@@ -861,6 +884,13 @@ class Project:
         self._eval_context_settings = None
         self._eval_context_cache_width = None
 
+        # Memory-pressure response: a burst of 4K float intermediates can
+        # approach the configured budget within a single frame evaluation.
+        # Trimming here keeps the LRU bounded instead of letting the process
+        # grow until the OS starts paging. The check is a single float
+        # comparison in the common case.
+        self.relieve_memory_pressure()
+
     def set_export_mode(
         self,
         enabled: bool,
@@ -1100,9 +1130,14 @@ class Project:
         # --------------------------------------------------------------
 
         try:
-            raw_result = node.evaluate(
-                frame_num
-            )
+            # Per-node-type timing is only paid for when diagnostics are on;
+            # the f-string is built conditionally so the disabled path never
+            # allocates a metric name for every node of every frame.
+            if profiler.enabled:
+                with profiler.scope(f"node:{node.node_type}"):
+                    raw_result = node.evaluate(frame_num)
+            else:
+                raw_result = node.evaluate(frame_num)
 
             if isinstance(
                 raw_result,

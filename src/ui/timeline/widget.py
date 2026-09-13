@@ -4,35 +4,18 @@ from __future__ import annotations
 
 from typing import Any
 
-from PyQt6.QtCore import QSize, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QKeyEvent
-from PyQt6.QtWidgets import (
-    QComboBox,
-    QFrame,
-    QHBoxLayout,
-    QLabel,
-    QPushButton,
-    QSizePolicy,
-    QVBoxLayout,
-    QWidget,
-)
-
 from config.keybinds import KeyAction, KeybindStore
 from config.theme import TIMELINE_STYLE
 from core.events import ObserverEvent
 from core.project import Project
-from timeline.controller import (
-    DEFAULT_PLAYBACK_SPEED,
-    PLAYBACK_SPEEDS,
-    PlaybackController,
-)
-from ui.icons import (
-    ACTIVE_ICON_COLOR,
-    AppIcon,
-    DEFAULT_ICON_COLOR,
-    LOOP_ACTIVE_COLOR,
-    make_icon,
-)
+from PyQt6.QtCore import QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QKeyEvent
+from PyQt6.QtWidgets import (QComboBox, QFrame, QHBoxLayout, QLabel,
+                             QPushButton, QSizePolicy, QVBoxLayout, QWidget)
+from timeline.controller import (DEFAULT_PLAYBACK_SPEED, PLAYBACK_SPEEDS,
+                                 PlaybackController)
+from ui.icons import (ACTIVE_ICON_COLOR, DEFAULT_ICON_COLOR, LOOP_ACTIVE_COLOR,
+                      AppIcon, make_icon)
 from ui.timeline.scrubber import TimelineScrubber
 
 
@@ -41,6 +24,10 @@ class TimelineWidget(QWidget):
 
     frame_changed = pyqtSignal(int)
     playback_changed = pyqtSignal(bool)
+    #: Re-broadcast from the scrubber so the editor can degrade/restore
+    #: preview quality around an active drag without knowing the internals.
+    scrub_started = pyqtSignal()
+    scrub_finished = pyqtSignal()
 
     def __init__(
         self,
@@ -91,6 +78,8 @@ class TimelineWidget(QWidget):
         self.scrubber.frame_scrubbed.connect(self._on_scrubbed)
         self.scrubber.in_point_changed.connect(self._on_in_changed)
         self.scrubber.out_point_changed.connect(self._on_out_changed)
+        self.scrubber.scrub_started.connect(self.scrub_started)
+        self.scrubber.scrub_finished.connect(self.scrub_finished)
         root.addWidget(self.scrubber)
 
     def _build_toolbar(self) -> QFrame:

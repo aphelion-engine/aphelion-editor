@@ -12,8 +12,13 @@ from __future__ import annotations
 import os
 import threading
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+
+import numpy as np
+from config.constants import DEFAULT_DECODE_CACHE_FRAMES
+from core.audio import AudioData
+from core.perf.profiler import profiler
+from core.perf.scheduler import JobPriority, get_scheduler
 
 # Must be set before the first OpenCV/FFmpeg capture is created.
 os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
@@ -21,10 +26,6 @@ os.environ.setdefault("OPENCV_FFMPEG_LOGLEVEL", "8")  # AV_LOG_FATAL
 os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "loglevel;quiet")
 
 import cv2
-import numpy as np
-
-from config.constants import DEFAULT_DECODE_CACHE_FRAMES
-from core.audio import AudioData
 from render.audio_decoder import AudioDecoder, AudioInfo
 
 # Prefer sequential decode over hard seeks within this many frames.
@@ -40,6 +41,25 @@ _LOGGING_CONFIGURED = False
 # without the node graph needing to know about the preference system.
 _DECODE_CACHE_FRAMES: int = DEFAULT_DECODE_CACHE_FRAMES
 _HARDWARE_DECODE_ENABLED: bool = False
+
+# ----------------------------------------------------------------
+# Media metadata cache (Section 58: never re-probe an unchanged file)
+# ----------------------------------------------------------------
+
+_PROBE_CACHE_LIMIT: int = 256
+_PROBE_TIMEOUT_SECONDS: float = 20.0
+_PROBE_CACHE: "OrderedDict[tuple[str, int, int], MediaInfo]" = OrderedDict()
+_PROBE_FAILURES: set[tuple[str, int, int]] = set()
+_PROBE_CACHE_LOCK = threading.Lock()
+
+
+def _probe_cache_key(path: str) -> tuple[str, int, int] | None:
+    """Return ``(canonical_path, size, mtime_ns)`` or ``None`` if unknown."""
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    return (os.path.normcase(os.path.abspath(path)), int(stat.st_size), int(stat.st_mtime_ns))
 
 
 def set_decode_cache_frames(frame_count: int) -> None:
@@ -227,31 +247,32 @@ class VideoDecoder:
 
     def read_rgb(self, frame_num: int, max_width: int) -> np.ndarray | None:
         """Return an RGB frame at ``frame_num``, optionally proxy-scaled."""
-        with _CAPTURE_LOCK:
-            if not self.is_open or self._capture is None:
-                return None
+        with profiler.scope("decode"):
+            with _CAPTURE_LOCK:
+                if not self.is_open or self._capture is None:
+                    return None
 
-            target = max(0, int(frame_num))
-            if self._frame_count > 0:
-                target = min(target, self._frame_count - 1)
+                target = max(0, int(frame_num))
+                if self._frame_count > 0:
+                    target = min(target, self._frame_count - 1)
 
-            cached = self._frame_cache.get(target)
-            if cached is not None:
-                self._frame_cache.move_to_end(target)
-                return self._scale_rgb(cached, max_width)
+                cached = self._frame_cache.get(target)
+                if cached is not None:
+                    self._frame_cache.move_to_end(target)
+                    return self._scale_rgb(cached, max_width)
 
-            if not self._position_to(target):
-                return self._held_frame(max_width)
+                if not self._position_to(target):
+                    return self._held_frame(max_width)
 
-            frame = self._read_bgr_with_retry()
-            if frame is None:
-                # Hard seeks into H.264 often fail once; hold last good frame.
-                return self._held_frame(max_width)
+                frame = self._read_bgr_with_retry()
+                if frame is None:
+                    # Hard seeks into H.264 often fail once; hold last good frame.
+                    return self._held_frame(max_width)
 
-            self._next_index = target + 1
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            self._remember(target, rgb)
-            return self._scale_rgb(rgb, max_width)
+                self._next_index = target + 1
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                self._remember(target, rgb)
+                return self._scale_rgb(rgb, max_width)
 
     def _remember(self, frame_num: int, rgb: np.ndarray) -> None:
         """Insert ``rgb`` into the bounded LRU, evicting the oldest entry."""
@@ -293,9 +314,10 @@ class VideoDecoder:
 
         # Prefer time-based seek — slightly more stable than POS_FRAMES on H.264.
         time_ms = (target / max(self._fps, 0.001)) * 1000.0
-        seeked = self._capture.set(cv2.CAP_PROP_POS_MSEC, time_ms)
-        if not seeked:
-            seeked = self._capture.set(cv2.CAP_PROP_POS_FRAMES, float(target))
+        with profiler.scope("seek"):
+            seeked = self._capture.set(cv2.CAP_PROP_POS_MSEC, time_ms)
+            if not seeked:
+                seeked = self._capture.set(cv2.CAP_PROP_POS_FRAMES, float(target))
         if not seeked:
             return False
 
@@ -379,15 +401,51 @@ def _probe_audio_metadata(path: str) -> AudioInfo | None:
 
 
 def probe_video(path: str) -> MediaInfo | None:
-    """Open briefly to read metadata, then release the capture."""
+    """Return metadata for ``path``, reusing a cached result when possible.
+
+    Metadata only changes when the file itself changes, so results are
+    keyed by canonical path + size + mtime. Probing runs on the shared
+    priority scheduler with the video and audio probes in parallel — the
+    old implementation created (and tore down) a fresh
+    ``ThreadPoolExecutor`` on every call, which is measurable when a
+    project lists many sources.
+    """
+    key = _probe_cache_key(path)
+    if key is not None:
+        with _PROBE_CACHE_LOCK:
+            cached = _PROBE_CACHE.get(key)
+            if cached is not None:
+                _PROBE_CACHE.move_to_end(key)
+                return cached
+            if key in _PROBE_FAILURES:
+                return None
+
     _configure_decoder_logging()
-    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="media-probe") as executor:
-        video_future = executor.submit(_probe_video_metadata, path)
-        audio_future = executor.submit(_probe_audio_metadata, path)
-        video_info = video_future.result()
-        audio_info = audio_future.result()
+
+    scheduler = get_scheduler()
+    video_future = scheduler.submit(
+        _probe_video_metadata,
+        path,
+        priority=JobPriority.BACKGROUND,
+        name="probe-video-metadata",
+    )
+    audio_future = scheduler.submit(
+        _probe_audio_metadata,
+        path,
+        priority=JobPriority.BACKGROUND,
+        name="probe-audio-metadata",
+    )
+
+    try:
+        video_info = video_future.result(timeout=_PROBE_TIMEOUT_SECONDS)
+        audio_info = audio_future.result(timeout=_PROBE_TIMEOUT_SECONDS)
+    except Exception:  # noqa: BLE001 - probing must never crash the UI
+        return None
 
     if video_info is None:
+        if key is not None:
+            with _PROBE_CACHE_LOCK:
+                _PROBE_FAILURES.add(key)
         return None
 
     fps, frame_count, width, height = video_info
@@ -395,7 +453,7 @@ def probe_video(path: str) -> MediaInfo | None:
     audio_sample_rate = audio_info.sample_rate if audio_info else 48000
     audio_channels = audio_info.num_channels if audio_info else 2
 
-    return MediaInfo(
+    info = MediaInfo(
         fps=fps,
         duration_sec=frame_count / fps,
         width=width,
@@ -405,3 +463,25 @@ def probe_video(path: str) -> MediaInfo | None:
         audio_sample_rate=audio_sample_rate,
         audio_channels=audio_channels,
     )
+
+    if key is not None:
+        with _PROBE_CACHE_LOCK:
+            _PROBE_CACHE[key] = info
+            _PROBE_CACHE.move_to_end(key)
+            while len(_PROBE_CACHE) > _PROBE_CACHE_LIMIT:
+                _PROBE_CACHE.popitem(last=False)
+
+    return info
+
+
+def clear_probe_cache() -> None:
+    """Drop cached media metadata (used by tests and on project close)."""
+    with _PROBE_CACHE_LOCK:
+        _PROBE_CACHE.clear()
+        _PROBE_FAILURES.clear()
+
+
+def probe_cache_stats() -> dict[str, int]:
+    """Return the number of cached media metadata entries."""
+    with _PROBE_CACHE_LOCK:
+        return {"entries": len(_PROBE_CACHE), "failures": len(_PROBE_FAILURES)}

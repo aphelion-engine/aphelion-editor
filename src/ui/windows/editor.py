@@ -18,6 +18,7 @@ from core.history import HistoryStack
 from core.history.commands import SetProjectSettingsCommand
 from core.nodes.roto_nodes import RotoNode
 from core.nodes.tracking_nodes import TRACKER_NODES
+from core.perf.scheduler import get_scheduler, shutdown_scheduler
 from core.preferences import PreferencesStore
 from core.preferences.applier import apply_preferences_to_editor
 from core.project import Project
@@ -142,7 +143,9 @@ class Editor(QMainWindow):
             media_pool=media_pool_dock,
         )
 
-        self.timeline.playback_changed.connect(self.viewport.set_playback_active)
+        self.timeline.playback_changed.connect(self._on_playback_changed)
+        self.timeline.scrub_started.connect(self.viewport.begin_scrub)
+        self.timeline.scrub_finished.connect(self.viewport.end_scrub)
         # pyrefly: ignore [missing-attribute]
         self.node_graph.scene.selectionChanged.connect(self.on_graph_selection_changed)
         self.media_pool.media_selected.connect(self._focus_media_node)
@@ -371,9 +374,12 @@ class Editor(QMainWindow):
             parent=self,
         )
         dialog.applied.connect(
-            lambda: self._apply_preferences_dialog(dialog, persist=False)
+            # "Apply" is expected to *keep* the change: it is persisted right
+            # away, not only when the dialog is accepted.
+            lambda: self._apply_preferences_dialog(dialog, persist=True)
         )
         dialog.plugins_reloaded.connect(self._refresh_plugin_ui)
+        dialog.clear_caches_requested.connect(self._clear_all_caches)
         if dialog.exec() != PreferencesDialog.DialogCode.Accepted:
             if dialog.plugins_were_reloaded:
                 PluginLoader.reload(self.preferences_store.preferences.plugins)
@@ -677,6 +683,35 @@ class Editor(QMainWindow):
             return True
         return self.save_project()
 
+    def _clear_all_caches(self) -> None:
+        """Flush every in-memory cache: evaluated frames and probe metadata."""
+        self.project.clear_cache()
+        try:
+            from render import media_probe, video_decoder
+
+            media_probe.clear_probe_cache()
+            video_decoder.clear_probe_cache()
+        except Exception:  # noqa: BLE001 - cache clearing must never fail a UI action
+            pass
+        self.viewport.request_update()
+
+    def _on_playback_changed(self, playing: bool) -> None:
+        """Forward play state and yield background capacity during playback.
+
+        Decoding and graph evaluation must not compete with thumbnail-scale
+        background work for worker threads; pausing the low-priority bands
+        keeps playback steady without cancelling anything durable.
+        """
+        self.viewport.set_playback_active(playing)
+        pause_background = bool(
+            getattr(
+                self.preferences_store.preferences.performance,
+                "pause_background_during_playback",
+                True,
+            )
+        )
+        get_scheduler().set_background_paused(playing and pause_background)
+
     def _shutdown(self) -> None:
         """Stop timers, playback, and background workers before exit."""
         self._autosave_timer.stop()
@@ -689,6 +724,8 @@ class Editor(QMainWindow):
         self.media_pool.shutdown()
         self.project.unsubscribe(self._on_project_dirty_event)
         self.project.close()
+        # Do not leave worker threads alive past interpreter shutdown.
+        shutdown_scheduler()
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         """Prompt to save unsaved changes, then release project resources."""

@@ -3,57 +3,45 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import (
-    QCheckBox,
-    QColorDialog,
-    QComboBox,
-    QDialog,
-    QDialogButtonBox,
-    QFileDialog,
-    QFormLayout,
-    QFrame,
-    QGroupBox,
-    QHBoxLayout,
-    QLabel,
-    QMessageBox,
-    QPushButton,
-    QScrollArea,
-    QSpinBox,
-    QTabWidget,
-    QVBoxLayout,
-    QWidget,
-)
-
-from app_io.theme_file import APH_THEME_FILTER, ThemeFileError, load_theme_file, save_theme_file
-from config.constants import (
-    FRAME_CACHE_MAX_ALLOWED_MB,
-    FRAME_CACHE_MIN_MB,
-    MAX_DECODE_CACHE_FRAMES,
-    MAX_MAX_PREFETCH_FRAMES,
-)
+from app_io.theme_file import (APH_THEME_FILTER, ThemeFileError,
+                               load_theme_file, save_theme_file)
+from config.constants import (FRAME_CACHE_MAX_ALLOWED_MB, FRAME_CACHE_MIN_MB,
+                              MAX_DECODE_CACHE_FRAMES, MAX_MAX_PREFETCH_FRAMES,
+                              MAX_PREFETCH_MAX_MB)
 from config.keybinds import KeyAction, KeybindStore, NodeCreateSlot
 from config.theme_engine import build_theme_styles
 from config.theme_tokens import BUILTIN_THEMES, ThemeTokens, builtin_theme
 from core.nodes.registry import NodeInfo, global_node_registry
-from core.preferences.models import (
-    AppPreferences,
-    AudioSettings,
-    EditorSettings,
-    PerformanceSettings,
-    ThemeSettings,
-)
+from core.perf.capabilities import detect_capabilities
+from core.perf.frame_drop import FrameDropMode
+from core.perf.presets import (PerformanceProfile, apply_profile,
+                               recommend_profile)
+from core.perf.scheduler import MAX_WORKER_THREADS
+from core.preferences.models import (AppPreferences, AudioSettings,
+                                     EditorSettings, PerformanceSettings,
+                                     ThemeSettings)
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QDialog,
+                             QDialogButtonBox, QFileDialog, QFormLayout,
+                             QFrame, QGroupBox, QHBoxLayout, QLabel,
+                             QMessageBox, QPushButton, QScrollArea, QSpinBox,
+                             QTabWidget, QVBoxLayout, QWidget)
 from ui.dialogs.plugin_preferences_tab import PluginPreferencesPage
-from ui.widgets.key_capture import KeyCaptureEdit
 from ui.node_graph import operations as node_ops
+from ui.widgets.key_capture import KeyCaptureEdit
+
 
 class PreferencesDialog(QDialog):
     """Modal preferences editor for settings, plugins, keybinds, themes, and node colors."""
 
     applied = pyqtSignal()
+    #: Requested when the user presses "Clear All Caches". Handled by the
+    #: editor, which owns the live project and decoder caches.
+    clear_caches_requested = pyqtSignal()
     plugins_reloaded = pyqtSignal(int)
 
     def __init__(
@@ -76,7 +64,11 @@ class PreferencesDialog(QDialog):
         self.setObjectName("PreferencesDialog")
         self.setWindowTitle("Preferences")
         self.setModal(True)
-        self.resize(640, 560)
+        # Show an explicit resize grip and allow the dialog to shrink down to
+        # a compact height; tab pages scroll instead of forcing a tall window.
+        self.setSizeGripEnabled(True)
+        self.setMinimumSize(520, 340)
+        self.resize(700, 420)
         self._apply_dialog_style()
 
         root = QVBoxLayout(self)
@@ -88,13 +80,15 @@ class PreferencesDialog(QDialog):
         root.addWidget(title)
         tabs = QTabWidget()
         tabs.setObjectName("PreferencesTabs")
-        tabs.addTab(self._build_general_tab(), "General")
-        tabs.addTab(self._build_node_graph_tab(), "Node Graph")
-        tabs.addTab(self._build_performance_tab(), "Performance")
-        tabs.addTab(self._build_audio_tab(), "Audio")
-        tabs.addTab(self._plugin_page, "Plugins")
+        tabs.addTab(self._scrollable(self._build_general_tab()), "General")
+        tabs.addTab(self._scrollable(
+            self._build_node_graph_tab()), "Node Graph")
+        tabs.addTab(self._scrollable(
+            self._build_performance_tab()), "Performance")
+        tabs.addTab(self._scrollable(self._build_audio_tab()), "Audio")
+        tabs.addTab(self._scrollable(self._plugin_page), "Plugins")
         tabs.addTab(self._build_keybinds_tab(), "Keybinds")
-        tabs.addTab(self._build_theme_tab(), "Appearance")
+        tabs.addTab(self._scrollable(self._build_theme_tab()), "Appearance")
         tabs.addTab(self._build_node_colors_tab(), "Node Colors")
         root.addWidget(tabs, 1)
 
@@ -111,13 +105,19 @@ class PreferencesDialog(QDialog):
         root.addWidget(buttons)
         from ui.widgets.tooltips import apply_form_tooltips
         help_text = {
+            self._profile_combo: "Bundled performance postures. Eco favours responsiveness on modest hardware; Maximum uses extra RAM and workers on capable machines.",
             self._frame_cache_mb: "Maximum RAM for evaluated frames, including audio. Larger budgets retain more reusable frames; leave memory for the OS and other apps.",
             self._decode_cache_frames: "Decoded source frames retained per decoder. High values increase RAM usage, especially with multiple high-resolution clips.",
             self._max_prefetch: "Maximum future frames evaluated in the background. Lower this for heavy graphs; overloaded playback skips prefetch automatically.",
-            self._drop_frames: "Show completed frames even when the playhead has advanced. Helps heavy effects keep updating during playback.",
+            self._drop_mode: "How aggressively playback skips late frames. Adaptive adjusts itself from measured frame cost; Off never drops (heavy graphs may play slowly).",
+            self._high_quality_paused: "Show the fast preview immediately on pause, then render the current frame at full quality in the background.",
+            self._scrub_quality: "Preview resolution used while dragging the playhead. Lower values make scrubbing more responsive.",
+            self._high_quality_after_scrub: "Render the frame under the playhead at full quality after a drag ends.",
+            self._worker_threads: "Worker threads for background jobs. Auto leaves capacity for the UI, decoder, FFmpeg, and OpenCV.",
+            self._pause_background: "Hold low-priority jobs (media probing, cache warming) while playback is running.",
             self._hardware_decode: "Request hardware video decoding where supported; unsupported codecs or devices may use software decoding.",
             self._show_overlay: "Show actual displayed FPS, preview dimensions, and frame-cache memory usage in the viewport.",
-            self._adaptive_preview: "When rendering misses the frame budget, reduce preview width every two seconds down to 320 px. Pausing restores the normal preview width. Exports are unaffected.",
+            self._adaptive_preview: "When rendering misses the frame budget, reduce preview resolution with hysteresis. Pausing restores the normal preview width. Exports are unaffected.",
             self._proxy_override_enabled: "Use the selected lower preview width during playback and restore the Viewer width when paused. Does not change export resolution.",
             self._proxy_width: "Maximum playback preview width in pixels. Smaller frames reduce decoding and effect-processing work.",
             self._latency_preset: "Lower latency responds sooner; a safer, larger audio buffer tolerates processing delays better.",
@@ -147,6 +147,18 @@ class PreferencesDialog(QDialog):
     def _apply_dialog_style(self) -> None:
         styles = build_theme_styles(self._theme_tokens)
         self.setStyleSheet(styles.preferences)
+
+    @staticmethod
+    def _scrollable(page: QWidget) -> QScrollArea:
+        """Wrap a tab page so the dialog can stay short and scroll its body."""
+        scroll = QScrollArea()
+        scroll.setObjectName("PreferencesScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(page)
+        return scroll
 
     def _clone_keybinds(self, source: KeybindStore) -> KeybindStore:
         clone = KeybindStore()
@@ -256,17 +268,60 @@ class PreferencesDialog(QDialog):
         layout.setContentsMargins(12, 12, 12, 12)
         perf = self._working.performance
 
-        memory_group = QGroupBox("Memory")
+        # ------------------------------------------------------------------
+        # Profile
+        # ------------------------------------------------------------------
+        profile_group = QGroupBox("Performance Profile")
+        profile_group.setObjectName("PreferencesGroup")
+        profile_form = QFormLayout(profile_group)
+
+        self._profile_combo = QComboBox()
+        for profile in PerformanceProfile:
+            self._profile_combo.addItem(profile.label, profile.value)
+        index = self._profile_combo.findData(perf.performance_profile)
+        self._profile_combo.setCurrentIndex(max(0, index))
+        self._profile_combo.currentIndexChanged.connect(
+            self._on_profile_selected)
+        profile_form.addRow("Profile", self._profile_combo)
+
+        auto_button = QPushButton("Auto Configure for This Computer")
+        auto_button.setToolTip(
+            "Detect CPU, memory, GPU and FFmpeg hardware encoders, then pick"
+            " the profile and cache sizes that suit this machine."
+        )
+        auto_button.clicked.connect(self._auto_configure_performance)
+        profile_form.addRow(auto_button)
+
+        self._hardware_summary = QLabel(self._hardware_summary_text())
+        self._hardware_summary.setObjectName("PreferencesHint")
+        self._hardware_summary.setWordWrap(True)
+        profile_form.addRow(self._hardware_summary)
+
+        low_lag = QPushButton("Use low-lag preset")
+        low_lag.setToolTip(
+            "Apply the Eco profile: reduced preview resolution and prefetch,"
+            " aggressive frame dropping, and the performance overlay on."
+        )
+        low_lag.clicked.connect(self._use_low_lag_preset)
+        profile_form.addRow(low_lag)
+
+        layout.addWidget(profile_group)
+
+        # ------------------------------------------------------------------
+        # Cache
+        # ------------------------------------------------------------------
+        memory_group = QGroupBox("Cache")
         memory_group.setObjectName("PreferencesGroup")
         memory_form = QFormLayout(memory_group)
 
         self._frame_cache_mb = QSpinBox()
         self._frame_cache_mb.setObjectName("PreferencesSpin")
-        self._frame_cache_mb.setRange(FRAME_CACHE_MIN_MB, FRAME_CACHE_MAX_ALLOWED_MB)
+        self._frame_cache_mb.setRange(
+            FRAME_CACHE_MIN_MB, FRAME_CACHE_MAX_ALLOWED_MB)
         self._frame_cache_mb.setSingleStep(256)
         self._frame_cache_mb.setSuffix(" MB")
         self._frame_cache_mb.setValue(perf.frame_cache_mb)
-        memory_form.addRow("Frame cache budget", self._frame_cache_mb)
+        memory_form.addRow("Total cache budget", self._frame_cache_mb)
 
         self._decode_cache_frames = QSpinBox()
         self._decode_cache_frames.setObjectName("PreferencesSpin")
@@ -275,42 +330,140 @@ class PreferencesDialog(QDialog):
         self._decode_cache_frames.setValue(perf.decode_cache_frames)
         memory_form.addRow("Source decode cache", self._decode_cache_frames)
 
+        clear_caches = QPushButton("Clear All Caches")
+        clear_caches.setToolTip("Drop cached frames immediately.")
+        clear_caches.clicked.connect(self._clear_caches_requested)
+        memory_form.addRow(clear_caches)
+
         layout.addWidget(memory_group)
 
+        # ------------------------------------------------------------------
+        # Playback
+        # ------------------------------------------------------------------
         playback_group = QGroupBox("Playback")
         playback_group.setObjectName("PreferencesGroup")
         playback_form = QFormLayout(playback_group)
+
+        self._adaptive_preview = QCheckBox(
+            "Automatically reduce preview resolution when playback is slow"
+        )
+        self._adaptive_preview.setChecked(perf.adaptive_preview_enabled)
+        playback_form.addRow(self._adaptive_preview)
+
+        self._high_quality_paused = QCheckBox(
+            "Render full quality once playback stops"
+        )
+        self._high_quality_paused.setChecked(perf.high_quality_when_paused)
+        playback_form.addRow(self._high_quality_paused)
+
+        self._drop_mode = QComboBox()
+        for mode in FrameDropMode:
+            self._drop_mode.addItem(mode.label, mode.name)
+        drop_index = self._drop_mode.findData(perf.effective_drop_mode)
+        self._drop_mode.setCurrentIndex(max(0, drop_index))
+        playback_form.addRow("Drop frames", self._drop_mode)
+
+        self._target_preview_fps = QSpinBox()
+        self._target_preview_fps.setObjectName("PreferencesSpin")
+        self._target_preview_fps.setRange(0, 240)
+        self._target_preview_fps.setSpecialValueText("Follow project")
+        self._target_preview_fps.setSuffix(" fps")
+        self._target_preview_fps.setValue(perf.target_preview_fps)
+        playback_form.addRow("Target preview rate", self._target_preview_fps)
+
+        self._hardware_decode = QCheckBox(
+            "Use hardware-accelerated decode (if available)"
+        )
+        self._hardware_decode.setChecked(perf.hardware_decode_enabled)
+        playback_form.addRow(self._hardware_decode)
+
+        layout.addWidget(playback_group)
+
+        # ------------------------------------------------------------------
+        # Scrubbing
+        # ------------------------------------------------------------------
+        scrub_group = QGroupBox("Scrubbing")
+        scrub_group.setObjectName("PreferencesGroup")
+        scrub_form = QFormLayout(scrub_group)
+
+        self._auto_scrub_quality = QCheckBox(
+            "Use reduced quality while dragging the playhead"
+        )
+        self._auto_scrub_quality.setChecked(perf.auto_scrub_quality)
+        scrub_form.addRow(self._auto_scrub_quality)
+
+        self._scrub_quality = QSpinBox()
+        self._scrub_quality.setObjectName("PreferencesSpin")
+        self._scrub_quality.setRange(5, 100)
+        self._scrub_quality.setSingleStep(5)
+        self._scrub_quality.setSuffix(" %")
+        self._scrub_quality.setValue(perf.scrub_quality_percent)
+        self._auto_scrub_quality.toggled.connect(
+            self._scrub_quality.setEnabled)
+        self._scrub_quality.setEnabled(perf.auto_scrub_quality)
+        scrub_form.addRow("Scrub quality", self._scrub_quality)
+
+        self._high_quality_after_scrub = QCheckBox(
+            "Render full quality once the drag stops"
+        )
+        self._high_quality_after_scrub.setChecked(perf.high_quality_after_scrub)
+        scrub_form.addRow(self._high_quality_after_scrub)
+
+        layout.addWidget(scrub_group)
+
+        # ------------------------------------------------------------------
+        # Prefetch
+        # ------------------------------------------------------------------
+        prefetch_group = QGroupBox("Prefetch")
+        prefetch_group.setObjectName("PreferencesGroup")
+        prefetch_form = QFormLayout(prefetch_group)
+
+        self._prefetch_enabled = QCheckBox("Enable prefetch")
+        self._prefetch_enabled.setChecked(perf.prefetch_enabled)
+        prefetch_form.addRow(self._prefetch_enabled)
+
+        self._adaptive_prefetch = QCheckBox(
+            "Skip prefetch while scrubbing or seeking"
+        )
+        self._adaptive_prefetch.setChecked(perf.adaptive_prefetch)
+        prefetch_form.addRow(self._adaptive_prefetch)
 
         self._max_prefetch = QSpinBox()
         self._max_prefetch.setObjectName("PreferencesSpin")
         self._max_prefetch.setRange(0, MAX_MAX_PREFETCH_FRAMES)
         self._max_prefetch.setSuffix(" frames")
         self._max_prefetch.setValue(perf.max_prefetch_frames)
-        playback_form.addRow("Max prefetch ahead", self._max_prefetch)
+        prefetch_form.addRow("Max prefetch ahead", self._max_prefetch)
 
-        self._drop_frames = QCheckBox("Drop frames to keep playback fluid")
-        self._drop_frames.setChecked(perf.drop_frames_during_playback)
-        playback_form.addRow(self._drop_frames)
+        layout.addWidget(prefetch_group)
 
-        self._adaptive_preview = QCheckBox("Automatically reduce preview resolution when playback is slow")
-        self._adaptive_preview.setChecked(perf.adaptive_preview_enabled)
-        playback_form.addRow(self._adaptive_preview)
-        preset = QPushButton("Use low-lag preset")
-        preset.setToolTip("Enable adaptive preview and a 640 px playback proxy, limit prefetch to one frame, and show performance statistics. Apply to save.")
-        preset.clicked.connect(self._use_low_lag_preset)
-        playback_form.addRow(preset)
+        # ------------------------------------------------------------------
+        # CPU
+        # ------------------------------------------------------------------
+        cpu_group = QGroupBox("CPU")
+        cpu_group.setObjectName("PreferencesGroup")
+        cpu_form = QFormLayout(cpu_group)
 
+        self._worker_threads = QSpinBox()
+        self._worker_threads.setObjectName("PreferencesSpin")
+        self._worker_threads.setRange(0, MAX_WORKER_THREADS)
+        self._worker_threads.setSpecialValueText("Auto")
+        self._worker_threads.setSuffix(" threads")
+        self._worker_threads.setValue(perf.worker_threads)
+        cpu_form.addRow("Worker threads", self._worker_threads)
 
-        self._hardware_decode = QCheckBox("Use hardware-accelerated decode (if available)")
-        self._hardware_decode.setChecked(perf.hardware_decode_enabled)
-        playback_form.addRow(self._hardware_decode)
+        self._pause_background = QCheckBox(
+            "Pause background jobs during playback"
+        )
+        self._pause_background.setChecked(
+            perf.pause_background_during_playback)
+        cpu_form.addRow(self._pause_background)
 
-        self._show_overlay = QCheckBox("Show performance overlay in viewport")
-        self._show_overlay.setChecked(perf.show_performance_overlay)
-        playback_form.addRow(self._show_overlay)
+        layout.addWidget(cpu_group)
 
-        layout.addWidget(playback_group)
-
+        # ------------------------------------------------------------------
+        # Playback Proxy Override
+        # ------------------------------------------------------------------
         proxy_group = QGroupBox("Playback Proxy Override")
         proxy_group.setObjectName("PreferencesGroup")
         proxy_form = QFormLayout(proxy_group)
@@ -318,17 +471,19 @@ class PreferencesDialog(QDialog):
         self._proxy_override_enabled = QCheckBox(
             "Force a lower decode width while playing"
         )
-        self._proxy_override_enabled.setChecked(perf.playback_proxy_override_enabled)
+        self._proxy_override_enabled.setChecked(
+            perf.playback_proxy_override_enabled)
         proxy_form.addRow(self._proxy_override_enabled)
 
         self._proxy_width = QSpinBox()
         self._proxy_width.setObjectName("PreferencesSpin")
-        self._proxy_width.setRange(160, 1920)
+        self._proxy_width.setRange(160, 3840)
         self._proxy_width.setSingleStep(80)
         self._proxy_width.setSuffix(" px")
         self._proxy_width.setValue(perf.playback_proxy_width)
         self._proxy_width.setEnabled(perf.playback_proxy_override_enabled)
-        self._proxy_override_enabled.toggled.connect(self._proxy_width.setEnabled)
+        self._proxy_override_enabled.toggled.connect(
+            self._proxy_width.setEnabled)
         proxy_form.addRow("Playback width", self._proxy_width)
 
         proxy_hint = QLabel(
@@ -340,6 +495,26 @@ class PreferencesDialog(QDialog):
         proxy_form.addRow(proxy_hint)
 
         layout.addWidget(proxy_group)
+
+        # ------------------------------------------------------------------
+        # Debugging
+        # ------------------------------------------------------------------
+        diag_group = QGroupBox("Performance Diagnostics")
+        diag_group.setObjectName("PreferencesGroup")
+        diag_form = QFormLayout(diag_group)
+
+        self._show_overlay = QCheckBox("Show performance overlay in viewport")
+        self._show_overlay.setChecked(perf.show_performance_overlay)
+        diag_form.addRow(self._show_overlay)
+
+        self._performance_diagnostics = QCheckBox(
+            "Record timing statistics (decode/graph/upload)"
+        )
+        self._performance_diagnostics.setChecked(perf.performance_diagnostics)
+        diag_form.addRow(self._performance_diagnostics)
+
+        layout.addWidget(diag_group)
+
         hint = QLabel(
             "Higher cache and prefetch values trade RAM for smoother scrubbing"
             " and playback. Changes apply when you click Apply or OK."
@@ -350,12 +525,109 @@ class PreferencesDialog(QDialog):
         layout.addStretch(1)
         return page
 
+    # ------------------------------------------------------------------
+    # Performance tab helpers
+    # ------------------------------------------------------------------
+
+    def _hardware_summary_text(self) -> str:
+        """Describe the detected machine in one short line."""
+        caps = detect_capabilities()
+        parts = [
+            f"{caps.cpu_logical} threads",
+            f"{caps.ram_total_mb // 1024} GB RAM",
+        ]
+        if caps.gpu_name:
+            parts.append(caps.gpu_name)
+        parts.append(caps.platform or "unknown OS")
+        return "Detected: " + " · ".join(parts)
+
+    def _auto_configure_performance(self) -> None:
+        """Detect hardware and apply the recommended profile."""
+        caps = detect_capabilities(refresh=True, include_expensive=True)
+        profile = recommend_profile(caps)
+        configured = apply_profile(PerformanceSettings(), profile, caps)
+        self._working.performance = configured
+        self._hardware_summary.setText(self._hardware_summary_text())
+        QMessageBox.information(
+            self,
+            "Performance Configured",
+            f"Applied the {profile.label} profile.\n\n"
+            f"{self._hardware_summary_text()}",
+        )
+
+    def _on_profile_selected(self, _index: int) -> None:
+        """Re-apply a named profile's values into the live controls."""
+        data = self._profile_combo.currentData()
+        profile = PerformanceProfile.from_value(data)
+        if profile is PerformanceProfile.CUSTOM:
+            return
+        self._working.performance = apply_profile(
+            self._working.performance, profile
+        )
+        self._reload_performance_controls()
+
+    def _reload_performance_controls(self) -> None:
+        """Push the working settings back into every performance widget."""
+        perf = self._working.performance
+        widgets = (
+            self._frame_cache_mb,
+            self._decode_cache_frames,
+            self._max_prefetch,
+            self._scrub_quality,
+            self._worker_threads,
+            self._proxy_width,
+            self._target_preview_fps,
+        )
+        for widget in widgets:
+            widget.blockSignals(True)
+        try:
+            self._frame_cache_mb.setValue(perf.frame_cache_mb)
+            self._decode_cache_frames.setValue(perf.decode_cache_frames)
+            self._max_prefetch.setValue(perf.max_prefetch_frames)
+            self._scrub_quality.setValue(perf.scrub_quality_percent)
+            self._worker_threads.setValue(perf.worker_threads)
+            self._proxy_width.setValue(perf.playback_proxy_width)
+            self._target_preview_fps.setValue(perf.target_preview_fps)
+
+            self._adaptive_preview.setChecked(perf.adaptive_preview_enabled)
+            self._high_quality_paused.setChecked(perf.high_quality_when_paused)
+            self._high_quality_after_scrub.setChecked(
+                perf.high_quality_after_scrub
+            )
+            self._prefetch_enabled.setChecked(perf.prefetch_enabled)
+            self._adaptive_prefetch.setChecked(perf.adaptive_prefetch)
+            self._pause_background.setChecked(
+                perf.pause_background_during_playback)
+            self._auto_scrub_quality.setChecked(perf.auto_scrub_quality)
+            self._hardware_decode.setChecked(perf.hardware_decode_enabled)
+            self._proxy_override_enabled.setChecked(
+                perf.playback_proxy_override_enabled
+            )
+            self._proxy_width.setEnabled(perf.playback_proxy_override_enabled)
+            self._scrub_quality.setEnabled(perf.auto_scrub_quality)
+
+            drop_index = self._drop_mode.findData(perf.effective_drop_mode)
+            self._drop_mode.setCurrentIndex(max(0, drop_index))
+            self._profile_combo.setCurrentIndex(
+                max(0, self._profile_combo.findData(perf.performance_profile))
+            )
+        finally:
+            for widget in widgets:
+                widget.blockSignals(False)
+
+    def _clear_caches_requested(self) -> None:
+        """Ask the editor to flush caches; the editor owns the live state."""
+        self.clear_caches_requested.emit()
+
     def _use_low_lag_preset(self) -> None:
-        self._adaptive_preview.setChecked(True)
-        self._proxy_override_enabled.setChecked(True)
-        self._proxy_width.setValue(640)
-        self._max_prefetch.setValue(1)
-        self._drop_frames.setChecked(True)
+        """Apply the Eco profile, which is the modern low-lag preset."""
+        self._working.performance = apply_profile(
+            self._working.performance, PerformanceProfile.ECO
+        )
+        self._profile_combo.setCurrentIndex(
+            max(0, self._profile_combo.findData(PerformanceProfile.ECO.value))
+        )
+        self._reload_performance_controls()
         self._show_overlay.setChecked(True)
 
     def _build_audio_tab(self) -> QWidget:
@@ -402,7 +674,8 @@ class PreferencesDialog(QDialog):
         self._stream_blocksize.addItem("Automatic", 0)
         for size in (128, 256, 512, 1024, 2048):
             self._stream_blocksize.addItem(str(size), size)
-        blocksize_index = self._stream_blocksize.findData(audio.stream_blocksize)
+        blocksize_index = self._stream_blocksize.findData(
+            audio.stream_blocksize)
         if blocksize_index >= 0:
             self._stream_blocksize.setCurrentIndex(blocksize_index)
         general_form.addRow("Buffer size", self._stream_blocksize)
@@ -411,7 +684,8 @@ class PreferencesDialog(QDialog):
         self._output_sample_rate.setObjectName("PreferencesCombo")
         for rate in (44100, 48000, 96000):
             self._output_sample_rate.addItem(f"{rate} Hz", rate)
-        sample_rate_index = self._output_sample_rate.findData(audio.output_sample_rate)
+        sample_rate_index = self._output_sample_rate.findData(
+            audio.output_sample_rate)
         if sample_rate_index >= 0:
             self._output_sample_rate.setCurrentIndex(sample_rate_index)
         general_form.addRow("Sample rate", self._output_sample_rate)
@@ -442,18 +716,22 @@ class PreferencesDialog(QDialog):
 
         self._audio_driver = QComboBox()
         self._audio_driver.setObjectName("PreferencesCombo")
-        self._audio_driver.currentIndexChanged.connect(self._on_audio_driver_changed)
+        self._audio_driver.currentIndexChanged.connect(
+            self._on_audio_driver_changed)
         device_form.addRow("Driver", self._audio_driver)
 
         self._audio_device = QComboBox()
         self._audio_device.setObjectName("PreferencesCombo")
-        self._reload_audio_devices(preferred_host_api=audio.host_api_name, preferred_device_index=audio.default_device_index)
+        self._reload_audio_devices(
+            preferred_host_api=audio.host_api_name, preferred_device_index=audio.default_device_index)
         device_form.addRow("Output device", self._audio_device)
 
         button_row = QHBoxLayout()
         self._refresh_audio_devices_btn = QPushButton("Refresh Devices")
-        self._refresh_audio_devices_btn.setObjectName("PreferencesSecondaryButton")
-        self._refresh_audio_devices_btn.clicked.connect(self._reload_audio_devices)
+        self._refresh_audio_devices_btn.setObjectName(
+            "PreferencesSecondaryButton")
+        self._refresh_audio_devices_btn.clicked.connect(
+            self._reload_audio_devices)
         button_row.addWidget(self._refresh_audio_devices_btn)
 
         self._test_audio_device_btn = QPushButton("Test Device")
@@ -477,7 +755,8 @@ class PreferencesDialog(QDialog):
         export_group.setObjectName("PreferencesGroup")
         export_form = QFormLayout(export_group)
 
-        self._export_audio_enabled = QCheckBox("Include audio in video exports")
+        self._export_audio_enabled = QCheckBox(
+            "Include audio in video exports")
         self._export_audio_enabled.setChecked(audio.export_audio_enabled)
         export_form.addRow(self._export_audio_enabled)
 
@@ -485,7 +764,8 @@ class PreferencesDialog(QDialog):
         self._export_sample_rate.setObjectName("PreferencesCombo")
         for rate in (44100, 48000, 96000):
             self._export_sample_rate.addItem(f"{rate} Hz", rate)
-        export_sample_rate_index = self._export_sample_rate.findData(audio.export_sample_rate)
+        export_sample_rate_index = self._export_sample_rate.findData(
+            audio.export_sample_rate)
         if export_sample_rate_index >= 0:
             self._export_sample_rate.setCurrentIndex(export_sample_rate_index)
         export_form.addRow("Export sample rate", self._export_sample_rate)
@@ -494,7 +774,8 @@ class PreferencesDialog(QDialog):
         self._export_channels.setObjectName("PreferencesCombo")
         self._export_channels.addItem("Mono", 1)
         self._export_channels.addItem("Stereo", 2)
-        export_channels_index = self._export_channels.findData(audio.export_channels)
+        export_channels_index = self._export_channels.findData(
+            audio.export_channels)
         if export_channels_index >= 0:
             self._export_channels.setCurrentIndex(export_channels_index)
         export_form.addRow("Export channels", self._export_channels)
@@ -596,24 +877,31 @@ class PreferencesDialog(QDialog):
         if index >= 0:
             self._theme_combo.setCurrentIndex(index)
         elif self._working.theme.custom_tokens is not None:
-            self._theme_combo.setCurrentIndex(self._theme_combo.findData("custom"))
-        self._theme_combo.currentIndexChanged.connect(self._on_theme_preset_changed)
+            self._theme_combo.setCurrentIndex(
+                self._theme_combo.findData("custom"))
+        self._theme_combo.currentIndexChanged.connect(
+            self._on_theme_preset_changed)
         form.addRow("Preset", self._theme_combo)
 
         self._accent_btn = self._color_button(self._theme_tokens.accent)
-        self._accent_btn.clicked.connect(lambda: self._pick_theme_color("accent"))
+        self._accent_btn.clicked.connect(
+            lambda: self._pick_theme_color("accent"))
         form.addRow("Accent", self._accent_btn)
 
         self._window_btn = self._color_button(self._theme_tokens.window_bg)
-        self._window_btn.clicked.connect(lambda: self._pick_theme_color("window_bg"))
+        self._window_btn.clicked.connect(
+            lambda: self._pick_theme_color("window_bg"))
         form.addRow("Window background", self._window_btn)
 
         self._panel_btn = self._color_button(self._theme_tokens.panel_bg)
-        self._panel_btn.clicked.connect(lambda: self._pick_theme_color("panel_bg"))
+        self._panel_btn.clicked.connect(
+            lambda: self._pick_theme_color("panel_bg"))
         form.addRow("Panel background", self._panel_btn)
 
-        self._graph_btn = self._color_button(self._rgb_hex(self._theme_tokens.graph_bg_rgb))
-        self._graph_btn.clicked.connect(lambda: self._pick_theme_color("graph_bg_rgb"))
+        self._graph_btn = self._color_button(
+            self._rgb_hex(self._theme_tokens.graph_bg_rgb))
+        self._graph_btn.clicked.connect(
+            lambda: self._pick_theme_color("graph_bg_rgb"))
         form.addRow("Graph background", self._graph_btn)
 
         layout.addWidget(group)
@@ -673,7 +961,8 @@ class PreferencesDialog(QDialog):
         row_layout.setContentsMargins(8, 6, 8, 6)
         row_layout.addWidget(QLabel(info.name), 1)
         button = self._color_button(self._rgb_hex(rgb))
-        button.clicked.connect(lambda _checked=False, k=key, d=info.color: self._pick_node_color(k, d))
+        button.clicked.connect(lambda _checked=False, k=key,
+                               d=info.color: self._pick_node_color(k, d))
         self._node_color_widgets[key] = button
         row_layout.addWidget(button)
         return row
@@ -693,7 +982,8 @@ class PreferencesDialog(QDialog):
         button = QPushButton()
         button.setObjectName("PreferencesSecondaryButton")
         button.setFixedSize(72, 24)
-        button.setStyleSheet(f"background-color: {hex_color}; border: 1px solid #555;")
+        button.setStyleSheet(
+            f"background-color: {hex_color}; border: 1px solid #555;")
         return button
 
     @staticmethod
@@ -734,7 +1024,8 @@ class PreferencesDialog(QDialog):
         if not picked.isValid():
             return
         if field == "graph_bg_rgb":
-            self._theme_tokens.graph_bg_rgb = (picked.red(), picked.green(), picked.blue())
+            self._theme_tokens.graph_bg_rgb = (
+                picked.red(), picked.green(), picked.blue())
         else:
             setattr(self._theme_tokens, field, picked.name())
         self._theme_combo.setCurrentIndex(self._theme_combo.findData("custom"))
@@ -821,10 +1112,12 @@ class PreferencesDialog(QDialog):
     ) -> None:
         """Refresh the list of available audio output devices."""
         current_driver = preferred_host_api if preferred_host_api is not None else (
-            str(self._audio_driver.currentData()) if hasattr(self, "_audio_driver") and self._audio_driver.count() > 0 else ""
+            str(self._audio_driver.currentData()) if hasattr(
+                self, "_audio_driver") and self._audio_driver.count() > 0 else ""
         )
         current_device = preferred_device_index if preferred_device_index is not None else (
-            int(self._audio_device.currentData()) if hasattr(self, "_audio_device") and self._audio_device.count() > 0 and self._audio_device.currentData() is not None else -1
+            int(self._audio_device.currentData()) if hasattr(self, "_audio_device") and self._audio_device.count(
+            ) > 0 and self._audio_device.currentData() is not None else -1
         )
 
         self._audio_driver.blockSignals(True)
@@ -874,7 +1167,8 @@ class PreferencesDialog(QDialog):
             self._audio_device.setCurrentIndex(current_index)
 
     def _on_audio_driver_changed(self) -> None:
-        self._reload_audio_devices(preferred_host_api=str(self._audio_driver.currentData()))
+        self._reload_audio_devices(preferred_host_api=str(
+            self._audio_driver.currentData()))
 
     def _test_audio_device(self) -> None:
         """Play a short tone through the selected output device."""
@@ -909,19 +1203,37 @@ class PreferencesDialog(QDialog):
             # Not edited by any control in this dialog (toggled from the
             # toolbar instead) — carry the current value forward so saving
             # Preferences can never silently reset pin-bar visibility.
-            graph_layout_mode=node_ops.GraphLayoutMode(self._graph_layout_combo.currentData()),
+            graph_layout_mode=node_ops.GraphLayoutMode(
+                self._graph_layout_combo.currentData()),
             show_pin_bar=self._working.editor.show_pin_bar,
         )
-        self._working.performance = PerformanceSettings(
+        # Every persisted field must be written back, otherwise editing any
+        # unrelated tab would silently reset it to its factory default.
+        previous_perf = self._working.performance
+        self._working.performance = replace(
+            previous_perf,
+            performance_profile=str(self._profile_combo.currentData()),
             frame_cache_mb=int(self._frame_cache_mb.value()),
             decode_cache_frames=int(self._decode_cache_frames.value()),
+            prefetch_enabled=self._prefetch_enabled.isChecked(),
+            adaptive_prefetch=self._adaptive_prefetch.isChecked(),
             max_prefetch_frames=int(self._max_prefetch.value()),
-            hardware_decode_enabled=self._hardware_decode.isChecked(),
+            adaptive_preview_enabled=self._adaptive_preview.isChecked(),
             playback_proxy_override_enabled=self._proxy_override_enabled.isChecked(),
             playback_proxy_width=int(self._proxy_width.value()),
-            drop_frames_during_playback=self._drop_frames.isChecked(),
+            high_quality_when_paused=self._high_quality_paused.isChecked(),
+            drop_frames_during_playback=str(
+                self._drop_mode.currentData()) != "OFF",
+            drop_frames_mode=str(self._drop_mode.currentData()),
+            target_preview_fps=int(self._target_preview_fps.value()),
+            scrub_quality_percent=int(self._scrub_quality.value()),
+            auto_scrub_quality=self._auto_scrub_quality.isChecked(),
+            high_quality_after_scrub=self._high_quality_after_scrub.isChecked(),
+            worker_threads=int(self._worker_threads.value()),
+            pause_background_during_playback=self._pause_background.isChecked(),
+            hardware_decode_enabled=self._hardware_decode.isChecked(),
             show_performance_overlay=self._show_overlay.isChecked(),
-            adaptive_preview_enabled=self._adaptive_preview.isChecked(),
+            performance_diagnostics=self._performance_diagnostics.isChecked(),
         )
         self._working.audio = AudioSettings(
             audio_enabled=self._audio_enabled.isChecked(),

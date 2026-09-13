@@ -49,6 +49,43 @@ MAX_MAX_PREFETCH_FRAMES: int = 24
 # scrubbing/paused review can stay at full preview quality.
 DEFAULT_PLAYBACK_PROXY_WIDTH: int = 480
 
+# ----------------------------------------------------------------------
+# Extended performance preferences
+#
+# These back the "Auto" values in Preferences → Performance. ``0`` means
+# "derive from detected hardware"; see ``core.perf.capabilities``.
+# ----------------------------------------------------------------------
+
+#: Preview scale ladder, expressed as percent of the Viewer preview width.
+PREVIEW_SCALE_STEPS: tuple[int, ...] = (100, 75, 50, 33, 25, 13)
+
+#: Explicit proxy widths offered alongside the percentage ladder.
+PREVIEW_WIDTH_PRESETS: tuple[int, ...] = (
+    3840, 2560, 1920, 1280, 960, 720, 640, 480, 320,
+)
+
+DEFAULT_MIN_PREVIEW_SCALE: int = 33
+DEFAULT_MAX_PREVIEW_SCALE: int = 100
+
+#: Scrub previews default to half resolution: sharp enough to judge
+#: framing, cheap enough to keep dragging responsive.
+DEFAULT_SCRUB_QUALITY_PERCENT: int = 50
+
+DEFAULT_PREFETCH_MAX_MB: int = 512
+MAX_PREFETCH_MAX_MB: int = 4096
+
+DEFAULT_THUMBNAIL_CACHE_MB: int = 128
+DEFAULT_RENDER_QUEUE_DEPTH: int = 4
+MAX_RENDER_QUEUE_DEPTH: int = 32
+
+#: Sentinel meaning "let the hardware detection choose".
+AUTO_WORKER_THREADS: int = 0
+
+#: Performance overlay refresh cadence. Repainting the HUD every frame is
+#: itself measurable work, so diagnostic text updates are throttled.
+PERF_OVERLAY_REFRESH_MS: int = 250
+
+
 # Graph layout: horizontal gap when inserting a node into a chain
 NODE_CHAIN_GAP_PX: float = 220.0
 # Auto-organize graph layout

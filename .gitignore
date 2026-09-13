@@ -18,6 +18,11 @@ logs/
 lib/
 
 *.zip
+benchmarks/
+*.png
+installer/
+logs/
+
 
 *.mp4
 *.aph

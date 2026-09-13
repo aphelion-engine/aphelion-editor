@@ -34,6 +34,10 @@ class TimelineScrubber(QWidget):
     frame_scrubbed = pyqtSignal(int)
     in_point_changed = pyqtSignal(int)
     out_point_changed = pyqtSignal(int)
+    #: Emitted when the playhead drag begins/ends. Consumers use this to
+    #: switch preview quality (fast while dragging, sharp once released).
+    scrub_started = pyqtSignal()
+    scrub_finished = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -118,6 +122,7 @@ class TimelineScrubber(QWidget):
             self._set_out(frame)
         else:
             self._dragging_playhead = True
+            self.scrub_started.emit()
             self._seek(frame)
         event.accept()
 
@@ -138,9 +143,12 @@ class TimelineScrubber(QWidget):
         """End any drag operation."""
         if event is None:
             return
+        was_scrubbing = self._dragging_playhead
         self._dragging_playhead = False
         self._dragging_in = False
         self._dragging_out = False
+        if was_scrubbing:
+            self.scrub_finished.emit()
         event.accept()
 
     def _content_rect(self) -> QRectF:

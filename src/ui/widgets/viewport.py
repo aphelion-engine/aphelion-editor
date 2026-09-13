@@ -6,17 +6,17 @@ import time
 from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
-from PyQt6.QtCore import QEvent, QRect, Qt
-from PyQt6.QtGui import QCloseEvent, QImage, QPixmap, QResizeEvent
-from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
-
+from config.constants import PERF_OVERLAY_REFRESH_MS
 from core.audio import AudioData, FrameWithAudio
 from core.events import ObserverEvent
 from core.nodes.base import FRAME_DTYPE
+from core.perf.profiler import profiler, set_profiling_enabled
 from core.preferences.models import PerformanceSettings
 from core.project import Project
-
 from effects.frame_ops import to_display_u8
+from PyQt6.QtCore import QEvent, QRect, Qt
+from PyQt6.QtGui import QCloseEvent, QImage, QPixmap, QResizeEvent
+from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
 from render.audio_playback import get_audio_engine
 from render.frame_evaluator import FrameEvaluationWorker
 from render.preview import ViewportFitMode
@@ -37,6 +37,29 @@ def _qt_image_buffer(frame: np.ndarray) -> bytes:
     return cast(bytes, frame.data)
 
 
+def _viewer_preview_width(project: Project) -> int:
+    """Return the Viewer's own preview width, ignoring active overrides.
+
+    Reading the already-overridden value back would ratchet the proxy width
+    down on every re-application, so the Viewer property is read directly.
+    """
+    viewer_id = getattr(project, "active_viewer", None)
+    nodes = getattr(project, "nodes", None)
+    if viewer_id and nodes is not None:
+        viewer = nodes.get(viewer_id)
+        if viewer is not None:
+            prop = viewer.get_property("preview_max_width")
+            value = getattr(prop, "value", None)
+            if value is not None:
+                try:
+                    width = int(value)
+                except (TypeError, ValueError):
+                    width = 0
+                if width > 0:
+                    return width
+    return max(16, int(getattr(project, "width", 1920) or 1920))
+
+
 class ViewportWidget(QWidget):
     """Shows the active Viewer output without blocking the UI thread."""
 
@@ -55,6 +78,11 @@ class ViewportWidget(QWidget):
         self._audio_engine = get_audio_engine()
         self._queued_audio_until_frame: int | None = None
         self._audio_prefetch_frames: int = 4
+
+        # Scrub / paused-quality state.
+        self._scrubbing: bool = False
+        self._displayed_frame_ms: float = 0.0
+        self._overlay_last_refresh: float = 0.0
 
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
@@ -98,42 +126,126 @@ class ViewportWidget(QWidget):
 
         self._worker = FrameEvaluationWorker(project)
         self._worker.frame_ready.connect(self._on_frame_ready)
+        self._worker.frame_discarded.connect(self._on_frame_discarded)
         self._worker.start()
 
         self.project.subscribe(self.on_project_changed)
         self.request_update()
 
     def apply_performance_settings(self, performance: PerformanceSettings) -> None:
-        """Apply Performance preferences: prefetch cap, proxy override, overlay.
+        """Apply Performance preferences: prefetch, dropping, proxies, overlay.
 
         Parameters:
             performance: Resolved global performance preferences.
 
         Side effects:
-            Updates the prefetch worker's cap, clears/re-applies the playback
-            proxy override to match the current play state, and toggles the
-            on-screen performance overlay.
+            Updates the evaluation worker's prefetch/drop policy, clears and
+            re-applies the playback proxy override, toggles the on-screen
+            performance overlay, and enables profiling when diagnostics are
+            requested.
         """
         self._adaptive_width = None
         self._performance = performance
         self._worker.set_max_prefetch(performance.max_prefetch_frames)
+        self._worker.set_prefetch_enabled(performance.prefetch_enabled)
+        self._worker.set_adaptive_prefetch(performance.adaptive_prefetch)
+        self._worker.set_drop_mode(performance.effective_drop_mode)
+        self._worker.set_target_fps(
+            performance.target_preview_fps or self.project.fps
+        )
+        set_profiling_enabled(
+            performance.performance_diagnostics
+            or performance.show_performance_overlay
+        )
         self._sync_playback_proxy_override()
         self._overlay.setVisible(performance.show_performance_overlay)
         if performance.show_performance_overlay:
-            self._refresh_overlay_text()
+            self._refresh_overlay_text(force=True)
+
+    # ------------------------------------------------------------------
+    # Preview quality resolution
+    # ------------------------------------------------------------------
+
+    def _scrub_width(self, base_width: int) -> int:
+        """Preview width to use while the playhead is being dragged."""
+        percent = self._performance.scrub_quality_percent
+        if not self._performance.auto_scrub_quality:
+            percent = 100
+        percent = max(
+            percent,
+            self._performance.min_preview_scale_percent,
+        )
+        return max(160, min(base_width, int(base_width * percent / 100)))
 
     def _sync_playback_proxy_override(self) -> None:
-        """Enable the forced playback-proxy width only while actively playing."""
-        width = None
-        if self._playback_active:
+        """Enable a forced proxy width while playing or scrubbing."""
+        width: int | None = None
+        base_width = _viewer_preview_width(self.project)
+
+        if self._scrubbing and self._performance.auto_scrub_quality:
+            width = self._scrub_width(base_width)
+        elif self._playback_active:
             if self._performance.playback_proxy_override_enabled:
                 width = self._performance.playback_proxy_width
-            if self._performance.adaptive_preview_enabled and self._adaptive_width is not None:
-                width = min(width, self._adaptive_width) if width else self._adaptive_width
+            if (
+                self._performance.adaptive_preview_enabled
+                and self._adaptive_width is not None
+            ):
+                width = (
+                    min(width, self._adaptive_width)
+                    if width
+                    else self._adaptive_width
+                )
+
         self.project.set_playback_proxy_override(width)
 
+    def begin_scrub(self) -> None:
+        """Enter fast scrub mode: drop resolution and cancel in-flight work."""
+        if self._scrubbing:
+            return
+        self._scrubbing = True
+        self._worker.set_scrubbing(True)
+        self._worker.invalidate()
+        self._sync_playback_proxy_override()
+        if self._performance.show_performance_overlay:
+            self._refresh_overlay_text(force=True)
+
+    def end_scrub(self) -> None:
+        """Leave scrub mode and re-render the playhead at full quality."""
+        if not self._scrubbing:
+            return
+        self._scrubbing = False
+        self._worker.set_scrubbing(False)
+        self._sync_playback_proxy_override()
+        self._render_high_quality_if_idle(after_scrub=True)
+        if self._performance.show_performance_overlay:
+            self._refresh_overlay_text(force=True)
+
+    def _render_high_quality_if_idle(self, after_scrub: bool = False) -> None:
+        """Re-render the current frame sharply once interaction stops.
+
+        Parameters:
+            after_scrub: Selects the ``High Quality After Scrub`` policy
+                instead of ``High Quality When Paused``.
+        """
+        if self._playback_active or self._scrubbing:
+            return
+        enabled = (
+            self._performance.high_quality_after_scrub
+            if after_scrub
+            else self._performance.high_quality_when_paused
+        )
+        if not enabled:
+            return
+        self.request_update()
+
     def _adapt_preview(self) -> None:
-        """Reduce overloaded playback resolution at most once every two seconds."""
+        """Reduce overloaded playback resolution, with hysteresis.
+
+        Adaptation is deliberately slow in both directions: bouncing the
+        proxy width every few frames is more distracting (and more
+        expensive) than playing slightly below target for a moment.
+        """
         if not self._playback_active or not self._performance.adaptive_preview_enabled:
             return
         now = time.monotonic()
@@ -141,25 +253,34 @@ class ViewportWidget(QWidget):
             return
         if self._worker.last_render_seconds <= 1.25 / max(1, self.project.fps):
             return
-        width = self.project.get_preview_settings().max_width or self.project.width
-        if width <= 320:
+        base_width = self.project.get_preview_settings().max_width or self.project.width
+        min_width = max(
+            160,
+            int(base_width * self._performance.min_preview_scale_percent / 100),
+        )
+        width = self._adaptive_width or base_width
+        if width <= min_width:
             return
-        self._adaptive_width = max(320, int(width * 0.75))
+        self._adaptive_width = max(min_width, int(width * 0.75))
         self._last_adaptation = now
         self._sync_playback_proxy_override()
-
 
     def set_project(self, project: Project) -> None:
         """Retarget this viewport at a newly loaded project."""
         self.project.unsubscribe(self.on_project_changed)
         self.project = project
         self._adaptive_width = None
+        self._scrubbing = False
+        self._worker.set_scrubbing(False)
         self._sync_playback_proxy_override()
+        # ``set_project`` bumps the worker generation, so any job still
+        # running for the previous project can never paint into this one.
         self._worker.set_project(project)
         self._pending_request = None
         self._image_buffer = None
         self._last_display_time = None
         self._displayed_fps = 0.0
+        self._overlay_last_refresh = 0.0
         self.project.subscribe(self.on_project_changed)
         self._apply_background()
         self._queued_audio_until_frame = None
@@ -235,6 +356,11 @@ class ViewportWidget(QWidget):
         self.display_frame(frame_data)
         self._adapt_preview()
 
+    def _on_frame_discarded(self, _node_id: str, _frame_num: int) -> None:
+        """A stale result was dropped; keep the HUD counters honest."""
+        if self._performance.show_performance_overlay:
+            self._refresh_overlay_text()
+
     def _result_is_relevant(self, node_id: str, frame_num: int) -> bool:
         """Accept exact requests or safe stale playback results.
 
@@ -247,12 +373,16 @@ class ViewportWidget(QWidget):
         current_frame: int = self.project.current_frame
         if frame_num > current_frame:
             return False
+        # A scrub drag invalidates everything that is not the newest request:
+        # showing an older frame while the playhead has moved on reads as lag.
         request: tuple[str, int] = (node_id, frame_num)
         pending: tuple[str, int] | None = self._pending_request
         if request == pending:
             return True
         if pending is None:
             return frame_num == current_frame
+        if self._scrubbing:
+            return False
         # "Drop frames during playback" trades a little accuracy for
         # fluidity: disabling it forces every displayed frame to be an
         # exact match for the requested playhead position.
@@ -271,7 +401,8 @@ class ViewportWidget(QWidget):
         quantized to uint8 here — the last step before handing pixels to Qt.
         """
         if frame.dtype != np.uint8:
-            frame = to_display_u8(frame)
+            with profiler.scope("display_convert"):
+                frame = to_display_u8(frame)
 
         h, w = frame.shape[:2]
         if len(frame.shape) == 3 and frame.shape[2] == 3:
@@ -296,7 +427,8 @@ class ViewportWidget(QWidget):
             )
 
         # Copy once into Qt-owned memory so the numpy buffer can be reused.
-        pixmap = QPixmap.fromImage(q_img.copy())
+        with profiler.scope("qt_upload"):
+            pixmap = QPixmap.fromImage(q_img.copy())
         self.label.setText("")
         self.label.setPixmap(self._fit_pixmap(pixmap))
         self._roto_overlay.setGeometry(self.label.rect())
@@ -317,6 +449,7 @@ class ViewportWidget(QWidget):
         elapsed = now - previous
         if elapsed <= 0.0:
             return
+        self._displayed_frame_ms = elapsed * 1000.0
         instantaneous = 1.0 / elapsed
         if self._displayed_fps <= 0.0:
             self._displayed_fps = instantaneous
@@ -326,22 +459,59 @@ class ViewportWidget(QWidget):
                 + (1.0 - _FPS_SMOOTHING) * instantaneous
             )
 
-    def _refresh_overlay_text(self) -> None:
-        """Render the performance HUD: display FPS, resolution, and cache use."""
-        used_mb, max_mb, entries = self.project.cache_stats()
+    def _refresh_overlay_text(self, force: bool = False) -> None:
+        """Render the performance HUD.
+
+        Repainting diagnostic text on every presented frame is itself
+        measurable work (layout + relayout of a ``QLabel``), so updates are
+        throttled unless explicitly forced. The values shown are the real
+        counters used by the benchmark harness — not estimates.
+        """
+        now = time.monotonic()
+        if not force and (now - self._overlay_last_refresh) * 1000.0 < PERF_OVERLAY_REFRESH_MS:
+            return
+        self._overlay_last_refresh = now
+
+        cache = self.project.cache_detailed_stats()
+        worker = self._worker.stats()
+
         width = height = 0
         if self._image_buffer is not None:
             height, width = self._image_buffer.shape[:2]
-        proxy_note = (
-            " [proxy]"
-            if self._playback_active
-            and (self._performance.playback_proxy_override_enabled or self._adaptive_width is not None)
-            else ""
-        )
-        self._overlay.setText(
-            f"{self._displayed_fps:5.1f} fps  ·  {width}x{height}{proxy_note}\n"
-            f"cache {used_mb:.0f}/{max_mb:.0f} MB  ·  {entries} frames"
-        )
+
+        if self._scrubbing:
+            mode = "scrub"
+        elif self._playback_active:
+            mode = "play"
+        else:
+            mode = "paused"
+        proxy_note = f" [{mode}]" if mode != "paused" or self._adaptive_width else ""
+
+        target_fps = self._performance.target_preview_fps or self.project.fps
+
+        lines = [
+            f"{self._displayed_fps:5.1f} / {target_fps:.0f} fps   "
+            f"frame {self._displayed_frame_ms:5.1f} ms",
+            f"{width}x{height}{proxy_note}   graph {worker['last_ms']:.1f} ms   "
+            f"budget {worker['frame_budget_ms']:.1f} ms",
+            f"drop {worker['drop_mode']} · {worker['dropped']} skipped · "
+            f"{worker['stale_discarded']} stale",
+            f"cache {cache['size_mb']:.0f}/{cache['max_mb']:.0f} MB · "
+            f"{cache['hit_rate'] * 100:.0f}% hit",
+            f"prefetch {worker['prefetch_hits']}/{worker['prefetch_hits'] + worker['prefetch_wasted']}"
+            f" ({worker['prefetch_hit_ratio'] * 100:.0f}%) · queue {worker['pending']}",
+        ]
+
+        if self._performance.performance_diagnostics:
+            hot = profiler.hot_spots(3)
+            if hot:
+                lines.append(
+                    " · ".join(
+                        f"{snapshot.name} {snapshot.p95_ms:.1f}ms" for snapshot in hot
+                    )
+                )
+
+        self._overlay.setText("\n".join(lines))
         self._overlay.adjustSize()
 
     def displayed_image_rect(self) -> QRect:
@@ -431,10 +601,26 @@ class ViewportWidget(QWidget):
         self._queued_audio_until_frame = None
 
     def set_playback_active(self, active: bool) -> None:
-        """Hint the worker to prefetch; timeline alone drives frame changes."""
+        """Hint the worker to prefetch; timeline alone drives frame changes.
+
+        Starting playback invalidates any in-flight paused/scrub evaluation
+        so the first played frame is not queued behind a high-quality render
+        that is about to be replaced. Stopping playback does the opposite:
+        it drops the playback proxy and re-renders the current frame sharply
+        once the fast preview has already been shown.
+        """
         self._adaptive_width = None
         self._last_adaptation = time.monotonic()
         self._playback_active = bool(active)
+
+        if active:
+            self._worker.set_target_fps(
+                self._performance.target_preview_fps or self.project.fps
+            )
+            self._worker.invalidate()
+        else:
+            self._worker.clear_prefetch_tracking()
+
         self._worker.set_playing(active)
         self._sync_playback_proxy_override()
         self._last_display_time = None
@@ -448,6 +634,12 @@ class ViewportWidget(QWidget):
             self._audio_engine.start()
         else:
             self._audio_engine.stop()
+            if not active:
+                # Show the existing fast preview immediately, then asynchronously
+                # replace it with a full-quality render.
+                self._render_high_quality_if_idle()
+        if self._performance.show_performance_overlay:
+            self._refresh_overlay_text(force=True)
 
     def shutdown(self) -> None:
         """Stop background evaluation before the editor window is torn down."""

@@ -6,7 +6,10 @@ from typing import TYPE_CHECKING
 
 from config.theme_engine import ThemeStyles, build_theme_styles
 from core.nodes.registry import global_node_registry
-from core.preferences.models import AppPreferences, AudioSettings, PerformanceSettings
+from core.perf.profiler import set_profiling_enabled
+from core.perf.scheduler import get_scheduler, recommended_worker_count
+from core.preferences.models import (AppPreferences, AudioSettings,
+                                     PerformanceSettings)
 from render import video_decoder
 from ui.node_graph.theme_state import apply_graph_palette
 
@@ -53,6 +56,24 @@ def _apply_performance_settings(
     video_decoder.set_decode_cache_frames(performance.decode_cache_frames)
     video_decoder.set_hardware_decode_enabled(performance.hardware_decode_enabled)
     editor.viewport.apply_performance_settings(performance)
+
+    # Worker pool sizing: ``0`` means "derive from the CPU". Resizing is
+    # cooperative and safe to call from the UI thread; running jobs finish.
+    scheduler = get_scheduler()
+    scheduler.set_worker_count(
+        performance.worker_threads or recommended_worker_count()
+    )
+
+    # Profiling is opt-in but shared process-wide, so it must be toggled
+    # from exactly one place.
+    set_profiling_enabled(
+        performance.performance_diagnostics
+        or performance.show_performance_overlay
+    )
+
+    # A smaller cache budget should take effect immediately rather than
+    # only after the next eviction cycle.
+    editor.project.relieve_memory_pressure(0.75)
 
 
 def _apply_audio_settings(editor: "Editor", audio: AudioSettings) -> None:

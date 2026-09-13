@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import os
+import threading
+from collections import OrderedDict
 from pathlib import Path
 
 import av
-
 from render.media_info import MediaInfo, MediaValidationError
 from utils.logging_setup import get_logger
 
@@ -14,8 +16,94 @@ _LOG = get_logger("render.media_probe")
 # Aphelion policy: every imported video must carry a real audio stream.
 REQUIRE_AUDIO_TRACK: bool = True
 
+#: Upper bound on cached probe results. Each entry is a few hundred bytes,
+#: so this is negligible memory but eliminates repeated FFmpeg container
+#: opens (tens of milliseconds each) when re-opening a project.
+_PROBE_CACHE_LIMIT: int = 512
 
-def probe_media(path: str | Path, *, require_audio: bool = REQUIRE_AUDIO_TRACK) -> MediaInfo:
+_probe_cache: "OrderedDict[tuple[str, int, int, bool], MediaInfo]" = OrderedDict(
+)
+_probe_cache_lock = threading.Lock()
+_probe_cache_stats = {"hits": 0, "misses": 0, "stores": 0}
+
+
+def _cache_key(source: Path, require_audio: bool) -> tuple[str, int, int, bool] | None:
+    """Return a robust cache key, or ``None`` when the file is unreadable."""
+    try:
+        stat = source.stat()
+    except OSError:
+        return None
+    return (
+        os.path.normcase(str(source.resolve())),
+        int(stat.st_size),
+        int(stat.st_mtime_ns),
+        bool(require_audio),
+    )
+
+
+def probe_media_cached(
+    path: str | Path,
+    *,
+    require_audio: bool = REQUIRE_AUDIO_TRACK,
+) -> MediaInfo:
+    """Return probed metadata, reusing a cached result when possible.
+
+    The key includes canonical path, byte size, and mtime, so editing or
+    replacing a file in place invalidates its entry automatically.
+
+    Raises:
+        MediaValidationError: Same conditions as :func:`probe_media`.
+    """
+    source = Path(path)
+    key = _cache_key(source, require_audio)
+
+    if key is not None:
+        with _probe_cache_lock:
+            cached = _probe_cache.get(key)
+            if cached is not None:
+                _probe_cache.move_to_end(key)
+                _probe_cache_stats["hits"] += 1
+                return cached
+            _probe_cache_stats["misses"] += 1
+
+    info = probe_media(source, require_audio=require_audio)
+
+    if key is not None:
+        with _probe_cache_lock:
+            _probe_cache[key] = info
+            _probe_cache.move_to_end(key)
+            _probe_cache_stats["stores"] += 1
+            while len(_probe_cache) > _PROBE_CACHE_LIMIT:
+                _probe_cache.popitem(last=False)
+
+    return info
+
+
+def probe_cache_stats() -> dict[str, int]:
+    """Return hit/miss counters for the metadata cache."""
+    with _probe_cache_lock:
+        hits = _probe_cache_stats["hits"]
+        misses = _probe_cache_stats["misses"]
+        return {
+            "hits": hits,
+            "misses": misses,
+            "stores": _probe_cache_stats["stores"],
+            "entries": len(_probe_cache),
+            "lookups": hits + misses,
+        }
+
+
+def clear_probe_cache() -> None:
+    """Drop all cached probe results and counters (used by tests)."""
+    with _probe_cache_lock:
+        _probe_cache.clear()
+        for key in _probe_cache_stats:
+            _probe_cache_stats[key] = 0
+
+
+def probe_media(
+    path: str | Path, *, require_audio: bool = REQUIRE_AUDIO_TRACK
+) -> MediaInfo:
     """Inspect ``path`` and return combined video/audio metadata.
 
     Parameters:
