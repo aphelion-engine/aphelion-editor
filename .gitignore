@@ -39,3 +39,12 @@ AphelionEditor/
 native/build/
 src/aphelion_native*.so
 src/aphelion_native*.pyd
+
+# Release artefacts. ``releases/`` is where ``--installer`` writes, and a
+# finished MSI is ~200 MB of binaries that must never enter the repository.
+# The folder itself is kept, its contents are not.
+releases/*
+!releases/.gitkeep
+releases_check/
+dist_native_check/
+*.msi

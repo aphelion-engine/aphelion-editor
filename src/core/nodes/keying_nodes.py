@@ -2,19 +2,60 @@
 
 from __future__ import annotations
 
-import numpy as np
 import cv2
-
+import numpy as np
 from core.nodes.base import NodeSocketType
 from core.nodes.enums import CombineMaskMode
 from core.nodes.frame_base import FrameEffectNode, FrameNode
-from core.nodes.property_factory import choice_property, color_property, slider_property
+from core.nodes.property_factory import (choice_property, color_property,
+                                         slider_property)
 from effects.keying import chroma_key_mask, refine_matte, suppress_spill
 
 KEYING_CATEGORY: str = "Keying"
 
 # Default key color: a standard chroma-key green.
 _DEFAULT_KEY_GREEN: tuple[int, int, int] = (0, 177, 64)
+
+
+def _conform_mask(mask: np.ndarray, reference: np.ndarray) -> np.ndarray:
+    """Return ``mask`` conformed to ``reference``'s geometry and rank.
+
+    Masks are canonically 2-D ``(h, w)`` float planes: the roto rasteriser
+    and the shape tracker both produce that, and a matte is a scalar per
+    pixel by definition. A mask that has travelled through a frame-shaped
+    socket can still arrive as ``(h, w, 1)`` or ``(h, w, 3)``, so the ranks
+    are reconciled here rather than left to NumPy broadcasting, which simply
+    raises when they disagree.
+
+    Only the *spatial* axes take part in the size comparison. The previous
+    implementation unpacked ``h, w, _ = mask_a.shape`` unconditionally,
+    which meant combining any two masks of differing size — the ordinary
+    case, since a roto matte and a tracker matte are rasterised against
+    whatever preview scale is active — raised ``ValueError`` instead of
+    combining them.
+    """
+    if mask.shape[:2] != reference.shape[:2]:
+        height, width = reference.shape[:2]
+        resized = cv2.resize(mask, (width, height),
+                             interpolation=cv2.INTER_NEAREST)
+        # ``cv2.resize`` treats a single-channel array as 2-D and drops the
+        # trailing axis; restore it so the rank is unchanged by resizing.
+        if resized.ndim < mask.ndim:
+            resized = resized.reshape(height, width, *mask.shape[2:])
+        mask = resized
+
+    if mask.ndim == reference.ndim:
+        return mask
+
+    if reference.ndim == 2 and mask.ndim == 3:
+        # A colour image combined with a scalar matte: the mean is the only
+        # reduction that does not arbitrarily privilege one channel.
+        return mask.mean(axis=2, dtype=np.float32)
+
+    if reference.ndim == 3 and mask.ndim == 2:
+        return mask[..., None]
+
+    return mask
 
 
 class ChromaKeyNode(FrameNode):
@@ -238,11 +279,10 @@ class CombineMasksNode(FrameNode):
         if mask_b is None:
             return mask_a
 
-        # --- AUTO RESIZE PATCH ---
-        if mask_a.shape != mask_b.shape:
-            h, w, _ = mask_a.shape
-            mask_b = cv2.resize(mask_b, (w, h), interpolation=cv2.INTER_NEAREST)
-        # --------------------------
+        # A garbage matte and a key matte are rasterised independently and
+        # can disagree on size (different preview scales, different source
+        # resolutions). Conform rather than assume they match.
+        mask_b = _conform_mask(mask_b, mask_a)
 
         mode: CombineMaskMode = self.enum_value(
             "mode", CombineMaskMode, CombineMaskMode.Intersect

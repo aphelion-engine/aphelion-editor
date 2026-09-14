@@ -1,0 +1,5 @@
+Installer output directory.
+
+`python -m aphelion_build --installer` writes the finished MSI here. The
+contents are git-ignored: a built installer is ~200 MB of binaries, and it is
+reproducible from the source tree plus `python -m aphelion_build --installer`.

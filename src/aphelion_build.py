@@ -34,7 +34,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, Iterable
 
-from config.constants import LOG_DIR_NAME, PLUGINS_DIR_NAME, USERDATA_DIR_NAME
+from config.constants import (APP_NAME, APP_VERSION, LOG_DIR_NAME,
+                              PLUGINS_DIR_NAME, USERDATA_DIR_NAME)
 from utils.paths import ensure_directory, resource_path
 
 # ============================================================================
@@ -64,6 +65,90 @@ _INSTALL_SDK_CMD: Final[Path] = REPO_ROOT / "installer" / "install_sdk.cmd"
 _WINDOWS_PLATFORM: Final[str] = "win32"
 _GUI_BASE: Final[str] = "gui"
 
+# ============================================================================
+# Native kernels
+# ============================================================================
+
+#: The compiled kernel module (``native/aphelion_native.c``).
+NATIVE_MODULE: Final[str] = "aphelion_native"
+NATIVE_BUILD_SCRIPT: Final[Path] = REPO_ROOT / "native" / "build.py"
+
+#: The untagged name the build installs, and therefore the name the freeze
+#: has to look for. The build deliberately discards the ABI tag so the same
+#: name works on every interpreter, which means a packaging step cannot
+#: discover it by globbing for ``aphelion_native*.pyd`` and hoping.
+NATIVE_INSTALL_NAME: Final[str] = (
+    f"{NATIVE_MODULE}.pyd" if sys.platform == _WINDOWS_PLATFORM
+    else f"{NATIVE_MODULE}.so"
+)
+NATIVE_INSTALL_PATH: Final[Path] = SRC_ROOT / NATIVE_INSTALL_NAME
+
+
+def ensure_native_module(*, rebuild: bool = False) -> Path | None:
+    """Build the native kernel extension if it is not already present.
+
+    The extension is compiled from C, so a source checkout has no artifact
+    until something builds one. Doing that here means every packaged build
+    ships the fast kernels instead of silently falling back to the Python
+    reference implementations.
+
+    Failure is not fatal. A machine without a C toolchain still produces a
+    working installer; it just ships the slower kernels, and the build log
+    says so.
+
+    Parameters:
+        rebuild: Compile again even when an artifact already exists.
+
+    Returns:
+        The module path, or ``None`` when it could not be produced.
+    """
+    if NATIVE_INSTALL_PATH.exists() and not rebuild:
+        return NATIVE_INSTALL_PATH
+
+    if not NATIVE_BUILD_SCRIPT.is_file():
+        print(f"warning: no native build script at {NATIVE_BUILD_SCRIPT}")
+        return NATIVE_INSTALL_PATH if NATIVE_INSTALL_PATH.exists() else None
+
+    print(f"building native kernels: {NATIVE_BUILD_SCRIPT.name}")
+    try:
+        completed = subprocess.run(
+            [sys.executable, str(NATIVE_BUILD_SCRIPT)],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+        )
+    except OSError as exc:
+        print(f"warning: could not run the native build: {exc}")
+        return NATIVE_INSTALL_PATH if NATIVE_INSTALL_PATH.exists() else None
+
+    if completed.returncode != 0 or not NATIVE_INSTALL_PATH.exists():
+        detail = (completed.stderr or completed.stdout or "").strip()
+        print(
+            "warning: the native kernels could not be built; the bundle will "
+            "run on the NumPy/OpenCV reference implementations.\n"
+            f"         {detail.splitlines()[-1] if detail else 'no compiler output'}"
+        )
+        return NATIVE_INSTALL_PATH if NATIVE_INSTALL_PATH.exists() else None
+
+    print(f"native kernels: {NATIVE_INSTALL_PATH.name}")
+    return NATIVE_INSTALL_PATH
+
+
+def native_include_files() -> list[tuple[str, str]]:
+    """Return an ``include_files`` pair for the native module, if it exists.
+
+    The freezer normally discovers ``import aphelion_native`` in
+    ``core/native.py`` by scanning bytecode and copies the module itself.
+    That import sits inside a ``try``/``except ImportError`` in a function,
+    which is exactly the shape a static analyser can miss — and a miss is
+    invisible until a user notices the editor is running slow. Copying the
+    artifact alongside the executable makes the outcome independent of what
+    the finder decided.
+    """
+    if not NATIVE_INSTALL_PATH.is_file():
+        return []
+    return [(str(NATIVE_INSTALL_PATH), NATIVE_INSTALL_NAME)]
+
 
 # ============================================================================
 # Config
@@ -74,8 +159,12 @@ _GUI_BASE: Final[str] = "gui"
 class BuildConfig:
     """Release identity and packaging knobs for the build pipeline."""
 
-    app_name: str = "Aphelion Editor"
-    version: str = "0.1.0"
+    app_name: str = APP_NAME
+    #: Taken from the application's own constant rather than repeated here.
+    #: These were three separate literals — this one, ``APP_VERSION``, and
+    #: ``pyproject.toml`` — and they had already drifted apart, which is how
+    #: an installer ends up reporting a version the editor does not.
+    version: str = APP_VERSION
     description: str = (
         "Aphelion Editor - A modern, lightweight video editor for the modern age."
     )
@@ -353,7 +442,21 @@ def freeze_include_files(*extra: tuple[str, str]) -> list[tuple[str, str]]:
     pairs: list[tuple[str, str]] = []
     for source, destination in CONFIG.include_files:
         replacement: Path | None = replacements.get(destination.rstrip("/\\"))
-        pairs.append((str(replacement) if replacement is not None else source, destination))
+        if replacement is not None:
+            pairs.append((str(replacement), destination))
+            continue
+
+        # cx_Freeze resolves an include_files source against the *process*
+        # working directory, but these entries are written relative to the
+        # editor root. Building from anywhere else failed with
+        # "error: cannot find file/directory named resources" — a message
+        # that names a path it never looked for in the first place.
+        candidate: Path = Path(source)
+        if not candidate.is_absolute():
+            candidate = REPO_ROOT / candidate
+        pairs.append((str(candidate), destination))
+
+    pairs.extend(native_include_files())
     pairs.extend(extra)
     return pairs
 
@@ -533,11 +636,20 @@ def create_exe_build_options(
     Returns:
         Mapping suitable for ``setup(options={"build_exe": ...})``.
     """
+    includes: list[str] = ["aphelion_cli"]
+    # Ask for the native kernels explicitly as well as copying the artifact:
+    # the freezer's bytecode scan is not guaranteed to see the import, which
+    # lives inside a ``try``/``except ImportError`` in a function.
+    if NATIVE_INSTALL_PATH.is_file():
+        includes.append(NATIVE_MODULE)
+
     return {
         "packages": [*APP_PACKAGES, *THIRD_PARTY_PACKAGES],
-        "includes": ["aphelion_cli"],
+        "includes": includes,
         "excludes": excludes if excludes is not None else list(DEFAULT_EXCLUDES),
-        "include_files": include_files if include_files is not None else freeze_include_files(),
+        "include_files": (
+            include_files if include_files is not None else freeze_include_files()
+        ),
         "optimize": CONFIG.optimize if optimize_level is None else optimize_level,
         "path": _module_finder_path(),
     }
@@ -709,12 +821,25 @@ def _options_dialog_rows() -> MsiTableData:
 
 
 def _options_controls() -> list[tuple[object, ...]]:
-    """Return controls for the per-user / extras options page."""
+    """Return controls for the per-user / extras options page.
+
+    ``Control_Next`` must describe **one cycle covering every control on the
+    dialog**. Windows Installer enforces this and fails the install with
+    error 2810 ("the next control pointers do not form a cycle. There is a
+    pointer from both [3] and [5] to [4]") if two controls name the same
+    successor or the chain closes before covering them all.
+
+    The links below therefore follow the visual order top-to-bottom, left-to-
+    right — Title, Description, ScopeLabel, the scope radio group, the three
+    checkboxes, the rule, then Back/Next/Cancel — and ``Cancel`` wraps back
+    to ``Title`` to close the loop. That also happens to be the tab order a
+    person expects.
+    """
     return [
         ("OptionsDlg", "Title", "Text", 15, 10, 340, 28, _TEXT_TRANSPARENT, None,
          r"{\VerdanaBold10}Installation options", "Description", None),
         ("OptionsDlg", "Description", "Text", 15, 40, 340, 24, _TEXT_TRANSPARENT, None,
-         "Choose who can use Aphelion Editor and optional extras.", "InstallScope", None),
+         "Choose who can use Aphelion Editor and optional extras.", "ScopeLabel", None),
         ("OptionsDlg", "ScopeLabel", "Text", 15, 70, 340, 14, _TEXT_TRANSPARENT, None,
          "Install for:", "InstallScope", None),
         ("OptionsDlg", "InstallScope", "RadioButtonGroup", 20, 88, 330, 52, _VISIBLE_ENABLED,
@@ -724,14 +849,14 @@ def _options_controls() -> list[tuple[object, ...]]:
         ("OptionsDlg", "InstallDesktop", "CheckBox", 20, 172, 330, 18, _VISIBLE_ENABLED,
          "INSTALLDESKTOP", "Create a desktop shortcut", "InstallSdk", None),
         ("OptionsDlg", "InstallSdk", "CheckBox", 20, 194, 330, 18, _VISIBLE_ENABLED,
-         "INSTALLSDK", "Install Aphelion SDK for plugin development (pip)", "Next", None),
+         "INSTALLSDK", "Install Aphelion SDK for plugin development (pip)", "BottomLine", None),
         ("OptionsDlg", "BottomLine", "Line", 0, 286, 370, 0, 1, None, None, "Back", None),
         ("OptionsDlg", "Back", "PushButton", 180, 295, 56, 17, _VISIBLE_ONLY,
          None, "< Back", "Next", None),
         ("OptionsDlg", "Next", "PushButton", 236, 295, 56, 17, _VISIBLE_ENABLED,
          None, "Next >", "Cancel", None),
         ("OptionsDlg", "Cancel", "PushButton", 304, 295, 56, 17, _VISIBLE_ENABLED,
-         None, "Cancel", "Back", None),
+         None, "Cancel", "Title", None),
     ]
 
 
@@ -922,9 +1047,118 @@ def enhance_installer_ui(msi_path: Path) -> None:
         _apply_directory_layout(database)
         _enable_directory_back_button(database)
         _widen_secure_properties(database)
+        for dialog in _repair_dialog_control_cycles(database):
+            print(f"repaired dialog tab cycle: {dialog}")
         database.Commit()
     except Exception as exc:
         raise InstallerUiError(f"Failed to enhance installer UI: {exc}") from exc
+
+
+def _int_or_zero(value: str) -> int:
+    """Return ``value`` as an int, or ``0`` when it is not a number."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _control_cycle_order(
+    controls: list[tuple[str, str, int, int]],
+) -> list[str] | None:
+    """Return the tab cycle for one dialog, or ``None`` when it is broken.
+
+    A dialog is valid only when its ``Control_Next`` pointers form a **single
+    loop through every control it owns**. This returns ``None`` when a
+    successor is missing, when two controls name the same successor, or when
+    the chain closes early into a smaller loop — all of which Windows
+    Installer rejects.
+
+    Parameters:
+        controls: ``(name, control_next, x, y)`` for one dialog.
+
+    Returns:
+        The control names in cycle order, or ``None`` if the chain is broken.
+    """
+    successors: dict[str, str] = {
+        name: control_next for name, control_next, _, _ in controls
+    }
+    if not successors:
+        return None
+
+    start: str = next(iter(successors))
+    order: list[str] = []
+    seen: set[str] = set()
+    current: str = start
+
+    while current not in seen:
+        seen.add(current)
+        order.append(current)
+        current = successors.get(current, "")
+        if not current:
+            return None
+
+    # A well-formed dialog returns to where it started having visited all of
+    # its controls. Anything else is the 2810 shape.
+    if current != start or len(order) != len(successors):
+        return None
+    return order
+
+
+def _repair_dialog_control_cycles(database: object) -> list[str]:
+    """Rewrite broken dialog tab cycles; return the dialogs that were fixed.
+
+    Windows Installer error **2810** — "On the dialog [2] the next control
+    pointers do not form a cycle. There is a pointer from both [3] and [5] to
+    [4]" — is raised while *displaying* a dialog whose ``Control_Next`` chain
+    is not one loop over the whole dialog.
+
+    That is a punishing failure mode: the install stops dead, the message
+    names control *ordinals* rather than controls, and nothing in it says
+    which dialog is at fault or why. It is also easy to author by accident
+    here, because the dialog tables come from three sources that do not know
+    about each other — this project's own rows, cx_Freeze's ``bdist_msi``
+    defaults, and the extra labels added to the standard destination dialog
+    in :func:`_directory_browser_rows`.
+
+    Repairing the chain after the database is built makes the mistake
+    impossible to ship. Only broken dialogs are touched, so the tab order of
+    the ones that were already correct is left exactly as authored.
+
+    Returns:
+        Names of the dialogs whose chains were rewritten.
+    """
+    rows: list[tuple[str, ...]] = _msi_rows(
+        database,
+        "SELECT `Dialog_`, `Control`, `Control_Next`, `X`, `Y` FROM `Control`",
+        5,
+    )
+    dialogs: dict[str, list[tuple[str, str, int, int]]] = {}
+    for dialog, control, control_next, x, y in rows:
+        dialogs.setdefault(dialog, []).append(
+            (control, control_next, _int_or_zero(x), _int_or_zero(y))
+        )
+
+    repaired: list[str] = []
+    for dialog, controls in dialogs.items():
+        if _control_cycle_order(controls) is not None:
+            continue
+
+        # Top-to-bottom, then left-to-right: the tab order a person reading
+        # the page would expect, and one that cannot contain a duplicate
+        # successor because every control appears exactly once.
+        ordered = sorted(controls, key=lambda item: (
+            item[3], item[2], item[0]))
+        names: list[str] = [item[0] for item in ordered]
+        for index, name in enumerate(names):
+            successor: str = names[(index + 1) % len(names)]
+            _execute(
+                database,
+                f"UPDATE `Control` SET `Control_Next`='{successor}' "
+                f"WHERE `Dialog_`='{dialog}' AND `Control`='{name}'",
+            )
+        repaired.append(dialog)
+
+    return repaired
 
 
 def _apply_directory_layout(database: object) -> None:
@@ -1343,6 +1577,9 @@ def build_standalone(build_dir: str | None = None) -> Path:
     base_dir: Path
     output_dir: Path
     base_dir, output_dir = _resolve_freeze_directories(requested)
+    # Compile the kernels first: the freeze copies whatever exists at the
+    # moment it runs, so building afterwards would ship the slow path.
+    ensure_native_module()
     # Stage before freezing: include_files must point at pristine documents,
     # never at the working tree's own userdata/logs.
     stage_fresh_userdata()
@@ -1418,6 +1655,9 @@ def _run_bdist_msi(base_dir: Path, msi_dir: Path) -> Path:
     """Invoke cx_Freeze ``bdist_msi`` with Aphelion freeze and MSI options."""
     from cx_Freeze import setup
 
+    # Compile the kernels before the MSI collects its files, so the
+    # installer ships them instead of the reference implementations.
+    ensure_native_module()
     # Stage before freezing: the installer must bundle pristine documents.
     stage_fresh_userdata()
     original_argv: list[str] = sys.argv.copy()

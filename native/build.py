@@ -28,6 +28,7 @@ and release builds a one-command path to the native core.
 from __future__ import annotations
 
 import argparse
+import importlib
 import importlib.util
 import shutil
 import sys
@@ -57,6 +58,12 @@ PLAIN_SUFFIX: str = ".pyd" if sys.platform == "win32" else ".so"
 #: Where the finished module must end up.
 INSTALL_PATH: Path = SRC_DIR / f"{MODULE_NAME}{PLAIN_SUFFIX}"
 
+#: Where ``build_ext`` is told to write, so the build can install a single
+#: known file into ``src/`` instead of hunting for whatever setuptools
+#: decided to name it. Emptied before every build, which is what makes the
+#: contents unambiguous.
+STAGING_DIR: Path = EDITOR_ROOT / "build" / "native-lib"
+
 #: Optimisation flags. The kernels are memory-bound loops written to be
 #: auto-vectorised; -O2 is already sufficient and -O3 is not worth the
 #: extra build time or the risk of aggressive vectorisation changing
@@ -72,11 +79,79 @@ def _compiler_family() -> str:
     return "msvc" if sys.platform == "win32" else "unix"
 
 
-def _extension():
-    """Return a configured ``setuptools.Extension``."""
+def _extension_class():
+    """Return the ``Extension`` class this environment's build command accepts.
+
+    Not a fixed choice, because the answer depends on import order in a way
+    setuptools does not guarantee:
+
+    * ``setuptools.Extension`` is the documented public class. Once
+      :func:`_prepare_setuptools` has unified the ``distutils`` shim it *is*
+      a subclass of the class the build command validates against, and the
+      check passes;
+    * before that unification the two are unrelated classes — same file,
+      imported twice under different names — and the public class is
+      rejected with "'ext_modules' option must be a list of Extension
+      instances", which names the wrong problem entirely.
+
+    So the class is read out of the validation function's own globals. A
+    function cannot disagree with itself about which class it is about to
+    test against.
+    """
+    _prepare_setuptools()
+
+    try:
+        from setuptools.command.build_ext import build_ext
+    except ImportError:
+        from setuptools._distutils.command.build_ext import build_ext
+
+    validator = getattr(build_ext, "check_extensions_list", None)
+    if validator is not None:
+        candidate = validator.__globals__.get("Extension")
+        if candidate is not None:
+            return candidate
+
     from setuptools import Extension
 
-    return Extension(
+    return Extension
+
+
+def _prepare_setuptools() -> None:
+    """Make setuptools able to build anything in the presence of cx_Freeze.
+
+    Constructing a ``setuptools.Distribution`` makes setuptools load its
+    ``setuptools.finalize_distribution_options`` entry points. On a machine
+    with cx_Freeze installed, one of those entry points imports
+    ``cx_Freeze``, whose ``setuptools.command.install`` shim does
+    ``import distutils.command.install as orig``. Under setuptools'
+    distutils shim that resolves to
+    ``setuptools._distutils.command.install`` — a submodule setuptools never
+    imports eagerly — so the name lookup fails and *every* distribution
+    construction raises, including this one, with an error about
+    ``aphelion_native`` that has nothing to do with ``aphelion_native``.
+
+    Importing that submodule up front populates it, and the plugin then
+    loads. Done defensively: on an environment without cx_Freeze, or with a
+    setuptools/cx_Freeze pairing that is not broken, this is a no-op.
+    """
+    try:
+        import setuptools  # noqa: F401
+    except ImportError:
+        return
+
+    for name in (
+        "setuptools._distutils.command.install",
+        "setuptools._distutils.extension",
+    ):
+        try:
+            importlib.import_module(name)
+        except Exception:  # noqa: BLE001 - a best-effort compatibility shim
+            continue
+
+
+def _extension():
+    """Return a configured ``Extension`` for the kernels."""
+    return _extension_class()(
         MODULE_NAME,
         sources=[str(SOURCE)],
         include_dirs=[],
@@ -101,56 +176,13 @@ def built_modules(directory: Path) -> list[Path]:
     return sorted({path.resolve() for path in found})
 
 
-def _rename_to_plain(verbose: bool = True) -> Path | None:
-    """Rename the freshly built module in ``src/`` to its untagged name.
-
-    The compiled module is the only artifact that matters, so a stale copy
-    under a different ABI tag is removed rather than left to shadow it.
-
-    Returns:
-        The installed module, or ``None`` when nothing was built.
-    """
-    artifacts = built_modules(SRC_DIR)
-    if not artifacts:
-        return None
-
-    # The most recently written file is the one this build just produced;
-    # mtime is the only signal available once the ABI tag is discarded.
-    newest = max(artifacts, key=lambda path: path.stat().st_mtime_ns)
-
-    for artifact in artifacts:
-        if artifact in (newest, INSTALL_PATH):
-            continue
-        try:
-            artifact.unlink()
-            if verbose:
-                print(f"removed stale {artifact.name}")
-        except OSError:
-            continue
-
-    if newest == INSTALL_PATH:
-        return newest
-
-    try:
-        if INSTALL_PATH.exists():
-            INSTALL_PATH.unlink()
-        newest.replace(INSTALL_PATH)
-    except OSError as exc:
-        if verbose:
-            print(f"warning: could not rename {newest.name}: {exc}")
-        return newest
-
-    if verbose:
-        print(f"installed {INSTALL_PATH.name}")
-    return INSTALL_PATH
-
-
 def _search_roots() -> list[Path]:
     """Directories that could hold the extension after a build."""
     return [
         SRC_DIR,
         EDITOR_ROOT,
         NATIVE_DIR,
+        STAGING_DIR,
         EDITOR_ROOT / "build",
         NATIVE_DIR / "build",
     ]
@@ -200,11 +232,38 @@ def module_path() -> Path:
     return INSTALL_PATH
 
 
+def _import_from_src(module_name: str):
+    """Import ``module_name`` as if ``src/`` were on ``sys.path``.
+
+    The build script is run from the editor directory, where ``src/`` is not
+    importable, so ``importlib.find_spec`` cannot see a module that is
+    sitting exactly where it belongs. Reporting "built but not importable"
+    for a perfectly good build sent the reader hunting for a path problem
+    that did not exist. Adding the directory for the duration of the check
+    makes the question being asked — *does this artifact actually load?* —
+    answerable.
+    """
+    directory = str(SRC_DIR)
+    inserted = directory not in sys.path
+    if inserted:
+        sys.path.insert(0, directory)
+
+    importlib.invalidate_caches()
+
+    return inserted, directory
+
+
 def is_built() -> bool:
-    """Return whether the extension appears to be present and importable."""
-    if not built_modules(SRC_DIR):
+    """Return whether the extension is present in ``src/`` and importable."""
+    if not INSTALL_PATH.exists() and not built_modules(SRC_DIR):
         return False
-    return importlib.util.find_spec(MODULE_NAME) is not None
+
+    inserted, directory = _import_from_src(MODULE_NAME)
+    try:
+        return importlib.util.find_spec(MODULE_NAME) is not None
+    finally:
+        if inserted and directory in sys.path:
+            sys.path.remove(directory)
 
 
 def _relocate_into_src(verbose: bool = True) -> list[Path]:
@@ -256,19 +315,29 @@ def build(verbose: bool = True) -> int:
 
     SRC_DIR.mkdir(parents=True, exist_ok=True)
 
-    # The destination is stated explicitly instead of left to ``--inplace``.
+    # Build into a staging directory this script owns, then install the one
+    # file that appears in it. Three things this buys, all of which were
+    # broken by the obvious alternative:
     #
-    # ``--inplace`` derives where to put the module from the extension's
-    # *package*, and this extension is a bare top-level module with no
-    # package — so setuptools falls back to its normal staging directory,
-    # ``build/lib.<platform>-<abi>/``, and ``--inplace`` silently does
-    # nothing. ``package_dir`` was an attempt to steer that and does not
-    # reliably do so either: the module still ended up in the staging tree,
-    # where ``import aphelion_native`` can never find it.
+    # 1. ``--inplace`` derives its destination from the extension's
+    #    *package*, and this extension is a bare top-level module with no
+    #    package, so setuptools fell back to ``build/lib.<platform>-<abi>/``
+    #    and ``--inplace`` silently did nothing. ``package_dir`` did not fix
+    #    it either.
+    # 2. ``--build-lib src`` put the module in the right directory but under
+    #    its ABI-tagged name, leaving ``aphelion_native.pyd`` — the name the
+    #    installer and ``import aphelion_native`` both need — absent.
+    # 3. Pinning the name with a ``cmdclass`` override made setuptools load
+    #    its ``setup_keywords`` entry points, which imports cx_Freeze's
+    #    plugin and fails against setuptools 84.
     #
-    # ``--build-lib`` is not a hint, it is the output path, so the compiled
-    # module lands beside the source tree the application actually imports
-    # from. ``_relocate_into_src`` remains as a safety net.
+    # An empty staging directory is unambiguous: whatever lands in it is the
+    # output of this run, with no mtime guessing and no ABI-tag matching.
+    staging = STAGING_DIR
+    if staging.exists():
+        shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir(parents=True, exist_ok=True)
+
     distribution = Distribution(
         {
             "name": "aphelion-native",
@@ -279,16 +348,20 @@ def build(verbose: bool = True) -> int:
     distribution.script_args = [
         "build_ext",
         "--build-lib",
-        str(SRC_DIR),
+        str(staging),
         "--force",
     ]
     if not verbose:
         distribution.script_args.append("--quiet")
 
     try:
-        # ``parse_command_line`` executes the requested command; it must not
-        # be run a second time by hand or the extension is built twice.
+        # Two calls, and both are required. ``parse_command_line`` only
+        # *parses* — it records ``build_ext`` in ``distribution.commands``
+        # and returns — so on its own it links nothing while reporting no
+        # error at all, which is why the build looked successful and
+        # produced no module. ``run_commands`` is what actually compiles.
         distribution.parse_command_line()
+        distribution.run_commands()
     except Exception as exc:  # noqa: BLE001 - a build failure is not fatal
         print(f"error: native build failed: {exc}", file=sys.stderr)
         print(
@@ -300,32 +373,88 @@ def build(verbose: bool = True) -> int:
         )
         return 1
 
-    _relocate_into_src(verbose=verbose)
+    produced = built_modules(staging)
 
-    installed = _rename_to_plain(verbose=verbose)
+    # Anything setuptools staged somewhere else anyway is still ours.
+    if not produced:
+        produced = _relocate_into_src(verbose=verbose) or built_modules(SRC_DIR)
 
-    artifacts = built_modules(SRC_DIR)
-    if not artifacts or installed is None:
-        # Say where the module *did* end up rather than only that it is
-        # missing: the whole failure mode here was a successful compile in
-        # the wrong directory, which is invisible from the error alone.
-        strays = list(_iter_stray_modules())
-        print(
-            "error: the build reported success but no extension artifact "
-            f"was found in {SRC_DIR}",
-            file=sys.stderr,
-        )
-        if strays:
-            print(f"       found elsewhere: {strays[0]}", file=sys.stderr)
-            print(
-                "       re-run: python native/build.py   # moves it into src/",
-                file=sys.stderr,
-            )
+    if not produced:
+        _report_missing_artifact()
         return 1
 
-    for artifact in artifacts:
-        print(f"built {artifact}")
+    installed = _install_artifact(produced, verbose=verbose)
+    if installed is None:
+        _report_missing_artifact()
+        return 1
+
+    print(f"built {installed}")
     return 0
+
+
+def _install_artifact(produced: "list[Path]", *, verbose: bool = True) -> Path | None:
+    """Install the freshly built module as ``src/aphelion_native.pyd``.
+
+    Every other ``aphelion_native*`` module in ``src/`` is removed as it
+    goes. A stale copy under an ABI-tagged name is not merely untidy: it is
+    a module for a different interpreter sitting on the import path, and
+    ``import aphelion_native`` prefers whichever it finds first.
+
+    Returns:
+        The installed module, or ``None`` if it could not be put in place.
+    """
+    newest = max(produced, key=lambda path: path.stat().st_mtime_ns)
+
+    for stale in built_modules(SRC_DIR):
+        if stale == INSTALL_PATH:
+            continue
+        try:
+            stale.unlink()
+            if verbose:
+                print(f"removed stale {stale.name}")
+        except OSError:
+            continue
+
+    if newest == INSTALL_PATH:
+        return INSTALL_PATH
+
+    try:
+        if INSTALL_PATH.exists():
+            INSTALL_PATH.unlink()
+        shutil.move(str(newest), str(INSTALL_PATH))
+    except OSError as exc:
+        print(f"error: could not install {newest.name}: {exc}", file=sys.stderr)
+        return None
+
+    if verbose:
+        print(f"installed {INSTALL_PATH.name}")
+    return INSTALL_PATH
+
+
+def _report_missing_artifact() -> None:
+    """Explain a build that produced no module, naming where it looked.
+
+    "reported success but no artifact was found" is the message that cost
+    the most time to diagnose, because a successful compile in the wrong
+    directory is invisible from it.
+    """
+    print(
+        f"error: the build produced no extension artifact for {SRC_DIR}",
+        file=sys.stderr,
+    )
+    strays = list(_iter_stray_modules())
+    if strays:
+        print(f"       found elsewhere: {strays[0]}", file=sys.stderr)
+        print(
+            "       re-run: python native/build.py   # installs it into src/",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            "       the compiler produced nothing; check the output above "
+            "for the first error",
+            file=sys.stderr,
+        )
 
 
 def clean() -> int:
@@ -397,14 +526,22 @@ def check() -> int:
         print("fallbacks: active (NumPy/OpenCV reference implementations)")
         return 1
 
-    spec = importlib.util.find_spec(MODULE_NAME)
-    if spec is None:
-        print(f"present at {artifacts[0]} but not importable; check sys.path")
-        print("fallbacks: active")
-        return 1
-
+    inserted, directory = _import_from_src(MODULE_NAME)
     try:
-        import aphelion_native  # type: ignore[import-not-found]
+        if importlib.util.find_spec(MODULE_NAME) is None:
+            print(f"present at {artifacts[0]} but not importable; check sys.path")
+            print("fallbacks: active")
+            return 1
+
+        try:
+            import aphelion_native  # type: ignore[import-not-found]
+        except Exception as exc:  # noqa: BLE001
+            print(f"import failed: {exc}")
+            note = _abi_note(artifacts[0])
+            if note:
+                print(note)
+            print("fallbacks: active")
+            return 1
 
         version = getattr(aphelion_native, "APHELION_NATIVE_VERSION", 0)
         kernels_found = sorted(
@@ -417,20 +554,16 @@ def check() -> int:
         print(f"kernels : {', '.join(kernels_found) or 'none'}")
         print(f"pool    : {'yes' if hasattr(aphelion_native, 'Pool') else 'no'}")
         return 0
-    except Exception as exc:  # noqa: BLE001
-        print(f"import failed: {exc}")
-        note = _abi_note(artifacts[0])
-        if note:
-            print(note)
-        print("fallbacks: active")
-        return 1
+    finally:
+        if inserted and directory in sys.path:
+            sys.path.remove(directory)
 
 
 def main(argv: list[str] | None = None) -> int:
     """Parse arguments and dispatch."""
     parser = argparse.ArgumentParser(
         prog="python native/build.py",
-        description="Build the optional aphelion_native extension.",
+        description="Build the aphelion_native extension into src/.",
     )
     parser.add_argument("--check", action="store_true", help="Report build status.")
     parser.add_argument("--clean", action="store_true", help="Remove artefacts.")

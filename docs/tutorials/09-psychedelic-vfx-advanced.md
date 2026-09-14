@@ -14,7 +14,7 @@ fan-out branch.
 
 ```mermaid
 flowchart LR
-    VI[Video Input<br/>source.mp4] --> KA[Kaleidoscope]
+    VI["Video Input<br/>samples/source.mp4"] --> KA[Kaleidoscope]
     KA --> MI[Mirror]
     MI --> TW[Twirl]
     TW --> WW[Wave Warp]
@@ -26,12 +26,12 @@ flowchart LR
     BL --> NG[Neon Glow]
     NG --> PS[Pixel Sort]
     PS --> VH[VHS]
-    VH --> SL[Scanlines]
-    SL --> FG[Film Grain]
-    FG --> VI2[Vignette]
-    VI2 --> MG[Merge]
-    VI2 --> V[Viewer]
-    MG --> V
+    VH --> GL[Glitch]
+    GL --> SL[Scanlines]
+    SL --> GR[Film Grain]
+    GR --> VG[Vignette]
+    VG --> MG[Merge]
+    MG --> V[Viewer]
 
     VI --> DP[Depth Parallax]
     DN[Depth Noise] --> DP
@@ -40,8 +40,7 @@ flowchart LR
     OSC1[Oscillator A] --> PD1[Property Drive] --> TW
     OSC2[Oscillator B] --> PD2[Property Drive] --> KA
     OSC3[Oscillator C] --> PD3[Property Drive] --> DP
-    RND[Random] --> PD4[Property Drive] --> GL[Glitch]
-    VH -. insert .-> GL
+    RND[Random] --> PD4[Property Drive] --> GL
 ```
 
 Two things make this "advanced":

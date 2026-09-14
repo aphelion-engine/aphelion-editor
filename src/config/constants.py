@@ -2,7 +2,7 @@
 
 APP_NAME: str = "Aphelion Editor"
 APP_ORGANIZATION: str = "Aphelion"
-APP_VERSION: str = "0.1.1"
+APP_VERSION: str = "0.1.2"
 
 # Drop-in plugin folders: bundled ``plugins/`` and writable ``userdata/plugins/``.
 USERDATA_DIR_NAME: str = "userdata"
