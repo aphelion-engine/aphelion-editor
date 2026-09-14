@@ -6,6 +6,7 @@ Guides for running, using, packaging, and extending the desktop editor.
 |---|---|
 | [Getting started](getting-started.md) | Python environment, install, first launch |
 | [User guide](user-guide.md) | Workspace, graph, timeline, export, preferences |
+| [Tutorials](tutorials/README.md) | Nine step-by-step projects: tracking, depth, normals, keying, and a full psychedelic VFX build |
 | [Plugins](plugins.md) | Drop-in folders, Preferences → Plugins, reload |
 | [Architecture](architecture.md) | Package layout, data flow, frame pipeline |
 | [Packaging](packaging.md) | Wheels, freeze, Windows MSI |

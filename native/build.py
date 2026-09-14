@@ -40,6 +40,23 @@ SRC_DIR = EDITOR_ROOT / "src"
 SOURCE = NATIVE_DIR / "aphelion_native.c"
 MODULE_NAME = "aphelion_native"
 
+#: The name the extension is *installed* under, without the ABI tag.
+#:
+#: CPython accepts an untagged extension — ``.pyd`` is the last entry in
+#: ``importlib.machinery.EXTENSION_SUFFIXES`` on Windows, and a bare ``.so``
+#: works on POSIX — so ``aphelion_native.pyd`` imports exactly like
+#: ``aphelion_native.cp314-win_amd64.pyd`` does.
+#:
+#: The trade-off is that an untagged name does not announce which
+#: interpreter built it, so a module left over from a different Python is
+#: found and then fails to import. That failure is loud rather than silent:
+#: ``core.native.probe`` reports the module as unusable and the boot stage
+#: rebuilds it, and :func:`check` names the mismatched ABI explicitly.
+PLAIN_SUFFIX: str = ".pyd" if sys.platform == "win32" else ".so"
+
+#: Where the finished module must end up.
+INSTALL_PATH: Path = SRC_DIR / f"{MODULE_NAME}{PLAIN_SUFFIX}"
+
 #: Optimisation flags. The kernels are memory-bound loops written to be
 #: auto-vectorised; -O2 is already sufficient and -O3 is not worth the
 #: extra build time or the risk of aggressive vectorisation changing
@@ -70,17 +87,62 @@ def _extension():
 def built_modules(directory: Path) -> list[Path]:
     """Return every built extension artifact in ``directory``.
 
-    CPython does not look for a bare ``aphelion_native.pyd``: it looks for
-    the ABI-tagged name setuptools actually produces, e.g.
-    ``aphelion_native.cp314-win_amd64.pyd``. Checking for the untagged name
-    only — as the first version of this script did — reports a successful
-    build as a failure.
+    Matches both the untagged name the build installs under and the
+    ABI-tagged name setuptools produces before it is renamed, because a
+    check that recognises only one of the two reports a successful build as
+    a failure — which is what happened when the build wrote
+    ``aphelion_native.cp314-win_amd64.pyd`` and the check looked only for
+    ``aphelion_native.pyd``.
     """
     found: list[Path] = []
     for suffix in set(EXTENSION_SUFFIXES) | {".pyd", ".so", ".dylib"}:
         found.extend(directory.glob(f"{MODULE_NAME}*{suffix}"))
     # De-duplicate while keeping a stable order.
     return sorted({path.resolve() for path in found})
+
+
+def _rename_to_plain(verbose: bool = True) -> Path | None:
+    """Rename the freshly built module in ``src/`` to its untagged name.
+
+    The compiled module is the only artifact that matters, so a stale copy
+    under a different ABI tag is removed rather than left to shadow it.
+
+    Returns:
+        The installed module, or ``None`` when nothing was built.
+    """
+    artifacts = built_modules(SRC_DIR)
+    if not artifacts:
+        return None
+
+    # The most recently written file is the one this build just produced;
+    # mtime is the only signal available once the ABI tag is discarded.
+    newest = max(artifacts, key=lambda path: path.stat().st_mtime_ns)
+
+    for artifact in artifacts:
+        if artifact in (newest, INSTALL_PATH):
+            continue
+        try:
+            artifact.unlink()
+            if verbose:
+                print(f"removed stale {artifact.name}")
+        except OSError:
+            continue
+
+    if newest == INSTALL_PATH:
+        return newest
+
+    try:
+        if INSTALL_PATH.exists():
+            INSTALL_PATH.unlink()
+        newest.replace(INSTALL_PATH)
+    except OSError as exc:
+        if verbose:
+            print(f"warning: could not rename {newest.name}: {exc}")
+        return newest
+
+    if verbose:
+        print(f"installed {INSTALL_PATH.name}")
+    return INSTALL_PATH
 
 
 def _search_roots() -> list[Path]:
@@ -123,18 +185,19 @@ def _iter_stray_modules():
 
 
 def module_path() -> Path:
-    """Return the in-place build location of the extension.
+    """Return the installed location of the extension.
 
-    Prefers an artifact that actually exists so messages report the real
-    filename; otherwise returns the canonical ``src/`` target the build
-    will produce.
+    Prefers the canonical installed name, then any artifact that actually
+    exists, and otherwise reports where the build will put it.
     """
+    if INSTALL_PATH.exists():
+        return INSTALL_PATH
+
     existing = built_modules(SRC_DIR)
     if existing:
         return existing[0]
 
-    suffix = EXTENSION_SUFFIXES[0] if EXTENSION_SUFFIXES else ".pyd"
-    return SRC_DIR / f"{MODULE_NAME}{suffix}"
+    return INSTALL_PATH
 
 
 def is_built() -> bool:
@@ -239,8 +302,10 @@ def build(verbose: bool = True) -> int:
 
     _relocate_into_src(verbose=verbose)
 
+    installed = _rename_to_plain(verbose=verbose)
+
     artifacts = built_modules(SRC_DIR)
-    if not artifacts:
+    if not artifacts or installed is None:
         # Say where the module *did* end up rather than only that it is
         # missing: the whole failure mode here was a successful compile in
         # the wrong directory, which is invisible from the error alone.
@@ -276,18 +341,46 @@ def clean() -> int:
             shutil.rmtree(directory, ignore_errors=True)
             removed += 1
 
-    # Sweep every location a build might have written to, including the
-    # project root that older setuptools versions target.
-    for directory in (SRC_DIR, EDITOR_ROOT, NATIVE_DIR):
-        for artifact in built_modules(directory):
-            try:
-                artifact.unlink()
-                removed += 1
-            except OSError:
-                continue
+    # Sweep every location a build might have written to. Recursive, because
+    # a build whose output path was not honoured stages the module in
+    # ``build/lib.<platform>-<abi>/`` — leaving a stray copy that a later
+    # import could pick up instead of the real one.
+    for artifact in _iter_stray_modules():
+        try:
+            artifact.unlink()
+            removed += 1
+        except OSError:
+            continue
+
+    for artifact in built_modules(SRC_DIR):
+        try:
+            artifact.unlink()
+            removed += 1
+        except OSError:
+            continue
 
     print(f"removed {removed} artefact(s)")
     return 0
+
+
+def _abi_note(artifact: Path) -> str:
+    """Explain an import failure caused by a stale interpreter ABI.
+
+    The installed name is deliberately untagged, so a module left over from
+    a different Python is *found* and then refuses to load. That is the one
+    real cost of the plain name, and it deserves a better diagnostic than
+    "not importable, check sys.path" — which sends the reader looking for a
+    path problem that does not exist.
+    """
+    expected = EXTENSION_SUFFIXES[0] if EXTENSION_SUFFIXES else ""
+    if not expected or artifact.name != INSTALL_PATH.name:
+        return ""
+    return (
+        f"       note: {artifact.name} is untagged, so it does not record"
+        f" which interpreter built it.\n"
+        f"       this interpreter expects {expected} — rebuild to be sure:\n"
+        f"       python native/build.py"
+    )
 
 
 def check() -> int:
@@ -295,16 +388,12 @@ def check() -> int:
     artifacts = built_modules(SRC_DIR)
 
     if not artifacts:
-        stray = [
-            path
-            for directory in (EDITOR_ROOT, NATIVE_DIR)
-            for path in built_modules(directory)
-        ]
+        stray = list(_iter_stray_modules())
         if stray:
             print(f"not in src/ (found elsewhere: {stray[0]})")
             print("run: python native/build.py    # to move it into place")
         else:
-            print(f"not built (expected {MODULE_NAME} in {SRC_DIR})")
+            print(f"not built (expected {INSTALL_PATH.name} in {SRC_DIR})")
         print("fallbacks: active (NumPy/OpenCV reference implementations)")
         return 1
 
@@ -330,6 +419,9 @@ def check() -> int:
         return 0
     except Exception as exc:  # noqa: BLE001
         print(f"import failed: {exc}")
+        note = _abi_note(artifacts[0])
+        if note:
+            print(note)
         print("fallbacks: active")
         return 1
 
