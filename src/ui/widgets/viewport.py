@@ -98,6 +98,8 @@ class ViewportWidget(QWidget):
         self._scrubbing: bool = False
         self._displayed_frame_ms: float = 0.0
         self._overlay_last_refresh: float = 0.0
+        #: Cached ``native``/``python`` kernel-backend label for the HUD.
+        self._frame_backend_cache: str | None = None
 
         # Audio-master clock: a low-rate timer samples how much audio the
         # device has actually consumed and corrects video timing to match.
@@ -207,6 +209,14 @@ class ViewportWidget(QWidget):
         self._worker.set_adaptive_prefetch(performance.adaptive_prefetch)
         self._worker.set_drop_mode(performance.effective_drop_mode)
         self._worker.set_frames_behind(performance.frames_behind)
+        self._worker.set_realtime_priority(performance.realtime_priority)
+        # Render-ahead is only meaningful when the playhead can sit still and
+        # there is something to warm; it is bounded by the same "frames ahead"
+        # budget the playback prefetch uses.
+        self._worker.set_render_ahead(
+            performance.prefetch_enabled and performance.frames_ahead > 0,
+            performance.frames_ahead,
+        )
         self._worker.set_target_fps(
             performance.target_preview_fps or self.project.fps
         )
@@ -469,6 +479,21 @@ class ViewportWidget(QWidget):
         # exact match for the requested playhead position.
         return self._playback_active and self._performance.drop_frames_during_playback
 
+    def _frame_backend(self) -> str:
+        """Return ``native`` or ``python`` for the HUD's kernel readout.
+
+        Cached after the first call: the probe does an import attempt, and
+        the overlay must not pay for that on every refresh.
+        """
+        if self._frame_backend_cache is None:
+            try:
+                from core.native import probe
+
+                self._frame_backend_cache = probe().backend
+            except Exception:  # noqa: BLE001
+                self._frame_backend_cache = "python"
+        return self._frame_backend_cache
+
     def _blank_frame(self) -> np.ndarray:
         """Return a display-ready black frame (dense representation)."""
         settings = self.project.get_preview_settings()
@@ -621,7 +646,8 @@ class ViewportWidget(QWidget):
             f"stale {worker['stale_discarded']}  ahead {worker['pending']}",
             f"cache {cache['size_mb']:.0f}/{cache['max_mb']:.0f} MB  "
             f"hit {cache['hit_rate'] * 100:.0f}%   "
-            f"raw8 {'yes' if self.project.render_plan().u8_source_ids else 'no'}",
+            f"raw8 {'yes' if self.project.render_plan().u8_source_ids else 'no'}  "
+            f"kern {self._frame_backend()}",
             f"prefetch {worker['prefetch_hits']}/"
             f"{worker['prefetch_hits'] + worker['prefetch_wasted']} "
             f"({worker['prefetch_hit_ratio'] * 100:.0f}%)",
@@ -779,6 +805,22 @@ class ViewportWidget(QWidget):
                 # Show the existing fast preview immediately, then asynchronously
                 # replace it with a full-quality render.
                 self._render_high_quality_if_idle()
+
+        # Garbage collection is coordinated around the playback session only.
+        # A full collection landing mid-playback is a multi-millisecond spike
+        # that has nothing to do with media work, which makes it the single
+        # hardest stutter to attribute from frame timings alone.
+        try:
+            from core.perf.gc_policy import get_gc_policy
+
+            policy = get_gc_policy()
+            if active:
+                policy.begin_playback()
+            else:
+                policy.end_playback()
+        except Exception:  # noqa: BLE001 - GC tuning is strictly advisory
+            pass
+
         if self._performance.show_performance_overlay:
             self._refresh_overlay_text(force=True)
 
@@ -787,6 +829,14 @@ class ViewportWidget(QWidget):
         self._audio_clock_timer.stop()
         self._audio_engine.stop()
         self._worker.stop()
+        # Never leave the collector in a playback-scoped state: the editor
+        # may outlive this viewport (project switch, dock re-creation).
+        try:
+            from core.perf.gc_policy import get_gc_policy
+
+            get_gc_policy().end_playback()
+        except Exception:  # noqa: BLE001
+            pass
 
     def eventFilter(self, watched, event):
         if watched is self.label and event.type() == QEvent.Type.Resize:

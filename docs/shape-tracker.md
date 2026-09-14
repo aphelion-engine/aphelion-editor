@@ -4,6 +4,9 @@ Add **Tracking > Shape Tracker** and connect a source frame. Select the node
 and place its tracking point over a visible textured feature. Use Track forward
 or Track backward in the control strip above the preview.
 
+Placing the point near a frame edge is supported: the pattern box is clamped to
+the image and the point stays anchored to the feature you picked.
+
 Choose Ellipse or Rectangle in Properties and adjust Width, Height, and Feather.
 For a custom outline, enable **Draw polygon**, click at least three vertices
 around the subject, then turn drawing off. The outline closes automatically.

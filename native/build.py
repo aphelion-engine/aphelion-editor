@@ -1,0 +1,313 @@
+"""Build the optional ``aphelion_native`` extension in place.
+
+Usage::
+
+    python native/build.py            # build (or rebuild) the extension
+    python native/build.py --check    # report whether it is importable
+    python native/build.py --clean    # remove build artefacts
+
+The extension is **optional by design**. Nothing in the application imports
+it as a hard dependency: ``core.native`` probes for it at import time and
+every call site has a verified NumPy/OpenCV fallback. That means a machine
+without a C compiler still runs the editor, and a broken build can never
+turn into a broken install.
+
+A separate build script (rather than adding the extension to the project's
+``setup.py``) keeps the cx_Freeze packaging flow — which builds a frozen
+tree, not wheels — working exactly as before while still giving developers
+and release builds a one-command path to the native core.
+"""
+
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import shutil
+import sys
+from importlib.machinery import EXTENSION_SUFFIXES
+from pathlib import Path
+
+NATIVE_DIR = Path(__file__).resolve().parent
+EDITOR_ROOT = NATIVE_DIR.parent
+SRC_DIR = EDITOR_ROOT / "src"
+SOURCE = NATIVE_DIR / "aphelion_native.c"
+MODULE_NAME = "aphelion_native"
+
+#: Optimisation flags. The kernels are memory-bound loops written to be
+#: auto-vectorised; -O2 is already sufficient and -O3 is not worth the
+#: extra build time or the risk of aggressive vectorisation changing
+#: floating-point behaviour. ``/O2`` is MSVC's equivalent.
+_EXTRA_COMPILE_ARGS = {
+    "msvc": ["/O2"],
+    "unix": ["-O2", "-std=c99"],
+}
+
+
+def _compiler_family() -> str:
+    """Return ``"msvc"`` or ``"unix"`` for this platform's default compiler."""
+    return "msvc" if sys.platform == "win32" else "unix"
+
+
+def _extension():
+    """Return a configured ``setuptools.Extension``."""
+    from setuptools import Extension
+
+    return Extension(
+        MODULE_NAME,
+        sources=[str(SOURCE)],
+        include_dirs=[],
+        extra_compile_args=_EXTRA_COMPILE_ARGS[_compiler_family()],
+    )
+
+
+def built_modules(directory: Path) -> list[Path]:
+    """Return every built extension artifact in ``directory``.
+
+    CPython does not look for a bare ``aphelion_native.pyd``: it looks for
+    the ABI-tagged name setuptools actually produces, e.g.
+    ``aphelion_native.cp314-win_amd64.pyd``. Checking for the untagged name
+    only — as the first version of this script did — reports a successful
+    build as a failure.
+    """
+    found: list[Path] = []
+    for suffix in set(EXTENSION_SUFFIXES) | {".pyd", ".so", ".dylib"}:
+        found.extend(directory.glob(f"{MODULE_NAME}*{suffix}"))
+    # De-duplicate while keeping a stable order.
+    return sorted({path.resolve() for path in found})
+
+
+def module_path() -> Path:
+    """Return the in-place build location of the extension.
+
+    Prefers an artifact that actually exists so messages report the real
+    filename; otherwise returns the canonical ``src/`` target the build
+    will produce.
+    """
+    existing = built_modules(SRC_DIR)
+    if existing:
+        return existing[0]
+
+    suffix = EXTENSION_SUFFIXES[0] if EXTENSION_SUFFIXES else ".pyd"
+    return SRC_DIR / f"{MODULE_NAME}{suffix}"
+
+
+def is_built() -> bool:
+    """Return whether the extension appears to be present and importable."""
+    if not built_modules(SRC_DIR):
+        return False
+    return importlib.util.find_spec(MODULE_NAME) is not None
+
+
+def _relocate_into_src(verbose: bool = True) -> list[Path]:
+    """Move any stray build output into ``src/``.
+
+    ``build_ext --inplace`` resolves its destination from the extension's
+    *package*, and a bare top-level module maps to the distribution root —
+    which is the editor directory, not ``src/``. Rather than depend on one
+    setuptools behaviour, anything the build produced is swept up and moved
+    to where the source tree's import path actually looks.
+    """
+    moved: list[Path] = []
+    search_roots = [EDITOR_ROOT, NATIVE_DIR, EDITOR_ROOT / "build", NATIVE_DIR / "build"]
+
+    for root in search_roots:
+        if not root.is_dir():
+            continue
+        for candidate in built_modules(root):
+            if candidate.parent == SRC_DIR.resolve():
+                continue
+            destination = SRC_DIR / candidate.name
+            try:
+                if destination.exists():
+                    destination.unlink()
+                shutil.move(str(candidate), str(destination))
+            except OSError as exc:
+                if verbose:
+                    print(f"warning: could not move {candidate}: {exc}")
+                continue
+            moved.append(destination)
+            if verbose:
+                print(f"moved {candidate.name} -> src/")
+
+    return moved
+
+
+def build(verbose: bool = True) -> int:
+    """Compile the extension into ``src/``.
+
+    Returns:
+        Process exit code; ``0`` on success.
+    """
+    if not SOURCE.is_file():
+        print(f"error: source not found: {SOURCE}", file=sys.stderr)
+        return 1
+
+    try:
+        from setuptools import Distribution
+    except ImportError:
+        print(
+            "error: setuptools is required to build the native extension.\n"
+            "       pip install setuptools",
+            file=sys.stderr,
+        )
+        return 1
+
+    SRC_DIR.mkdir(parents=True, exist_ok=True)
+
+    # ``package_dir`` maps the top-level package to ``src/``, which is what
+    # makes ``build_ext --inplace`` place the module beside the rest of the
+    # source tree instead of in the project root. ``_relocate_into_src``
+    # below is a safety net for setuptools versions that resolve this
+    # differently.
+    distribution = Distribution(
+        {
+            "name": "aphelion-native",
+            "version": "1.0.0",
+            "package_dir": {"": "src"},
+            "ext_modules": [_extension()],
+        }
+    )
+    distribution.script_args = ["build_ext", "--inplace", "--force"]
+    if not verbose:
+        distribution.script_args.append("--quiet")
+
+    try:
+        # ``parse_command_line`` executes the requested command; it must not
+        # be run a second time by hand or the extension is built twice.
+        distribution.parse_command_line()
+    except Exception as exc:  # noqa: BLE001 - a build failure is not fatal
+        print(f"error: native build failed: {exc}", file=sys.stderr)
+        print(
+            "hint: install a C compiler (Visual Studio Build Tools on Windows,\n"
+            "      build-essential + python3-dev on Linux, Xcode Command Line\n"
+            "      Tools on macOS).\n"
+            "      The editor runs without it using the Python fallbacks.",
+            file=sys.stderr,
+        )
+        return 1
+
+    _relocate_into_src(verbose=verbose)
+
+    artifacts = built_modules(SRC_DIR)
+    if not artifacts:
+        print(
+            "error: the build reported success but no extension artifact "
+            f"was found in {SRC_DIR}",
+            file=sys.stderr,
+        )
+        return 1
+
+    for artifact in artifacts:
+        print(f"built {artifact}")
+    return 0
+
+
+def clean() -> int:
+    """Remove build artefacts (the compiled module and setuptools caches)."""
+    removed = 0
+
+    directories = [
+        NATIVE_DIR / "build",
+        EDITOR_ROOT / "build" / "temp",
+    ]
+    for directory in directories:
+        if directory.is_dir():
+            shutil.rmtree(directory, ignore_errors=True)
+            removed += 1
+
+    # Sweep every location a build might have written to, including the
+    # project root that older setuptools versions target.
+    for directory in (SRC_DIR, EDITOR_ROOT, NATIVE_DIR):
+        for artifact in built_modules(directory):
+            try:
+                artifact.unlink()
+                removed += 1
+            except OSError:
+                continue
+
+    print(f"removed {removed} artefact(s)")
+    return 0
+
+
+def check() -> int:
+    """Report whether the extension is built and importable."""
+    artifacts = built_modules(SRC_DIR)
+
+    if not artifacts:
+        stray = [
+            path
+            for directory in (EDITOR_ROOT, NATIVE_DIR)
+            for path in built_modules(directory)
+        ]
+        if stray:
+            print(f"not in src/ (found elsewhere: {stray[0]})")
+            print("run: python native/build.py    # to move it into place")
+        else:
+            print(f"not built (expected {MODULE_NAME} in {SRC_DIR})")
+        print("fallbacks: active (NumPy/OpenCV reference implementations)")
+        return 1
+
+    spec = importlib.util.find_spec(MODULE_NAME)
+    if spec is None:
+        print(f"present at {artifacts[0]} but not importable; check sys.path")
+        print("fallbacks: active")
+        return 1
+
+    try:
+        import aphelion_native  # type: ignore[import-not-found]
+
+        version = getattr(aphelion_native, "APHELION_NATIVE_VERSION", 0)
+        kernels_found = sorted(
+            name
+            for name in ("swap_bgr_rgb_inplace", "resize_bgr_to_rgb", "rgb_to_luma")
+            if hasattr(aphelion_native, name)
+        )
+        print(f"built and importable: {artifacts[0]}")
+        print(f"version : {version}")
+        print(f"kernels : {', '.join(kernels_found) or 'none'}")
+        print(f"pool    : {'yes' if hasattr(aphelion_native, 'Pool') else 'no'}")
+        return 0
+    except Exception as exc:  # noqa: BLE001
+        print(f"import failed: {exc}")
+        print("fallbacks: active")
+        return 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Parse arguments and dispatch."""
+    parser = argparse.ArgumentParser(
+        prog="python native/build.py",
+        description="Build the optional aphelion_native extension.",
+    )
+    parser.add_argument("--check", action="store_true", help="Report build status.")
+    parser.add_argument("--clean", action="store_true", help="Remove artefacts.")
+    parser.add_argument("--quiet", action="store_true", help="Suppress compiler output.")
+    args = parser.parse_args(argv)
+
+    if args.check:
+        return check()
+    if args.clean:
+        return clean()
+
+    exit_code = build(verbose=not args.quiet)
+    if exit_code != 0:
+        return exit_code
+
+    # Verify the module actually imports. A successful compile proves the C
+    # is valid; it does not prove the artifact is loadable by *this*
+    # interpreter, and an ABI mismatch between the compiler's Python headers
+    # and the running interpreter is exactly the failure worth catching here
+    # rather than three steps later inside a frame decode.
+    print()
+    if check() != 0:
+        print(
+            "\nwarning: the extension built but could not be imported.\n"
+            "         The editor will keep using the Python fallbacks.",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

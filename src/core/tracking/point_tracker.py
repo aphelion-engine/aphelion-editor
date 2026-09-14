@@ -6,13 +6,12 @@ cancellable tiles. Point and planar workers share the same tracking engine.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 import logging
-from core.tracking.model import TrackingOptions, TrackingSample, TrackingState
+from collections.abc import Callable
 
 import cv2
 import numpy as np
-
+from core.tracking.model import TrackingOptions, TrackingSample, TrackingState
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -74,10 +73,14 @@ def _track_point_samples(
     width,height = (seed.shape[1],seed.shape[0]) if valid_seed else (0,0)
     center = tuple(float(v) for v in initial_center)
     valid_center = all(np.isfinite(v) and 0 <= v <= 1 for v in center)
-    template = (_extract_patch(seed,center,region_size,width,height)
+    extracted = (_extract_patch(seed,center,region_size,width,height)
                 if valid_seed and valid_center and all(np.isfinite(v) and v > 0 for v in region_size) else None)
-    if template is not None:
-        template = _preprocess_template(template)
+    template = None
+    anchor = None
+    if extracted is not None:
+        patch,anchor_x,anchor_y = extracted
+        anchor = (anchor_x,anchor_y)
+        template = _preprocess_template(patch)
     if template is None or _template_is_degenerate(template):
         for index, number in enumerate(frame_numbers):
             if should_cancel and should_cancel():
@@ -120,7 +123,7 @@ def _track_point_samples(
                 break
             if frame is not None and _is_valid_frame(frame) and frame.shape[:2] == (height,width):
                 candidate,confidence = _match_candidate(frame,template,predicted,radius,
-                    options.ambiguity_margin,should_cancel)
+                    options.ambiguity_margin,should_cancel,anchor)
             else:
                 reason = "unavailable_frame"
             if should_cancel and should_cancel():
@@ -177,13 +180,19 @@ def _track_point_samples(
     return
 
 
-def _match_candidate(frame, template, predicted, radius, ambiguity_margin, should_cancel):
+def _match_candidate(frame, template, predicted, radius, ambiguity_margin, should_cancel, anchor=None):
     """Bounded, tiled correlation; check cancellation between OpenCV calls."""
     height,width = frame.shape[:2]
     th,tw = template.shape
+    # ``anchor`` is the seed's pixel offset inside the template. It equals the
+    # template centre for interior seeds, but a seed near the frame border gets
+    # a template clamped against that border, so its anchor is off-centre. The
+    # search window and the reported position are both anchored there, which
+    # keeps a clamped template from biasing the tracked coordinates.
+    ax,ay = (tw/2.0,th/2.0) if anchor is None else (float(anchor[0]),float(anchor[1]))
     cx,cy = predicted[0]*width,predicted[1]*height
-    x0,x1 = max(0,int(cx-radius*width-tw/2)),min(width,int(cx+radius*width+tw/2)+1)
-    y0,y1 = max(0,int(cy-radius*height-th/2)),min(height,int(cy+radius*height+th/2)+1)
+    x0,x1 = max(0,int(cx-radius*width-ax)),min(width,int(cx+radius*width-ax+tw)+1)
+    y0,y1 = max(0,int(cy-radius*height-ay)),min(height,int(cy+radius*height-ay+th)+1)
     if x1-x0 < tw or y1-y0 < th:
         return None,0.0
     # Convert only the ROI, never the full frame; retain the fixed template.
@@ -212,7 +221,7 @@ def _match_candidate(frame, template, predicted, radius, ambiguity_margin, shoul
             if score-second < ambiguity_margin:
                 return None,float(score)
             break
-    return ((x0+x+tw/2)/width,(y0+y+th/2)/height),float(score)
+    return ((x0+x+ax)/width,(y0+y+ay)/height),float(score)
 
 
 def track_planar_range(
@@ -500,8 +509,18 @@ def _extract_patch(
     size: NormalizedPoint,
     width: int,
     height: int,
-) -> np.ndarray | None:
-    """Extract a grayscale template centered at a normalized position."""
+) -> tuple[np.ndarray, float, float] | None:
+    """Extract a grayscale template centered at a normalized position.
+
+    A pattern box that reaches past the image border is clamped to the frame
+    rather than rejected, so a tracker placed near an edge still produces a
+    usable template. The seed's pixel offset inside the clamped patch is
+    returned alongside it as ``(gray, anchor_x, anchor_y)`` so callers can map
+    a match back to the seed rather than to the patch centre.
+
+    Returns ``None`` only when no usable patch overlaps the frame (for example
+    a seed whose pattern box lies entirely outside the image).
+    """
 
     if not _is_valid_frame(frame):
         return None
@@ -525,23 +544,13 @@ def _extract_patch(
     cx = int(round(center[0] * width))
     cy = int(round(center[1] * height))
 
-    x0 = cx - half_width
-    x1 = cx + half_width
+    # Clamp the pattern box into the image; the anchor records where the seed
+    # sits inside the (possibly off-centre) patch.
+    x0 = max(0, cx - half_width)
+    x1 = min(width, cx + half_width)
 
-    y0 = cy - half_height
-    y1 = cy + half_height
-
-    if x0 < 0:
-        return None
-
-    if y0 < 0:
-        return None
-
-    if x1 > width:
-        return None
-
-    if y1 > height:
-        return None
+    y0 = max(0, cy - half_height)
+    y1 = min(height, cy + half_height)
 
     if x1 <= x0:
         return None
@@ -565,7 +574,7 @@ def _extract_patch(
     if gray.shape[1] < 2:
         return None
 
-    return gray
+    return gray, float(cx - x0), float(cy - y0)
 
 
 def _template_is_degenerate(

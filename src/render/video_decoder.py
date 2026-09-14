@@ -55,6 +55,18 @@ def set_proxy_enabled(enabled: bool) -> None:
     global _PROXY_ENABLED
     _PROXY_ENABLED = bool(enabled)
 
+
+def _kernels():
+    """Return the frame kernel set, preferring the native implementation.
+
+    Imported lazily so a missing/broken extension can never stop this module
+    from importing, and so the probe happens on first decode rather than at
+    application start.
+    """
+    from core.native import kernels
+
+    return kernels()
+
 # ----------------------------------------------------------------
 # Media metadata cache (Section 58: never re-probe an unchanged file)
 # ----------------------------------------------------------------
@@ -351,7 +363,33 @@ class VideoDecoder:
         self._audio_info = None
 
     def read_rgb(self, frame_num: int, max_width: int) -> np.ndarray | None:
-        """Return an RGB frame at ``frame_num``, optionally proxy-scaled."""
+        """Return an RGB frame at ``frame_num``, optionally proxy-scaled.
+
+        Representation and caching
+        --------------------------
+        The cache is keyed by ``(frame, output_width)`` and stores the frame
+        *already at that width*. Previously it stored the full-resolution
+        RGB frame and re-ran ``cv2.resize`` on every read — including every
+        cache **hit**, which is precisely the case playback hits most often
+        while prefetching. A cache hit is now a pure dict lookup with no
+        pixel work at all.
+
+        Conversion and scaling are fused
+        ---------------------------------
+        On a miss the decoder produces BGR and needs RGB at (possibly) a
+        smaller width. The old path was ``cvtColor`` (full-frame allocation
+        + pass) then ``resize`` (second allocation + pass). The kernels in
+        ``core.native`` do one of two cheaper things:
+
+        * **no downscale needed** — swap channels *in place* in the buffer
+          ``cv2`` already returned, which allocates nothing at all;
+        * **downscale needed** — one fused pass writing into the destination,
+          eliminating both the intermediate full-resolution RGB frame and
+          one full-frame memory pass.
+
+        Both are mathematically identical to what they replace, and the
+        pure-Python fallback implements the same contract.
+        """
         with profiler.scope("decode"):
             with _CAPTURE_LOCK:
                 if not self.is_open or self._capture is None:
@@ -361,10 +399,11 @@ class VideoDecoder:
                 if self._frame_count > 0:
                     target = min(target, self._frame_count - 1)
 
-                cached = self._frame_cache.get(target)
+                key = (target, int(max_width))
+                cached = self._frame_cache.get(key)
                 if cached is not None:
-                    self._frame_cache.move_to_end(target)
-                    return self._scale_rgb(cached, max_width)
+                    self._frame_cache.move_to_end(key)
+                    return cached
 
                 if not self._position_to(target):
                     return self._held_frame(max_width)
@@ -375,14 +414,53 @@ class VideoDecoder:
                     return self._held_frame(max_width)
 
                 self._next_index = target + 1
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                self._remember(target, rgb)
-                return self._scale_rgb(rgb, max_width)
+                rgb = self._convert_bgr_to_rgb(frame, max_width)
+                if rgb is None:
+                    return self._held_frame(max_width)
 
-    def _remember(self, frame_num: int, rgb: np.ndarray) -> None:
+                self._remember(key, rgb)
+                return rgb
+
+    def _convert_bgr_to_rgb(
+        self, frame: np.ndarray, max_width: int
+    ) -> np.ndarray | None:
+        """Convert a decoded BGR frame to RGB at the requested width.
+
+        Returns a frame owned outright by the caller (the decode cache), so
+        pooled buffers are deliberately *not* used here — a cached frame can
+        outlive any borrowing scheme, and handing pooled memory to a cache
+        is exactly the ownership trap that makes zero-copy pipelines
+        corrupt frames.
+        """
+        source_height, source_width = frame.shape[:2]
+        target_width = max(0, int(max_width))
+
+        if target_width <= 0 or source_width <= target_width:
+            # No scaling: swap channels in place in the buffer OpenCV just
+            # returned. Nothing else references it, so mutating is safe and
+            # costs one pass with zero allocation.
+            try:
+                _kernels().swap_bgr_rgb_inplace(frame)
+                return frame
+            except Exception:  # noqa: BLE001 - fall back to the library path
+                return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        scale = target_width / float(source_width)
+        out_width = max(1, int(round(source_width * scale)))
+        out_height = max(1, int(round(source_height * scale)))
+
+        destination = np.empty((out_height, out_width, 3), dtype=np.uint8)
+        try:
+            _kernels().resize_bgr_to_rgb(frame, destination, out_width, out_height)
+        except Exception:  # noqa: BLE001
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            return cv2.resize(rgb, (out_width, out_height), interpolation=cv2.INTER_AREA)
+        return destination
+
+    def _remember(self, key: tuple[int, int], rgb: np.ndarray) -> None:
         """Insert ``rgb`` into the bounded LRU, evicting the oldest entry."""
-        self._frame_cache[frame_num] = rgb
-        self._frame_cache.move_to_end(frame_num)
+        self._frame_cache[key] = rgb
+        self._frame_cache.move_to_end(key)
         while len(self._frame_cache) > max(1, _DECODE_CACHE_FRAMES):
             self._frame_cache.popitem(last=False)
 
@@ -396,9 +474,29 @@ class VideoDecoder:
         with _CAPTURE_LOCK:
             self._frame_cache.clear()
 
+    def cache_stats(self) -> dict[str, int]:
+        """Return decode-cache counters (entries, capacity, proxy status)."""
+        return {
+            "entries": len(self._frame_cache),
+            "capacity": max(1, _DECODE_CACHE_FRAMES),
+            "is_proxy": 1 if self._proxy_path else 0,
+        }
+
     def _held_frame(self, max_width: int) -> np.ndarray | None:
+        """Return the most recently decoded frame, for held-frame recovery.
+
+        Entries are already stored at a width, so this prefers a frame
+        cached at exactly the requested width and otherwise rescales the
+        newest entry rather than failing.
+        """
         if not self._frame_cache:
             return None
+
+        newest_key = next(reversed(self._frame_cache))
+        exact = self._frame_cache.get((newest_key[0], int(max_width)))
+        if exact is not None:
+            return exact
+
         _, last_rgb = next(reversed(self._frame_cache.items()))
         return self._scale_rgb(last_rgb, max_width)
 

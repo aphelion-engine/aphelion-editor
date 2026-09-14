@@ -29,6 +29,64 @@ Preview and export evaluate the graph into **float32 RGB** frames, shape `(heigh
 
 Built-in unary effects subclass `FrameEffectNode`. Plugin video effects subclass `aphelion_sdk.VideoEffectPlugin`, which is the same host node type behind a public API.
 
+### Frame representations
+
+The pipeline moves frames between **two** representations rather than one:
+
+* `SOURCE_DTYPE` (`uint8`) — what the decoder, the importer, and the cache
+  produce. Four times denser, so a byte-budgeted cache holds four times as
+  many frames.
+* `FRAME_DTYPE` (`float32`, `[0, 1]`) — the canonical *processing* contract.
+
+Promotion between them is **lazy and demand-driven**. `ensure_rgb_f32`
+normalizes any input representation, so a node that needs float precision
+promotes once, at the point of use, instead of the source promoting eagerly
+and the display boundary immediately quantizing back.
+
+Whether a source is *allowed* to hand over its raw 8-bit frame is decided by
+the compiled render plan (`core/render_plan.py`), which grants permission
+only when every node between that source and the Viewer has declared
+`Node.accepts_u8_frame`. The declaration defaults to `False`, so an
+unverified node keeps the always-float behaviour and opting in is a
+deliberate act.
+
+### Compiled execution plan
+
+Graph structure — evaluation order, raw-8-bit eligibility, dependency depth,
+independent branches, longest-path cost — is compiled once into an immutable
+`RenderPlan` and reused until `Project.topology_revision` changes. Changing a
+property deliberately does *not* invalidate it.
+
+### Deadlines and adaptive quality
+
+`core/playback/` holds the Qt-free playback engine: `MediaClock` (audio-master
+capable), `DeadlineQueue` (bounded, earliest-deadline-first, supersedes stale
+work), `QualityGovernor` (hysteretic preview scaling driven by measured
+deadline misses), `CostEstimator`, and `FrameTrace` (per-frame stage timings
+with stall attribution).
+
+### Media layer
+
+`core/media/proxy.py` generates and caches all-intra editing proxies
+(`-g 1`, so any frame is one decode step away), keyed by source identity and
+recipe version, with frame counts verified before a proxy is trusted.
+`core/media/index.py` caches keyframe positions so seeking goes straight to
+the right GOP instead of probing. Both are produced on the background
+scheduler and never block opening a project.
+
+### Native kernels
+
+`native/aphelion_native.c` provides the operations where native code beats
+calling into NumPy/OpenCV — in-place BGR→RGB swap, fused convert+downscale,
+and a buffer pool. Everything compute-bound stays with the libraries that
+already vectorise it.
+
+`core/native.py` is the only module that knows whether the extension exists,
+and every operation has a pure-Python reference implementation that the test
+suite compares against. **The extension is optional**: the editor runs
+unchanged without it, and `probe().backend` reports which path is live. See
+`native/README.md`.
+
 ## Registry
 
 `NodeLoader` registers `BUILTIN_NODE_TYPES` from `core.nodes.catalog` (77 types). `PluginLoader` then registers enabled SDK plugins into the same `global_node_registry`, so plugin nodes appear in the same menus and search palette as built-ins. `CustomNodeStore` then registers saved custom node definitions under the `Custom` category.

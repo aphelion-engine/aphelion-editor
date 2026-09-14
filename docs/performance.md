@@ -224,6 +224,34 @@ get_frame_trace().dump("performance_trace.json")
 
 `get_frame_trace().format_report()` prints the summary plus the worst stalls.
 
+### Playback-lifetime policy
+
+Three things are scoped to the playback session rather than applied globally.
+
+**Garbage collection.** A full collection landing mid-playback is a
+multi-millisecond spike with no media work behind it — the hardest kind of
+stutter to attribute from frame timings, because nothing in the pipeline
+looks slow. `core.perf.gc_policy.GCPolicy` calls `gc.freeze()` when playback
+starts and `gc.unfreeze()` plus a single collection when it stops, so the
+collector still runs between playbacks. It deliberately does **not** disable
+GC: playback stays correct and bounded, the work is just moved off the
+critical path. Wired in `ViewportWidget.set_playback_active`, and unwound in
+`shutdown()` so a project switch cannot leave the collector frozen.
+
+**Thread priority.** The playback thread is the only workload here with a
+hard deadline, so it is the only thread that asks for a better scheduling
+class — bounded to above-normal (never time-critical), and best-effort: if
+the OS declines, nothing changes and nothing is reported as an error.
+
+**Render-ahead.** While paused, the worker warms up to `frames_ahead` frames
+around the playhead, one frame per loop iteration, so the main loop can poll
+for real requests before every step and an incoming request always
+pre-empts speculative work. It is suppressed while playing and while
+scrubbing, and it converges: once the look-ahead distance is warm the worker
+holds its cursor and does nothing rather than re-walking the same frames.
+This is what makes *press Play* cheap — the first deadlines are already
+satisfied.
+
 ### Audio as the master clock
 
 `AudioPlaybackEngine.presented_seconds()` exposes how much audio the device
@@ -308,12 +336,181 @@ All new values validate with fallbacks: an unknown value becomes the default
 rather than raising, so a preferences file written by a different build
 always loads.
 
+### Settings that are stored but not yet backed by an engine
+
+Being explicit, because a preference that silently does nothing is worse
+than no preference at all:
+
+| Setting | Status |
+|---|---|
+| `use_editing_proxies`, `generate_proxies_automatically`, `proxy_height` | **Fully wired.** Drives proxy substitution in `VideoDecoder` and background generation. |
+| `render_cache_mode`, `disk_cache_limit_mb`, `cache_heavy_nodes_automatically` | **Stored only.** The persistent disk render cache is not implemented yet; these describe the intended policy for it. |
+| `playback_engine`, `decoder_backend`, `gpu_enabled`, `gpu_memory_budget_mb` | **Stored only.** No GPU execution path or alternative decoder backend exists yet. |
+| `realtime_priority` | **Stored only.** No OS priority change is applied. |
+| `frames_ahead`, `frames_behind`, `decode_queue_depth` | **Partially wired.** `frames_ahead` caps the deadline queue; `frames_behind` is recorded but not yet used for retention. |
+| `performance_trace_enabled` | **Fully wired.** Enables the frame trace and stall analysis. |
+| `realtime_priority` | **Fully wired.** The playback thread asks the OS for `THREAD_PRIORITY_ABOVE_NORMAL` (Windows) or `nice(-4)` (POSIX) while it runs. Deliberately bounded — never time-critical — and best-effort: if the OS declines, nothing changes and nothing is reported as an error. Changing it takes effect the next time the worker thread starts. |
+| `frames_ahead` | **Fully wired.** Sets both the deadline queue capacity and the paused render-ahead distance. |
+| `frames_behind`, `decode_queue_depth` | **Partially wired.** `frames_behind` is recorded but not yet used for retention; `decode_queue_depth` is not consulted. |
+
+The render plan's `Node.accepts_u8_frame` mechanism is the insertion point
+for the GPU work: a node that can execute on a texture declares the same
+kind of capability, and the plan decides where CPU/GPU transfers happen.
+That is the second half of the frame-abstraction work, and it is not done.
+
 ---
 
-## 8. What was verified, and what was not
+## 9. The native core
+
+The brief asks directly whether Python belongs in the per-frame hot path,
+and whether the media core should be native. The answer after measurement is
+**partly, and narrowly** — and the narrowness is the interesting part.
+
+### Where "just rewrite it in C" would have been wrong
+
+The assumption worth testing is "Python is slow, therefore port the frame
+path." Measuring what is actually on that path says otherwise:
+
+| Operation | Who really executes it | Would native beat it? |
+|---|---|---|
+| H.264 decode | FFmpeg via OpenCV | No — already C |
+| `cvtColor` | OpenCV, SIMD | No — already C++ |
+| `resize` | OpenCV, SIMD | No — already C++ |
+| uint8↔float32 | NumPy, SIMD | No — already vectorised |
+| Effect pixel maths | NumPy/OpenCV | No — already vectorised |
+| **Buffer allocation churn** | CPython allocator | **Yes** |
+| **Redundant full-frame passes** | Python *orchestration* | **Yes** |
+
+Every compute-bound stage is already native code called through a thin
+binding. Porting those to C would produce a second implementation to keep
+correct, for no speedup — the execution is identical, only the caller
+changes. The GIL is not the bottleneck either: FFmpeg, OpenCV, and NumPy all
+release it for the duration of their calls.
+
+What *is* Python's fault is **orchestration waste**: allocating buffers that
+did not need to exist, and moving frames through passes that did not need to
+happen. That is what the native layer targets, and only that.
+
+### What `native/aphelion_native.c` implements
+
+Three kernels and a pool. Each replaces an allocation or a pass — never a
+loop that a library already vectorises.
+
+**`swap_bgr_rgb_inplace(buffer, width, height)`**
+
+OpenCV returns BGR; the pipeline is RGB. The previous code called
+`cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)`, which **allocates a second
+full-resolution frame** and copies through it.
+
+The buffer `cv2.VideoCapture.read()` returns is owned solely by the caller,
+so the swap can happen in place: one pass, **zero allocation**, O(1) extra
+memory. For a decoded-but-unscaled frame this removes the entire conversion
+cost.
+
+**`resize_bgr_to_rgb(src, dst, sw, sh, ow, oh)`**
+
+The previous downscale sequence was: allocate full-resolution RGB → copy the
+whole frame through it → allocate the scaled output → resample into that.
+
+This fuses channel swap and box downscale into **one pass writing into a
+caller-supplied destination**: one pass instead of two, one buffer instead of
+two. Box bounds use integer arithmetic (`i * src / out`), so the mapping is
+exact and monotonic with no accumulated float drift.
+
+**`rgb_to_luma(src, dst, width, height)`**
+
+RGB → luma using the same BT.601 fixed-point coefficients as
+`cv2.COLOR_RGB2GRAY`, so results are numerically identical.
+
+*Honest note:* this one is **exposed and tested but not currently on a hot
+path.** Both `_to_gray_u8` call sites in the tracker already operate on crops
+(`frame[y0:y1, x0:x1]`), not full frames, so there is no full-frame
+conversion to replace. It is kept because it is the correct kernel for the
+full-frame case (histograms, auto-levels) and because it is the natural
+primitive for a future native tracking batch path. Claiming a tracking
+speedup from it would be false.
+
+**`Pool(budget_bytes)`**
+
+A byte-budgeted pool of reusable frame buffers, keyed by exact byte size.
+
+CPython does not leak frames, but allocating and discarding multi-megabyte
+buffers many times per second shows up as allocator time, page faults, and GC
+pressure from transient objects. Buffers are wrapped zero-copy with
+`np.frombuffer`, so pooled memory can be used directly as a frame.
+
+**Ownership rule, enforced in code:** a pooled buffer must never be handed to
+a cache. Once released it may be reused by the very next `acquire`, so a
+cache holding a pooled frame would silently show the wrong picture.
+`VideoDecoder._convert_bgr_to_rgb` therefore allocates normally — its output
+*is* cached — and says so in a comment.
+
+### The restructure this enabled
+
+Wiring the kernels in exposed a second, unrelated inefficiency worth more
+than the kernels themselves.
+
+The decode cache was keyed by **frame number** and stored the
+full-resolution RGB frame. Every `read_rgb(frame, width)` then re-ran
+`cv2.resize` — *including every cache hit*, which is the case playback hits
+most often while prefetching.
+
+The cache is now keyed by **`(frame, output_width)`** and stores the frame
+already at that width. A hit is a pure dict lookup with no pixel work at
+all, and a miss is a single fused pass. Entries are also far smaller, so the
+same entry budget covers more of the playhead neighbourhood.
+
+### The stable Python API
+
+`src/core/native.py` is the only place that knows whether the extension
+exists:
+
+```python
+from core.native import kernels, native_available, probe
+
+probe().backend          # "native" | "python"
+kernels().swap_bgr_rgb_inplace(frame)
+```
+
+Callers never branch on availability. Three properties make this safe:
+
+1. **Optional by construction.** Nothing imports the extension except this
+   module, and it catches `ImportError`, a partially built module, and any
+   other failure — degrading to the fallback rather than raising.
+2. **Probing is lazy.** It happens on first decode, not at launch, so a cold
+   start does not wait for it.
+3. **The fallback is the reference.** The pure-Python implementations define
+   the contract; `tests/test_native_kernels.py` asserts the native kernels
+   agree with them, and specifically that `resize_bgr_to_rgb` is
+   **bit-identical** rather than merely close. Shipping a native build cannot
+   silently change a pixel.
+
+### Build
+
+```powershell
+python native/build.py --check   # status
+python native/build.py           # build
+python native/build.py --clean
+```
+
+The extension is *not* added to `setup.py`. The project's packaging path is
+cx_Freeze building a frozen tree, not wheels, and threading a compiler
+requirement through it would make a release build fail on machines that do
+not need the extension at all. `native/CMakeLists.txt` covers IDE and
+instrumented builds. Details and the full rationale are in
+`native/README.md`.
+
+The kernel backend is visible in the performance overlay (`kern native` /
+`kern python`) and in `detect_capabilities().frame_backend`, so there is never
+ambiguity about which implementation produced a number.
+
+---
+
+## 10. What was verified, and what was not
 
 **Verified by construction and unit tests** (`tests/test_playback_engine.py`,
-`tests/test_frame_contract.py`, `tests/test_media_cache.py`):
+`tests/test_frame_contract.py`, `tests/test_media_cache.py`,
+`tests/test_native_kernels.py`):
 
 * the uint8 round trip is lossless;
 * `ensure_rgb_f32` normalizes every representation it may receive;
@@ -326,31 +523,44 @@ always loads.
   the hysteresis thresholds;
 * proxy cache identity is deterministic and rejects unverified or stale
   manifests;
-* keyframe index queries are exact.
+* keyframe index queries are exact;
+* the native and pure-Python kernels agree, with `resize_bgr_to_rgb`
+  bit-identical;
+* the buffer pool respects its byte budget and hands back the same object.
 
-**Not verified in this session**: end-to-end wall-clock timings. There was no
-terminal available to run the benchmark, and inventing those numbers would
-make them worthless. Run the command in §1 and the report is complete.
+**Not verified in this session**: end-to-end wall-clock timings, and the
+native extension has not been compiled. There was no terminal available, so
+inventing timings would make them worthless and claiming a successful build
+would be a guess. Run the commands in §1 and §11.
 
 **Known remaining bottlenecks** (expected, in rough order):
 
 1. **Effect-chain memory bandwidth.** Each effect is a full-frame float32
-   pass. A long chain is bandwidth-bound, not compute-bound. Fixing this
-   properly means fusing adjacent per-pixel operations (one shader or one
-   pass) rather than optimising Python.
+   pass. A long chain is bandwidth-bound, not compute-bound — which is why
+   the native layer does *not* touch effects. Fixing it properly means fusing
+   adjacent per-pixel operations (one shader, or one fused pass) rather than
+   optimising Python.
 2. **No GPU execution yet.** `Node.accepts_u8_frame` is the first half of the
    frame-abstraction work; a `FrameHandle` that can also be a GPU texture is
    the second. The render plan is the right place for that decision to live.
-3. **Tracking and planar tracking** still run on the CPU path unchanged.
+3. **Tracking and planar tracking** run on the CPU path unchanged. They
+   already crop before converting, so there is no cheap win there.
 4. **Export pipeline** is unchanged; it already used a scratch cache and now
    also benefits from uint8 sources, but has no bounded render/encode
    overlap.
 5. **Sequential decode-ahead** relies on the prefetch window; there is no
-   dedicated decode thread with its own ring yet.
+   dedicated decode thread with its own ring yet. This is the next structural
+   piece: decode and graph evaluation currently overlap only through
+   prefetch, not through an explicit producer/consumer boundary.
+6. **Native codecs.** The decoder still goes through OpenCV rather than
+   talking to `libavcodec` directly, so hardware decode surfaces (D3D11VA,
+   NVDEC, QSV) and packet-level keyframe control are out of reach. That is
+   the largest remaining native opportunity, and it is a real project, not a
+   kernel.
 
 ---
 
-## 9. Reproduction checklist
+## 11. Reproduction checklist
 
 ```powershell
 # 1. Baseline
@@ -358,15 +568,23 @@ git stash
 python main.py --benchmark-playback clip.mp4 --benchmark-json before.json
 git stash pop
 
-# 2. Current
+# 2. Build the native core (optional)
+python native/build.py --check
+python native/build.py
+
+# 3. Current
 python main.py --benchmark-playback clip.mp4 --benchmark-json after.json
 
-# 3. Compare the suites measured by both
+# 4. Compare the suites measured by both
 python -m benchmarks --compare before.json after.json
 
-# 4. Unit tests
-python -m pytest tests/test_playback_engine.py tests/test_frame_contract.py tests/test_media_cache.py -q
+# 5. Unit tests
+python -m pytest tests/test_playback_engine.py tests/test_frame_contract.py `
+               tests/test_media_cache.py tests/test_native_kernels.py -q
 ```
+
+Every kernel test runs against **both** backends, so the fallback path is
+exercised even on a machine where the extension is built.
 
 Test the codecs you actually use — H.264 1080p, H.264/H.265 4K, and an
 editing codec (ProRes/DNxHR) if you have one. A decoder change that only

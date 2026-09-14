@@ -597,7 +597,12 @@ class PreferencesDialog(QDialog):
     # ------------------------------------------------------------------
 
     def _hardware_summary_text(self) -> str:
-        """Describe the detected machine in one short line."""
+        """Describe the detected machine in one short line.
+
+        Includes the frame-kernel backend so it is unambiguous whether the
+        optional native extension is actually in use, rather than something
+        the user has to infer from a benchmark.
+        """
         caps = detect_capabilities()
         parts = [
             f"{caps.cpu_logical} threads",
@@ -606,6 +611,9 @@ class PreferencesDialog(QDialog):
         if caps.gpu_name:
             parts.append(caps.gpu_name)
         parts.append(caps.platform or "unknown OS")
+        parts.append(
+            "native kernels" if caps.native_kernels else "python kernels"
+        )
         return "Detected: " + " · ".join(parts)
 
     def _auto_configure_performance(self) -> None:
@@ -644,6 +652,7 @@ class PreferencesDialog(QDialog):
             self._worker_threads,
             self._proxy_width,
             self._target_preview_fps,
+            self._disk_cache_limit,
         )
         for widget in widgets:
             widget.blockSignals(True)
@@ -655,6 +664,16 @@ class PreferencesDialog(QDialog):
             self._worker_threads.setValue(perf.worker_threads)
             self._proxy_width.setValue(perf.playback_proxy_width)
             self._target_preview_fps.setValue(perf.target_preview_fps)
+            self._disk_cache_limit.setValue(perf.disk_cache_limit_mb)
+
+            self._use_proxies.setChecked(perf.use_editing_proxies)
+            self._generate_proxies.setChecked(
+                perf.generate_proxies_automatically)
+            proxy_index = self._proxy_height.findData(int(perf.proxy_height))
+            self._proxy_height.setCurrentIndex(max(0, proxy_index))
+            cache_index = self._render_cache_mode.findData(
+                perf.render_cache_mode)
+            self._render_cache_mode.setCurrentIndex(max(0, cache_index))
 
             self._adaptive_preview.setChecked(perf.adaptive_preview_enabled)
             self._high_quality_paused.setChecked(perf.high_quality_when_paused)

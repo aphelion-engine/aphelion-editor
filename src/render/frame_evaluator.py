@@ -128,6 +128,15 @@ class FrameEvaluationWorker(QThread):
         self._late_discarded = 0
         self._dropped_pending = 0
 
+        # Background render-ahead while paused. Pre-warming the frames around
+        # the playhead is what makes pressing Play start *immediately* rather
+        # than after the first decode — the frames are already in the cache.
+        self._render_ahead_enabled = True
+        self._render_ahead_frames = 0
+        self._render_ahead_cursor: int | None = None
+        self._realtime_priority = True
+        self._priority_applied = False
+
         # Written by the worker, read by the UI thread for adaptive quality.
         self.last_render_seconds = 0.0
         self.last_evaluated_frame = -1
@@ -202,6 +211,74 @@ class FrameEvaluationWorker(QThread):
         """Frames retained behind the playhead for step-back access."""
         self._frames_behind = max(0, int(count))
 
+    def set_render_ahead(self, enabled: bool, frames: int | None = None) -> None:
+        """Configure paused render-ahead.
+
+        Parameters:
+            enabled: Whether the worker may warm frames while idle.
+            frames: How far ahead of the playhead to warm. ``None`` keeps
+                the current distance.
+        """
+        self._render_ahead_enabled = bool(enabled)
+        if frames is not None:
+            self._render_ahead_frames = max(0, int(frames))
+        self._render_ahead_cursor = None
+        self._wake.set()
+
+    def _render_ahead_step(self) -> bool:
+        """Warm one frame near a paused playhead; returns whether it did work.
+
+        Deliberately one frame per loop iteration: the main loop polls for
+        real requests *before* every step, so an incoming request always
+        pre-empts this. Nothing here can delay the frame the user asked for.
+
+        The work is bounded — it stops once it has covered
+        ``_render_ahead_frames`` from the playhead — so an idle editor
+        converges to doing nothing rather than spinning forever.
+        """
+        if not self._render_ahead_enabled or self._render_ahead_frames <= 0:
+            return False
+        if self._playing or self._scrubbing or not self._running:
+            return False
+        if self.isInterruptionRequested() or self._has_pending():
+            return False
+
+        try:
+            playhead = int(self._project.current_frame)
+            viewer = self._project.active_viewer
+            max_frame = int(self._project.max_frame)
+        except Exception:  # noqa: BLE001 - project may be mid-teardown
+            return False
+
+        if not viewer:
+            return False
+
+        previous = self._render_ahead_cursor
+        if previous is None or abs(previous - playhead) > self._render_ahead_frames:
+            # First pass, or the playhead jumped somewhere else: re-anchor on
+            # the playhead so we warm the region the user is actually near.
+            previous = playhead
+
+        cursor = previous + self._prefetch_direction
+        if cursor < 0 or cursor > max_frame:
+            # Hit an end of the timeline: hold position, do not re-anchor,
+            # so repeated calls stay cheap instead of restarting the sweep.
+            self._render_ahead_cursor = previous
+            return False
+
+        if abs(cursor - playhead) > self._render_ahead_frames:
+            # The whole look-ahead distance is already warm. Holding the
+            # cursor means an idle editor converges to doing nothing rather
+            # than re-walking the same frames every loop iteration.
+            self._render_ahead_cursor = previous
+            return False
+
+        self._render_ahead_cursor = cursor
+        self._evaluate(viewer, cursor)
+        self._prefetched.add(cursor)
+        self._trim_prefetch_tracking()
+        return True
+
     def request_frame(self, node_id: str, frame_num: int) -> None:
         """Request a frame.
 
@@ -265,6 +342,7 @@ class FrameEvaluationWorker(QThread):
 
         self._dropped_pending += self._queue.clear()
         self.clear_prefetch_tracking(wasted=True)
+        self._render_ahead_cursor = None
         now = time.monotonic()
         try:
             self._clock.seek(int(self._project.current_frame), now)
@@ -285,7 +363,6 @@ class FrameEvaluationWorker(QThread):
             fps = float(self._project.fps)
             self._clock.set_fps(fps)
             self._drop_policy.set_target_fps(fps)
-            self._governor.reset(time.monotonic())
             now = time.monotonic()
             try:
                 self._clock.start(int(self._project.current_frame), now)
@@ -293,14 +370,26 @@ class FrameEvaluationWorker(QThread):
                 self._clock.start(0, now)
             # A new playback session is a fresh measurement.
             self._governor.reset(now)
+            self._render_ahead_cursor = None
             self._wake.set()
         else:
             self._clock.stop()
             self.clear_prefetch_tracking()
+            self._render_ahead_cursor = None
 
     def set_clock_source(self, source: ClockSource) -> None:
         """Select wall-clock or audio-mastered timing."""
         self._clock.set_source(source)
+
+    def set_realtime_priority(self, enabled: bool) -> None:
+        """Ask the OS to schedule this thread slightly more favourably.
+
+        Playback is the only workload here with a hard deadline, so it is
+        the only thread that asks. The request is bounded (above normal,
+        never time-critical) and best-effort: if the OS declines, nothing
+        changes and nothing is reported as an error.
+        """
+        self._realtime_priority = bool(enabled)
 
     def resync_clock_to_audio(self, presented_seconds: float) -> None:
         """Align the deadline clock with audio progress."""
@@ -320,6 +409,7 @@ class FrameEvaluationWorker(QThread):
         self._cost.reset()
         self.clear_prefetch_tracking(wasted=True)
         self._drop_policy.reset()
+        self._render_ahead_cursor = None
         self._wake.set()
 
     def stop(self) -> None:
@@ -355,7 +445,39 @@ class FrameEvaluationWorker(QThread):
         which is the entire point of a deadline-oriented engine.
         """
         trace = get_frame_trace()
+        self._apply_thread_priority()
 
+        try:
+            self._run_loop(trace)
+        finally:
+            self._release_thread_priority()
+
+    def _apply_thread_priority(self) -> None:
+        """Best-effort priority bump for the duration of the worker's life."""
+        if not self._realtime_priority:
+            return
+        try:
+            from core.perf.priority import raise_current_thread_priority
+
+            self._priority_applied = bool(raise_current_thread_priority())
+        except Exception:  # noqa: BLE001 - advisory only
+            self._priority_applied = False
+
+    def _release_thread_priority(self) -> None:
+        """Undo the priority bump so the editor is not permanently favoured."""
+        if not self._priority_applied:
+            return
+        try:
+            from core.perf.priority import lower_current_thread_priority
+
+            lower_current_thread_priority()
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            self._priority_applied = False
+
+    def _run_loop(self, trace) -> None:
+        """The worker's main loop (see :meth:`run` for the design rationale)."""
         while self._running and not self.isInterruptionRequested():
             now = time.monotonic()
 
@@ -376,6 +498,12 @@ class FrameEvaluationWorker(QThread):
             deadline = self._queue.poll(now, grace_ms)
 
             if deadline is None:
+                # Nothing is waiting. Spend the idle time warming the frames
+                # around a paused playhead so pressing Play starts instantly;
+                # the next loop iteration polls first, so a real request
+                # always wins.
+                if self._render_ahead_step():
+                    continue
                 self._wake.wait()
                 self._wake.clear()
                 continue

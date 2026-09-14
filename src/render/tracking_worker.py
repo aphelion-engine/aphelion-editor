@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from core.tracking.model import TrackingOptions
+from core.tracking.model import TrackingOptions, TrackingSample
 from core.tracking import track_planar_range, track_point_range
 
 if TYPE_CHECKING:
@@ -17,6 +17,23 @@ if TYPE_CHECKING:
 
 
 NormalizedPoint = tuple[float, float]
+
+
+def _point_failure_message(samples: list[TrackingSample]) -> str:
+    """Explain why a point-tracking job produced no measured frames."""
+    reasons = {sample.reason for sample in samples if sample.reason}
+    if "invalid_template" in reasons:
+        return (
+            "Tracking failed: the seed pattern has too little detail or lies "
+            "outside the frame. Place the tracker on a textured feature inside "
+            "the image, or reduce Pattern Size."
+        )
+    if "unavailable_frame" in reasons:
+        return (
+            "Tracking failed: the source frames could not be read. Check that "
+            "the frame input is connected to a working source."
+        )
+    return "Tracking failed: no frames could be matched."
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,7 +103,7 @@ class PointTrackingWorker(QThread):
 
         if not any(sample.valid for sample in result.values()):
             self.failed.emit(
-                "Tracking failed: no frames could be matched."
+                _point_failure_message(list(result.values()))
             )
             return
 

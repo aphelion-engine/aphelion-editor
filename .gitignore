@@ -30,3 +30,12 @@ tests/
 .vscode/
 AphelionEditor/
 .pytest_cache/
+
+# Native extension build artefacts. The source lives in native/ and is
+# tracked; the compiled module lands in src/ because that is where the
+# source-tree import path looks for it.
+*.pyd
+*.obj
+native/build/
+src/aphelion_native*.so
+src/aphelion_native*.pyd

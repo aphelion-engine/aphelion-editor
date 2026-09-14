@@ -63,10 +63,20 @@ class HardwareCapabilities:
     gpu_name: str = ""
     hardware_encoders: tuple[str, ...] = ()
     detected_expensive: bool = False
+    #: ``"native"`` when the optional C extension is built and importable,
+    #: ``"python"`` when the NumPy/OpenCV fallbacks are in use.
+    frame_backend: str = ""
+    #: Version reported by the native extension, or 0.
+    native_version: int = 0
 
     # ------------------------------------------------------------------
     # Derived classifications
     # ------------------------------------------------------------------
+
+    @property
+    def native_kernels(self) -> bool:
+        """Whether the native frame kernels are available."""
+        return self.frame_backend == "native"
 
     @property
     def is_low_end(self) -> bool:
@@ -114,9 +124,27 @@ class HardwareCapabilities:
             "gpu_name": self.gpu_name,
             "hardware_encoders": list(self.hardware_encoders),
             "hardware_decode_supported": self.hardware_decode_supported,
+            "frame_backend": self.frame_backend,
+            "native_version": self.native_version,
             "is_low_end": self.is_low_end,
             "is_high_end": self.is_high_end,
         }
+
+
+def _frame_backend(refresh: bool = False) -> tuple[str, int]:
+    """Return ``(backend, version)`` for the frame kernel implementation.
+
+    Never raises: a missing or broken native extension is a normal, supported
+    configuration, not an error. ``refresh`` re-attempts the import so a
+    user who builds the extension without restarting sees it reported.
+    """
+    try:
+        from core.native import probe
+
+        info = probe(refresh=refresh)
+        return info.backend, int(info.version)
+    except Exception:  # noqa: BLE001
+        return "python", 0
 
 
 # ----------------------------------------------------------------------
@@ -296,6 +324,7 @@ def detect_capabilities(
 
     logical = max(1, os.cpu_count() or 4)
     total_mb, available_mb = _physical_memory_mb()
+    backend, native_version = _frame_backend(refresh=refresh)
     base = HardwareCapabilities(
         cpu_logical=logical,
         cpu_physical=_physical_core_count(logical),
@@ -306,6 +335,8 @@ def detect_capabilities(
         gpu_name=cached.gpu_name if cached else "",
         hardware_encoders=cached.hardware_encoders if cached else (),
         detected_expensive=cached.detected_expensive if cached else False,
+        frame_backend=backend,
+        native_version=native_version,
     )
 
     if include_expensive and (refresh or not base.detected_expensive):

@@ -153,6 +153,11 @@ class BenchmarkReport:
         for key, value in self.media.items():
             lines.append(f"  {key:<12}: {value}")
         lines.append(f"target        : {target_fps:g} FPS  ({budget:.2f} ms/frame)")
+
+        backend = self.machine.get("frame_kernels")
+        if backend:
+            detail = f" (v{self.machine['native_version']})" if backend == "native" else ""
+            lines.append(f"frame kernels : {backend}{detail}")
         lines.append("")
         lines.append(
             f"{'stage':<32}{'mean ms':>9}{'p50':>9}{'p95':>9}{'FPS':>9}"
@@ -245,6 +250,11 @@ def _machine_info() -> dict[str, Any]:
             info["gpu"] = caps.gpu_name
         if caps.hardware_encoders:
             info["hw_encoders"] = list(caps.hardware_encoders)
+        # Recording the backend is not decoration: two runs of this tool
+        # only compare if the frame kernels and the codec path match, and
+        # the difference is invisible in the timings themselves.
+        info["frame_kernels"] = caps.frame_backend
+        info["native_version"] = caps.native_version
     except Exception:  # noqa: BLE001
         pass
     return info

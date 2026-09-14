@@ -86,6 +86,13 @@ and inconsistent recovery candidates. Signed frame differences estimate velocity
 so descending and non-unit frame sequences do not assume increasing time.
 Gap hold/interpolation respect the job's processing direction.
 
+A seed whose pattern box crosses the image border is clamped to the frame
+instead of being rejected, and the seed's pixel offset inside the clamped patch
+is preserved so the tracked coordinate stays anchored to the chosen feature.
+Only a seed whose pattern box lies entirely outside the frame (or a genuine
+low-texture patch) still reports an invalid template, with a message naming the
+cause rather than the generic "no frames could be matched".
+
 Correlation searches use overlapping tiles with at most 128x128 candidate
 positions per OpenCV call. Cancellation is checked between tiles, frames, and
 after sampling. Debug logging records loss, recovery entry, radius changes,
