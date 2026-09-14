@@ -54,6 +54,7 @@ class EditorBootDriver:
 
         self._stages: list[tuple[str, Callable[[], BootStageResult]]] = [
             ("Runtime", self._stage_runtime),
+            ("Native engine", self._stage_native_engine),
             ("Node registry", self._stage_register_nodes),
             ("Plugins", self._stage_load_plugins),
             ("Project document", self._stage_load_project),
@@ -131,6 +132,58 @@ class EditorBootDriver:
             True,
             f"Boot request accepted ({mode})",
             detail=f"target={target}",
+        )
+
+    # ------------------------------------------------------------------
+    # Native engine
+    # ------------------------------------------------------------------
+
+    def _stage_native_engine(self) -> BootStageResult:
+        """Ensure the native frame kernels are built.
+
+        This stage never fails boot. The kernels are an optimisation, and
+        the reference NumPy/OpenCV implementations behind them are correct
+        by construction — so a machine with no C toolchain is a slower
+        editor, not a broken one.
+
+        The build runs on a background thread and the stage returns as soon
+        as it has been started, because a cold compile takes tens of
+        seconds and the splash screen must not sit on it. ``core.native``
+        re-probes and hot-swaps the kernels when the build lands, so no
+        restart is needed.
+
+        It sits second in the pipeline deliberately: the earlier the build
+        starts, the more of the remaining boot work it overlaps with.
+        """
+        from core.native import ensure_available
+
+        try:
+            outcome = ensure_available(background=True)
+        except Exception as exc:  # noqa: BLE001 - never let a build fail boot
+            _LOG.warning(
+                "Native engine stage could not start a build: %s", exc)
+            return BootStageResult(
+                True,
+                "Native kernels unavailable; using NumPy/OpenCV reference kernels",
+                detail=f"{type(exc).__name__}: {exc}",
+            )
+
+        if outcome.built:
+            return BootStageResult(
+                True, "Native kernels ready", detail=outcome.module_path
+            )
+
+        if outcome.attempted:
+            return BootStageResult(
+                True,
+                "Native kernels building in the background",
+                detail="the editor starts on reference kernels and switches when ready",
+            )
+
+        return BootStageResult(
+            True,
+            "Native kernels unavailable; using NumPy/OpenCV reference kernels",
+            detail=outcome.message,
         )
 
     # ------------------------------------------------------------------

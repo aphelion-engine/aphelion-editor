@@ -34,17 +34,33 @@ _THREAD_PRIORITY_ABOVE_NORMAL = 1
 
 
 class PriorityResult:
-    """Outcome of a priority request."""
+    """Outcome of a priority request.
 
-    __slots__ = ("applied", "previous", "detail")
+    ``applied`` answers "did *this call* change anything?". A thread that
+    asks twice gets ``applied=False`` the second time — nothing was changed
+    — while ``bool(result)`` still reports that the priority is now in
+    effect, which is what a caller deciding whether it needs to undo it
+    actually wants to know.
+    """
 
-    def __init__(self, applied: bool, previous: int | None = None, detail: str = "") -> None:
+    __slots__ = ("applied", "previous", "detail", "already_applied")
+
+    def __init__(
+        self,
+        applied: bool,
+        previous: int | None = None,
+        detail: str = "",
+        *,
+        already_applied: bool = False,
+    ) -> None:
         self.applied = applied
         self.previous = previous
         self.detail = detail
+        self.already_applied = already_applied
 
     def __bool__(self) -> bool:
-        return self.applied
+        """Whether the calling thread holds a raised priority after this call."""
+        return self.applied or self.already_applied
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return (
@@ -75,7 +91,12 @@ def raise_current_thread_priority() -> PriorityResult:
     thread_id = threading.get_ident()
     with _LOCK:
         if thread_id in _APPLIED:
-            return PriorityResult(True, _APPLIED[thread_id], "already applied")
+            return PriorityResult(
+                False,
+                _APPLIED[thread_id],
+                "already applied",
+                already_applied=True,
+            )
 
     if sys.platform == "win32":
         result = _raise_windows()

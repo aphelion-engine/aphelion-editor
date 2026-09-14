@@ -1,4 +1,4 @@
-"""Build the optional ``aphelion_native`` extension in place.
+"""Build the ``aphelion_native`` extension in place.
 
 Usage::
 
@@ -6,11 +6,18 @@ Usage::
     python native/build.py --check    # report whether it is importable
     python native/build.py --clean    # remove build artefacts
 
-The extension is **optional by design**. Nothing in the application imports
-it as a hard dependency: ``core.native`` probes for it at import time and
-every call site has a verified NumPy/OpenCV fallback. That means a machine
-without a C compiler still runs the editor, and a broken build can never
-turn into a broken install.
+This script is usually not run by hand. The editor's boot pipeline calls
+``core.native.ensure_available()``, which loads this module and compiles the
+extension on a background thread whenever it is missing — so a developer
+clone or a fresh checkout acquires the native kernels without anyone
+remembering to run a command.
+
+That makes the extension *automatic*, not *mandatory*. Nothing imports it as
+a hard dependency: ``core.native`` probes for it and every kernel has a
+verified NumPy/OpenCV reference implementation. A machine without a C
+compiler still runs the editor, and a failed build can never turn into a
+broken install — the reason is reported in Preferences → Performance rather
+than being swallowed.
 
 A separate build script (rather than adding the extension to the project's
 ``setup.py``) keeps the cx_Freeze packaging flow — which builds a frozen
@@ -76,6 +83,45 @@ def built_modules(directory: Path) -> list[Path]:
     return sorted({path.resolve() for path in found})
 
 
+def _search_roots() -> list[Path]:
+    """Directories that could hold the extension after a build."""
+    return [
+        SRC_DIR,
+        EDITOR_ROOT,
+        NATIVE_DIR,
+        EDITOR_ROOT / "build",
+        NATIVE_DIR / "build",
+    ]
+
+
+def _iter_stray_modules():
+    """Yield every built extension outside ``src/``, anywhere below the roots.
+
+    Recursive on purpose. When ``--inplace`` does not take effect (it
+    resolves its destination from the extension's *package*, and a bare
+    top-level module has none), ``build_ext`` stages the module in
+    ``build/lib.<platform>-<abi>/``. A sweep that only looked at the top
+    level of ``build/`` found nothing there, so a build that had in fact
+    succeeded was reported as having produced no artifact — and the module
+    was left in the staging directory where nothing imports it.
+    """
+    seen: set[Path] = set()
+    source_dir = SRC_DIR.resolve()
+
+    for root in _search_roots():
+        if not root.is_dir():
+            continue
+        for suffix in set(EXTENSION_SUFFIXES) | {".pyd", ".so", ".dylib"}:
+            for path in root.rglob(f"{MODULE_NAME}*{suffix}"):
+                resolved = path.resolve()
+                # Artifacts already in place, and the compiled object files
+                # under the temp tree, are not strays.
+                if resolved in seen or resolved.parent == source_dir:
+                    continue
+                seen.add(resolved)
+                yield resolved
+
+
 def module_path() -> Path:
     """Return the in-place build location of the extension.
 
@@ -101,33 +147,26 @@ def is_built() -> bool:
 def _relocate_into_src(verbose: bool = True) -> list[Path]:
     """Move any stray build output into ``src/``.
 
-    ``build_ext --inplace`` resolves its destination from the extension's
-    *package*, and a bare top-level module maps to the distribution root —
-    which is the editor directory, not ``src/``. Rather than depend on one
-    setuptools behaviour, anything the build produced is swept up and moved
-    to where the source tree's import path actually looks.
+    A safety net, not the primary mechanism: :func:`build` now hands
+    setuptools an explicit ``--build-lib`` so the module is written straight
+    into ``src/``. This catches the case where a setuptools version ignores
+    that and stages the module somewhere else anyway.
     """
     moved: list[Path] = []
-    search_roots = [EDITOR_ROOT, NATIVE_DIR, EDITOR_ROOT / "build", NATIVE_DIR / "build"]
 
-    for root in search_roots:
-        if not root.is_dir():
-            continue
-        for candidate in built_modules(root):
-            if candidate.parent == SRC_DIR.resolve():
-                continue
-            destination = SRC_DIR / candidate.name
-            try:
-                if destination.exists():
-                    destination.unlink()
-                shutil.move(str(candidate), str(destination))
-            except OSError as exc:
-                if verbose:
-                    print(f"warning: could not move {candidate}: {exc}")
-                continue
-            moved.append(destination)
+    for candidate in _iter_stray_modules():
+        destination = SRC_DIR / candidate.name
+        try:
+            if destination.exists():
+                destination.unlink()
+            shutil.move(str(candidate), str(destination))
+        except OSError as exc:
             if verbose:
-                print(f"moved {candidate.name} -> src/")
+                print(f"warning: could not move {candidate}: {exc}")
+            continue
+        moved.append(destination)
+        if verbose:
+            print(f"moved {candidate.name} -> src/")
 
     return moved
 
@@ -154,20 +193,32 @@ def build(verbose: bool = True) -> int:
 
     SRC_DIR.mkdir(parents=True, exist_ok=True)
 
-    # ``package_dir`` maps the top-level package to ``src/``, which is what
-    # makes ``build_ext --inplace`` place the module beside the rest of the
-    # source tree instead of in the project root. ``_relocate_into_src``
-    # below is a safety net for setuptools versions that resolve this
-    # differently.
+    # The destination is stated explicitly instead of left to ``--inplace``.
+    #
+    # ``--inplace`` derives where to put the module from the extension's
+    # *package*, and this extension is a bare top-level module with no
+    # package — so setuptools falls back to its normal staging directory,
+    # ``build/lib.<platform>-<abi>/``, and ``--inplace`` silently does
+    # nothing. ``package_dir`` was an attempt to steer that and does not
+    # reliably do so either: the module still ended up in the staging tree,
+    # where ``import aphelion_native`` can never find it.
+    #
+    # ``--build-lib`` is not a hint, it is the output path, so the compiled
+    # module lands beside the source tree the application actually imports
+    # from. ``_relocate_into_src`` remains as a safety net.
     distribution = Distribution(
         {
             "name": "aphelion-native",
             "version": "1.0.0",
-            "package_dir": {"": "src"},
             "ext_modules": [_extension()],
         }
     )
-    distribution.script_args = ["build_ext", "--inplace", "--force"]
+    distribution.script_args = [
+        "build_ext",
+        "--build-lib",
+        str(SRC_DIR),
+        "--force",
+    ]
     if not verbose:
         distribution.script_args.append("--quiet")
 
@@ -190,11 +241,21 @@ def build(verbose: bool = True) -> int:
 
     artifacts = built_modules(SRC_DIR)
     if not artifacts:
+        # Say where the module *did* end up rather than only that it is
+        # missing: the whole failure mode here was a successful compile in
+        # the wrong directory, which is invisible from the error alone.
+        strays = list(_iter_stray_modules())
         print(
             "error: the build reported success but no extension artifact "
             f"was found in {SRC_DIR}",
             file=sys.stderr,
         )
+        if strays:
+            print(f"       found elsewhere: {strays[0]}", file=sys.stderr)
+            print(
+                "       re-run: python native/build.py   # moves it into src/",
+                file=sys.stderr,
+            )
         return 1
 
     for artifact in artifacts:

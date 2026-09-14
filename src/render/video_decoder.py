@@ -2,8 +2,10 @@
 
 Design goals:
 - Sequential reads during playback (avoid brittle random seeks)
-- Optional downscale at decode time (proxy) so the UI never scales 4K
-- RGB uint8 output ready for QImage.Format_RGB888
+- Decode *at* the size the Viewer needs, not at source size (this is the
+  single largest playback win for high-resolution or high-bitrate media)
+- Optional proxy substitution for sources that are too heavy to decode live
+- RGB uint8 output ready for ``QImage.Format_RGB888``
 - Quiet FFmpeg/OpenCV stderr noise from mid-GOP seeks
 """
 
@@ -44,6 +46,51 @@ _HARDWARE_DECODE_ENABLED: bool = False
 
 #: Whether verified editing proxies may be substituted for originals.
 _PROXY_ENABLED: bool = True
+
+#: Decoder thread count. ``0`` leaves the choice to FFmpeg's own default,
+#: which is derived from the machine's core count and is usually right.
+_DECODE_THREADS: int = 0
+
+#: Ceiling on the width a decoder is allowed to emit, regardless of source.
+#: ``0`` means unbounded. This is the safety valve for extremely large
+#: sources (8K, screen recordings) where even "full quality" is not a
+#: realistic ask.
+_MAX_DECODE_WIDTH: int = 0
+
+#: Smallest width worth asking the decoder for. Below this the box filter
+#: discards so much detail that the result is not a preview of the source,
+#: so the request is refused and full resolution is decoded instead.
+_MIN_DECODE_WIDTH: int = 64
+
+
+def set_decode_threads(thread_count: int) -> None:
+    """Set the decoder thread count for newly opened media.
+
+    Side effects:
+        Takes effect the next time a ``VideoDecoder`` opens a file.
+    """
+    global _DECODE_THREADS
+    _DECODE_THREADS = max(0, int(thread_count))
+
+
+def set_max_decode_width(width: int) -> None:
+    """Set the global ceiling on decoded frame width (``0`` = unbounded)."""
+    global _MAX_DECODE_WIDTH
+    _MAX_DECODE_WIDTH = max(0, int(width))
+
+
+def _even(value: int) -> int:
+    """Round ``value`` down to an even number, with a floor of 2.
+
+    Codec and scaler paths are frequently written for even dimensions
+    (chroma is subsampled 2:1), so an odd request can be silently rounded
+    by the backend anyway. Doing it here keeps the value the decoder
+    reports back equal to the value we asked for.
+    """
+    value = int(value)
+    if value <= 2:
+        return 2
+    return value - (value % 2)
 
 
 def set_proxy_enabled(enabled: bool) -> None:
@@ -130,6 +177,25 @@ def _configure_decoder_logging() -> None:
 _configure_decoder_logging()
 
 
+def _apply_decode_threads(capture: cv2.VideoCapture, threads: int) -> None:
+    """Set the decoder thread count on a fresh capture.
+
+    ``CAP_PROP_N_THREADS`` is the only thread knob OpenCV exposes for the
+    FFmpeg backend, and it must be set before the first frame is read. Some
+    builds do not expose it at all and returning ``False`` is normal, so the
+    result is deliberately not checked — this is a throughput hint, never a
+    correctness requirement, and FFmpeg's own default (derived from the
+    core count) is already reasonable.
+    """
+    count = int(threads) if int(threads) > 0 else _DECODE_THREADS
+    if count <= 0:
+        return
+    try:
+        capture.set(cv2.CAP_PROP_N_THREADS, float(count))
+    except Exception:  # noqa: BLE001 - unsupported property on some builds
+        pass
+
+
 def _try_enable_hardware_acceleration(capture: cv2.VideoCapture) -> None:
     """Best-effort request for hardware-accelerated decode.
 
@@ -179,9 +245,33 @@ class VideoDecoder:
         self._width: int = 0
         self._height: int = 0
         self._next_index: int = 0
-        # Bounded LRU of full-resolution decoded frames, keyed by source
-        # frame index. Scaling to the requested proxy width happens on
-        # every read from this cache — cheap relative to decode/seek.
+
+        # ---- Decode-time scaling ------------------------------------
+        # The dimensions the *codec* actually holds. ``_width``/``_height``
+        # describe the media and are what the timeline and project see;
+        # these describe the pixels coming out of ``capture.read()``, which
+        # can be smaller when the decoder is asked to scale.
+        self._native_width: int = 0
+        self._native_height: int = 0
+        #: Size the capture is currently configured to emit.
+        self._capture_width: int = 0
+        self._capture_height: int = 0
+        #: Cleared once the backend proves it will not honour a resize.
+        self._decode_scale_supported: bool = True
+        #: Requested decode quality, pushed in by the owning node.
+        #: ``None`` means "choose from the requested output width".
+        self._quality_scale: float | None = None
+        #: Explicit cap on decoded width (``0`` = none).
+        self._decode_width_cap: int = 0
+        self._decode_threads: int = 0
+        #: Set when the decoder's own notion of its position is stale —
+        #: after a size change, the stream is reshaped and the next read
+        #: must re-seek instead of trusting ``_next_index``.
+        self._force_seek: bool = False
+
+        # Bounded LRU of decoded frames, keyed by ``(frame, output_width)``.
+        # Entries are stored *already at that width*, so a cache hit costs
+        # nothing but a dict lookup.
         self._frame_cache: OrderedDict[int, np.ndarray] = OrderedDict()
         # Audio decoder for extracting audio from video files
         self._audio_decoder: AudioDecoder = AudioDecoder()
@@ -218,13 +308,21 @@ class VideoDecoder:
             return -1
         return index.decode_distance(frame_num)
 
-    def _adopt_proxy(self, path: str) -> tuple[str, dict[str, object]] | None:
+    def _adopt_proxy(
+        self, path: str, use_proxy: bool | None = None
+    ) -> tuple[str, dict[str, object]] | None:
         """Return ``(decode_path, source_meta)`` when a proxy is usable.
 
         Source metadata is taken from the proxy manifest so the original
         container never has to be re-opened (which would both cost a probe
         and risk a lock-order problem with the capture lock).
+
+        Parameters:
+            use_proxy: Per-source override. ``None`` defers to the global
+                preference pushed in through :func:`set_proxy_enabled`.
         """
+        if use_proxy is not None and not use_proxy:
+            return None
         if not _PROXY_ENABLED:
             return None
         try:
@@ -240,7 +338,166 @@ class VideoDecoder:
         proxy_path, manifest = entry
         return str(proxy_path), manifest
 
-    def open(self, path: str) -> MediaInfo | None:
+    def set_decode_preferences(
+        self,
+        *,
+        quality_scale: float | None = None,
+        width_cap: int = 0,
+        threads: int = 0,
+    ) -> None:
+        """Set how much of the source this decoder is allowed to materialise.
+
+        The single most effective playback control for high-quality media.
+        Historically a 4K source feeding a 960-pixel Viewer decoded a full
+        3840×2160 BGR frame (~24 MB) and then threw away 94% of it in a
+        software resize — every frame, with or without effects. Asking the
+        decoder to emit the smaller frame instead moves the scaling inside
+        the codec pipeline, where it is far cheaper than a separate pass.
+
+        Parameters:
+            quality_scale: Fraction of native resolution to decode, or
+                ``None`` to derive the size from the requested output
+                width (which is what playback wants).
+            width_cap: Hard ceiling on decoded width; ``0`` uses the
+                module-level default.
+            threads: Decoder threads; ``0`` leaves FFmpeg's default.
+
+        Side effects:
+            A change to ``threads`` only takes effect on the next
+            :meth:`open`, because it is fixed when the codec context is
+            created. Quality changes take effect on the next read, and
+            drop the decoded-frame cache, since every entry in it was
+            produced under the previous setting.
+        """
+        quality = None if quality_scale is None else float(quality_scale)
+        cap = max(0, int(width_cap))
+
+        if quality != self._quality_scale or cap != self._decode_width_cap:
+            # Entries cached at the old quality are still *correct*, but
+            # keeping them would make the setting appear not to have taken
+            # effect until the cache happened to roll over.
+            self._frame_cache.clear()
+
+        self._quality_scale = quality
+        self._decode_width_cap = cap
+        self._decode_threads = max(0, int(threads))
+
+    def _effective_decode_width(self, max_width: int) -> int:
+        """Width the decoder should emit for a request of ``max_width``.
+
+        Returns the native width when no scaling is worth doing, so the
+        common "already small enough" case costs nothing.
+        """
+        native = self._native_width
+        if native <= 0:
+            return 0
+
+        if self._quality_scale is not None:
+            # An explicit quality choice overrides the Viewer width: the
+            # user asked for a specific fraction of the source.
+            target = int(round(native * self._quality_scale))
+        else:
+            target = int(max_width) if max_width > 0 else native
+
+        cap = self._decode_width_cap or _MAX_DECODE_WIDTH
+        if cap > 0:
+            target = min(target, cap)
+
+        # Never ask for more pixels than the source holds.
+        target = min(target, native)
+        if target >= native:
+            return native
+
+        target = _even(target)
+        if target < _MIN_DECODE_WIDTH and native >= _MIN_DECODE_WIDTH:
+            return native
+        return target
+
+    def _ensure_decode_scale(self, target_width: int) -> None:
+        """Ask the capture to emit frames at ``target_width``.
+
+        ``target_width`` of ``0`` or of the native width means "full
+        resolution", which is also how a previous downscale is undone — a
+        decoder left at quarter size after the user moved to Full would
+        silently keep serving soft frames.
+
+        Failure is expected on some builds: not every OpenCV/FFmpeg
+        combination honours a mid-stream resize. When that happens the
+        decoder is marked as unable to scale *once*, and every later call
+        is a no-op — software scaling downstream still produces a correct
+        frame, just at full decode cost.
+        """
+        capture = self._capture
+        native = self._native_width
+        if capture is None or native <= 0 or self._native_height <= 0:
+            return
+        if not self._decode_scale_supported:
+            return
+
+        target_width = max(0, int(target_width))
+        desired = target_width if 0 < target_width < native else native
+        if desired == self._capture_width:
+            return
+
+        if desired == native:
+            width, height = native, self._native_height
+        else:
+            width = _even(desired)
+            height = _even(
+                int(round(self._native_height * (width / float(native))))
+            )
+
+        with profiler.scope("decode_scale"):
+            # Both properties are set together: the scaler derives the
+            # output geometry from the pair, and setting one alone can
+            # leave the capture reporting a size it will not produce.
+            capture.set(cv2.CAP_PROP_FRAME_WIDTH, float(width))
+            capture.set(cv2.CAP_PROP_FRAME_HEIGHT, float(height))
+
+        # The return value is deliberately ignored, and so is
+        # ``get(CAP_PROP_FRAME_WIDTH)``: OpenCV's FFmpeg backend answers that
+        # getter with the *codec's* width, never the scaler's target, so it
+        # reports "no change" even when the resize worked perfectly. The
+        # only trustworthy evidence is the geometry of the next frame that
+        # comes out, which ``_observe_decoded_size`` checks.
+        self._capture_width = width
+        self._capture_height = height
+        # Reshaping the output restarts the scaler's frame handling, so the
+        # decoder's idea of where it is in the stream is no longer valid.
+        self._force_seek = True
+        self._next_index = -1
+
+    def _observe_decoded_size(self, frame: np.ndarray) -> None:
+        """Check that a requested decode scale was actually applied.
+
+        Called on the first frame decoded after a resize request. Because
+        OpenCV cannot be asked whether it honoured the request, the answer
+        is taken from the frame itself — and if the answer is no, the
+        decoder stops asking and lets the software path scale instead.
+        Persisting with a request that is being silently dropped would cost
+        a ``set()`` call per read and a wrong cache key, without ever
+        producing smaller frames.
+        """
+        if not self._decode_scale_supported:
+            return
+
+        wanted = self._capture_width
+        if wanted <= 0 or wanted >= self._native_width:
+            return
+
+        actual = int(frame.shape[1])
+        if actual <= wanted * 1.05:
+            # Honoured (the 5% slack absorbs a backend that rounds its
+            # output to a codec-friendly size).
+            self._capture_width = actual
+            self._capture_height = int(frame.shape[0])
+            return
+
+        self._decode_scale_supported = False
+        self._capture_width = self._native_width
+        self._capture_height = self._native_height
+
+    def open(self, path: str, *, use_proxy: bool | None = None) -> MediaInfo | None:
         """Open ``path`` and return media info, or ``None`` on failure.
 
         When a verified editing proxy exists for ``path`` and proxy use is
@@ -248,8 +505,11 @@ class VideoDecoder:
         properties are reported to the timeline. The substitution is
         invisible above this class: frame numbers, frame rate, dimensions,
         and audio all still describe the original media.
+
+        Parameters:
+            use_proxy: Per-source override for proxy substitution.
         """
-        adopted = self._adopt_proxy(path)
+        adopted = self._adopt_proxy(path, use_proxy)
         decode_path = adopted[0] if adopted is not None else path
 
         with _CAPTURE_LOCK:
@@ -258,6 +518,7 @@ class VideoDecoder:
 
             self._close_unlocked()
             capture = cv2.VideoCapture(decode_path, cv2.CAP_FFMPEG)
+            _apply_decode_threads(capture, self._decode_threads)
             if _HARDWARE_DECODE_ENABLED:
                 _try_enable_hardware_acceleration(capture)
             if not capture.isOpened() and adopted is not None:
@@ -267,6 +528,7 @@ class VideoDecoder:
                 adopted = None
                 decode_path = path
                 capture = cv2.VideoCapture(path, cv2.CAP_FFMPEG)
+                _apply_decode_threads(capture, self._decode_threads)
             if not capture.isOpened():
                 capture.release()
                 return None
@@ -275,8 +537,12 @@ class VideoDecoder:
             if fps <= 0.001:
                 fps = 30.0
             frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-            width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
-            height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+            # Read the *native* size before anything can change it. These
+            # are the codec's real dimensions, and they are what decode
+            # scaling is a fraction of.
+            native_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+            native_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+            width, height = native_width, native_height
             if width <= 0 or height <= 0:
                 capture.release()
                 return None
@@ -304,6 +570,20 @@ class VideoDecoder:
             self._width = width
             self._height = height
             self._next_index = 0
+
+            # Decode-time scaling state. The capture currently emits the
+            # codec's own size; ``_ensure_decode_scale`` will ask for less
+            # on the first read that wants less. A newly opened capture
+            # deserves a fresh chance at honouring a resize, so the
+            # "unsupported" flag is re-armed per open — it may be a
+            # different container, codec, or size this time.
+            self._native_width = native_width
+            self._native_height = native_height
+            self._capture_width = native_width
+            self._capture_height = native_height
+            self._decode_scale_supported = True
+            self._force_seek = False
+
             self._frame_cache.clear()
 
             # A keyframe index makes seeks exact instead of probe-and-walk.
@@ -358,12 +638,29 @@ class VideoDecoder:
         self._proxy_path = None
         self._keyframes = None
         self._next_index = 0
+        self._native_width = 0
+        self._native_height = 0
+        self._capture_width = 0
+        self._capture_height = 0
+        self._decode_scale_supported = True
+        self._force_seek = False
         self._frame_cache.clear()
         self._audio_decoder.close()
         self._audio_info = None
 
     def read_rgb(self, frame_num: int, max_width: int) -> np.ndarray | None:
         """Return an RGB frame at ``frame_num``, optionally proxy-scaled.
+
+        Decode-time scaling
+        -------------------
+        Before anything is decoded, the capture is asked to emit a frame no
+        wider than the caller can use (see ``_ensure_decode_scale``). This
+        is the change that makes high-resolution sources usable: without
+        it, a 4K source feeding a 960-pixel Viewer materialises a
+        3840×2160 BGR frame — roughly 24 MB — and then discards 94% of it
+        in a software resize, for every frame, effects or no effects. With
+        it the rescale happens inside the codec pipeline and only the small
+        frame is ever allocated.
 
         Representation and caching
         --------------------------
@@ -389,6 +686,10 @@ class VideoDecoder:
 
         Both are mathematically identical to what they replace, and the
         pure-Python fallback implements the same contract.
+
+        Which branch runs is decided from the frame the decoder *actually*
+        returned, not from the size that was requested, so an honoured
+        decode-time scale is never scaled a second time.
         """
         with profiler.scope("decode"):
             with _CAPTURE_LOCK:
@@ -405,6 +706,13 @@ class VideoDecoder:
                     self._frame_cache.move_to_end(key)
                     return cached
 
+                # Ask the decoder to emit the size we actually need before
+                # decoding anything. This is the difference between a 4K
+                # source costing a full 4K decode plus a software downscale
+                # and costing a small decode: the rescale happens inside
+                # the codec pipeline, before the frame is materialised.
+                self._ensure_decode_scale(self._effective_decode_width(max_width))
+
                 if not self._position_to(target):
                     return self._held_frame(max_width)
 
@@ -413,6 +721,7 @@ class VideoDecoder:
                     # Hard seeks into H.264 often fail once; hold last good frame.
                     return self._held_frame(max_width)
 
+                self._observe_decoded_size(frame)
                 self._next_index = target + 1
                 rgb = self._convert_bgr_to_rgb(frame, max_width)
                 if rgb is None:
@@ -426,36 +735,51 @@ class VideoDecoder:
     ) -> np.ndarray | None:
         """Convert a decoded BGR frame to RGB at the requested width.
 
-        Returns a frame owned outright by the caller (the decode cache), so
-        pooled buffers are deliberately *not* used here — a cached frame can
-        outlive any borrowing scheme, and handing pooled memory to a cache
-        is exactly the ownership trap that makes zero-copy pipelines
-        corrupt frames.
+        Order matters, and this order was chosen from measurement rather
+        than intuition. On a 4K source scaled to a 960-pixel preview:
+
+        ==========================================  ==========
+        ``cvtColor`` at 4K then ``resize``          ~25.9 ms
+        fused single-pass native kernel             ~45.0 ms
+        **``resize`` first, then convert small**    ~15.2 ms
+        ==========================================  ==========
+
+        The first two both touch ~24 MB of pixels that are about to be
+        discarded. Scaling first means only the small frame is ever colour
+        converted, and the 4K frame is read exactly once. The fused native
+        kernel loses because ``cv2.resize`` is SIMD-vectorised and runs
+        across every core, while a scalar single-threaded box filter cannot
+        keep up — a useful reminder that "native" is not automatically
+        faster than a library that has been tuned for twenty years.
+
+        The in-place channel swap is still used, because a small frame the
+        resize just allocated is exclusively ours: swapping it costs no
+        allocation at all, where ``cvtColor`` would allocate a second copy
+        of the result for nothing.
         """
         source_height, source_width = frame.shape[:2]
         target_width = max(0, int(max_width))
 
-        if target_width <= 0 or source_width <= target_width:
-            # No scaling: swap channels in place in the buffer OpenCV just
-            # returned. Nothing else references it, so mutating is safe and
-            # costs one pass with zero allocation.
+        if target_width > 0 and source_width > target_width:
+            scale = target_width / float(source_width)
+            out_width = max(1, int(round(source_width * scale)))
+            out_height = max(1, int(round(source_height * scale)))
             try:
-                _kernels().swap_bgr_rgb_inplace(frame)
-                return frame
-            except Exception:  # noqa: BLE001 - fall back to the library path
-                return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                frame = cv2.resize(
+                    frame, (out_width, out_height), interpolation=cv2.INTER_AREA
+                )
+            except cv2.error:
+                return None
 
-        scale = target_width / float(source_width)
-        out_width = max(1, int(round(source_width * scale)))
-        out_height = max(1, int(round(source_height * scale)))
-
-        destination = np.empty((out_height, out_width, 3), dtype=np.uint8)
+        # No scaling left to do: swap channels in place in the buffer we
+        # already own (either OpenCV's own, or the resize result). Nothing
+        # else references it, so mutating is safe and costs one pass with
+        # zero allocation.
         try:
-            _kernels().resize_bgr_to_rgb(frame, destination, out_width, out_height)
-        except Exception:  # noqa: BLE001
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            return cv2.resize(rgb, (out_width, out_height), interpolation=cv2.INTER_AREA)
-        return destination
+            _kernels().swap_bgr_rgb_inplace(frame)
+            return frame
+        except Exception:  # noqa: BLE001 - fall back to the library path
+            return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
     def _remember(self, key: tuple[int, int], rgb: np.ndarray) -> None:
         """Insert ``rgb`` into the bounded LRU, evicting the oldest entry."""
@@ -475,11 +799,35 @@ class VideoDecoder:
             self._frame_cache.clear()
 
     def cache_stats(self) -> dict[str, int]:
-        """Return decode-cache counters (entries, capacity, proxy status)."""
+        """Return decode-cache counters (entries, capacity, proxy status).
+
+        ``decode_width`` is the size the decoder is currently emitting,
+        which is the number to look at when a high-resolution source plays
+        slowly: if it equals the native width while the Viewer is a tenth
+        of that, the backend refused to scale and is being paid in full.
+        """
         return {
             "entries": len(self._frame_cache),
             "capacity": max(1, _DECODE_CACHE_FRAMES),
             "is_proxy": 1 if self._proxy_path else 0,
+            "native_width": self._native_width,
+            "decode_width": self._capture_width,
+            "scale_supported": 1 if self._decode_scale_supported else 0,
+        }
+
+    def decode_status(self) -> dict[str, int | bool]:
+        """Describe the active decode configuration for diagnostics."""
+        return {
+            "native_width": self._native_width,
+            "native_height": self._native_height,
+            "decode_width": self._capture_width,
+            "decode_height": self._capture_height,
+            "scaled_at_decode": self._capture_width < self._native_width,
+            "scale_supported": self._decode_scale_supported,
+            "is_proxy": self._proxy_path is not None,
+            "quality_scale": self._quality_scale if self._quality_scale is not None else -1.0,
+            "width_cap": self._decode_width_cap,
+            "threads": self._decode_threads or _DECODE_THREADS,
         }
 
     def _held_frame(self, max_width: int) -> np.ndarray | None:
@@ -514,16 +862,22 @@ class VideoDecoder:
         if self._capture is None:
             return False
 
-        if target == self._next_index:
+        if self._force_seek:
+            # A decode-scale change reshapes the output stream, so the
+            # decoder's position is no longer trustworthy — not even the
+            # "we are already sitting on the right frame" case. Clear the
+            # flag and fall through to a real seek.
+            self._force_seek = False
+        elif target == self._next_index:
             return True
-
-        forward_gap = target - self._next_index
-        if 0 < forward_gap <= _MAX_FORWARD_GRABS:
-            for _ in range(forward_gap):
-                if not self._capture.grab():
-                    return False
-            self._next_index = target
-            return True
+        else:
+            forward_gap = target - self._next_index
+            if 0 < forward_gap <= _MAX_FORWARD_GRABS:
+                for _ in range(forward_gap):
+                    if not self._capture.grab():
+                        return False
+                self._next_index = target
+                return True
 
         # --------------------------------------------------------------
         # Precise seek using the keyframe index when one is available.

@@ -10,6 +10,7 @@ from core.audio import AudioData, FrameWithAudio
 from core.nodes.base import (FRAME_DTYPE, MediaEdgeMode, Node, NodeProperty,
                              NodePropertyInputType, NodeSocketType,
                              PreviewCost, VideoFrameErrorMethod)
+from core.nodes.enums import DECODE_QUALITY_SCALE, DecodeQuality
 from effects.frame_ops import SOURCE_DTYPE, from_source_u8
 from render.video_decoder import MediaInfo, VideoDecoder
 
@@ -197,6 +198,7 @@ class VideoInputNode(Node):
                 description="Fallback used when a source frame cannot be decoded.",
             ),
         )
+        self._setup_quality_properties()
         self.set_property(
             "auto_sync_timeline",
             NodeProperty(
@@ -243,6 +245,104 @@ class VideoInputNode(Node):
                 label="Channels",
                 description="Audio channel output mode.",
             ),
+        )
+
+    def _setup_quality_properties(self) -> None:
+        """Expose the decode-quality controls.
+
+        These are the knobs that decide how much of the source is
+        materialised on the way to a frame. They are grouped separately
+        from ``Source`` because they change *how* the file is read rather
+        than *which* file it is — and because they are the first thing to
+        reach for when a high-resolution source plays badly with no effects
+        in the graph at all.
+
+        The defaults keep the previous behaviour for ordinary footage and
+        improve it for large sources: ``Auto`` decodes at whatever the
+        Viewer can show, which is exactly what playback wants, while an
+        explicit quality choice pins the source fraction for the cases
+        where softness matters more than speed.
+        """
+        self.set_property(
+            "decode_quality",
+            NodeProperty(
+                input_type=NodePropertyInputType.CustomChoice,
+                value=DecodeQuality.Auto,
+                priority=55,
+                group="Quality",
+                label="Decode Quality",
+                description=(
+                    "How much of the source resolution is decoded. Auto "
+                    "matches the Viewer width, so no pixel is decoded that "
+                    "cannot be displayed — the fastest setting, and the "
+                    "reason a 4K source can play at preview size."
+                ),
+            ),
+        )
+        self.set_property(
+            "decode_width",
+            NodeProperty(
+                input_type=NodePropertyInputType.Number,
+                value=0,
+                slider_min_value=0,
+                slider_max_value=8192,
+                priority=56,
+                group="Quality",
+                label="Decode Width Cap",
+                description=(
+                    "Hard ceiling on decoded frame width; 0 disables it. "
+                    "Use for very large sources (8K, screen recordings) "
+                    "where even full quality is not a realistic ask."
+                ),
+                suffix=" px",
+            ),
+        )
+        self.set_property(
+            "decode_threads",
+            NodeProperty(
+                input_type=NodePropertyInputType.Number,
+                value=0,
+                slider_min_value=0,
+                slider_max_value=64,
+                priority=57,
+                group="Quality",
+                label="Decode Threads",
+                description=(
+                    "Decoder worker threads; 0 uses the codec's own default. "
+                    "Raise it when decoding saturates one core, lower it "
+                    "when several sources compete for CPU. Applies the next "
+                    "time the file is opened."
+                ),
+            ),
+        )
+        self.set_property(
+            "use_proxy",
+            NodeProperty(
+                input_type=NodePropertyInputType.Checkbox,
+                value=True,
+                priority=58,
+                group="Quality",
+                label="Use Proxy",
+                description=(
+                    "Read from a generated editing proxy when one is "
+                    "available, when proxies are also enabled globally in "
+                    "Preferences."
+                ),
+            ),
+        )
+
+    def _apply_decode_preferences(self) -> None:
+        """Push this node's quality properties into its decoder.
+
+        Called on every open so the decoder sees the current values before
+        the first frame is read — threads in particular are fixed when the
+        codec context is created and cannot be changed afterwards.
+        """
+        quality = self._enum_prop("decode_quality", DecodeQuality)
+        self._decoder.set_decode_preferences(
+            quality_scale=DECODE_QUALITY_SCALE.get(quality, None),
+            width_cap=self._int_prop("decode_width", 0),
+            threads=self._int_prop("decode_threads", 0),
         )
 
     def prepare_evaluation(
@@ -315,16 +415,59 @@ class VideoInputNode(Node):
             return prop.value
         return default
 
+    def _enum_prop(self, key: str, enum_type: type[IntEnum]) -> IntEnum:
+        """Return an enum property's value, falling back to its first member.
+
+        Saved projects can carry a member name from a newer build, and a
+        missing enum must not take the node down — a decode quality is a
+        preference, not a contract.
+        """
+        prop = self.get_property(key)
+        value = prop.value if prop is not None else None
+        if isinstance(value, enum_type):
+            return value
+        try:
+            return next(iter(enum_type))
+        except StopIteration:  # pragma: no cover - enums are never empty
+            return value
+
+    def decode_quality(self) -> DecodeQuality:
+        """Return this source's decode-quality setting."""
+        return self._enum_prop("decode_quality", DecodeQuality)  # type: ignore[return-value]
+
+    def decode_status(self) -> dict[str, object]:
+        """Describe the active decode configuration for diagnostics."""
+        status: dict[str, object] = dict(self._decoder.decode_status())
+        status["use_proxy"] = self._bool_prop("use_proxy", True)
+        return status
+
     def _file_path(self) -> str:
         file_prop = self.get_property("file_path")
         return str((file_prop.value if file_prop else "") or "")
+
+    def _is_proxy_available(self) -> bool:
+        """Return whether a verified proxy exists for the current file.
+
+        Used only for the node's status text; the actual substitution is
+        decided inside the decoder so a stale proxy can be rejected there.
+        """
+        path = self._file_path()
+        if not path:
+            return False
+        try:
+            from core.media.proxy import get_proxy_manager
+
+            return get_proxy_manager().lookup_with_info(path) is not None
+        except Exception:  # noqa: BLE001 - proxies are strictly optional
+            return False
 
     def _ensure_open(self) -> MediaInfo | None:
         path = self._file_path()
         if not path:
             self._decoder.close()
             return None
-        return self._decoder.open(path)
+        self._apply_decode_preferences()
+        return self._decoder.open(path, use_proxy=self._bool_prop("use_proxy", True))
 
     def probe_media(self) -> tuple[float, float, int, int] | None:
         """Return ``(fps, duration_sec, width, height)`` for the current file."""

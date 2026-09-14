@@ -52,6 +52,12 @@ class FrameRecord:
     convert_ms: float = 0.0
     upload_ms: float = 0.0
     presented_at: float = 0.0
+    #: True once :meth:`FrameTrace.close_record` has finalized the record.
+    #: Liveness is tracked explicitly rather than inferred from
+    #: ``presented_at > 0.0``: ``0.0`` is a perfectly legal monotonic
+    #: timestamp (it is what a freshly started clock reads), so using it as
+    #: the "not yet presented" sentinel silently discards real frames.
+    closed: bool = False
     #: True when the frame was served without re-evaluating the graph.
     reused: bool = False
     #: Free-form annotations ("cache-miss", "gop-seek", "proxy", ...).
@@ -69,14 +75,14 @@ class FrameRecord:
     @property
     def end_to_end_ms(self) -> float:
         """Wall-clock latency from request to presentation."""
-        if self.presented_at <= 0.0 or self.requested_at <= 0.0:
+        if not self.closed or self.requested_at <= 0.0:
             return self.total_ms
         return (self.presented_at - self.requested_at) * 1000.0
 
     @property
     def lead_ms(self) -> float:
         """Milliseconds early (positive) or late (negative) vs. the deadline."""
-        if self.presented_at <= 0.0:
+        if not self.closed:
             return 0.0
         return (self.due_at - self.presented_at) * 1000.0
 
@@ -88,7 +94,7 @@ class FrameRecord:
     @property
     def missed(self) -> bool:
         """Whether the frame reached the viewport after its deadline."""
-        return self.presented_at > 0.0 and self.lead_ms < 0.0
+        return self.closed and self.lead_ms < 0.0
 
     def stage_ms(self, stage: str) -> float:
         """Return one stage's duration by attribute name."""
@@ -219,6 +225,7 @@ class FrameTrace:
         if record is None or not self._enabled:
             return
         record.presented_at = time.monotonic() if now is None else float(now)
+        record.closed = True
         if record.reused:
             self._reused += 1
         self._records.append(record)
@@ -254,7 +261,7 @@ class FrameTrace:
     # ------------------------------------------------------------------
 
     def _presented(self) -> list[FrameRecord]:
-        return [record for record in self._records if record.presented_at > 0.0]
+        return [record for record in self._records if record.closed]
 
     def summary(self) -> dict[str, Any]:
         """Return the numbers the developer HUD and benchmarks display."""

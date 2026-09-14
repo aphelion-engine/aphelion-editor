@@ -242,7 +242,6 @@ class Editor(QMainWindow):
         # Roto and Tracker/Planar Tracker each get their own interactive
         # viewport overlay; ViewportWidget.set_edit_target fans this out to
         # both and each one ignores node types that aren't its own.
-        print("Tracker nodes: ", TRACKER_NODES)
         editable = isinstance(node, tuple(TRACKER_NODES))
         self.viewport.set_edit_target(item.node_id if editable else None)
         if node.node_type == "Viewer":

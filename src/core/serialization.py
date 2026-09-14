@@ -9,11 +9,11 @@ from core.nodes.base import (MediaEdgeMode, MediaLoopMode, NodeSocketType,
                              VideoFrameErrorMethod)
 from core.nodes.enums import (AnaglyphMode, AutoBalanceMode, BendAxis,
                               BlendMode, CombineMaskMode, ComparisonOperation,
-                              EaseMode, EdgeDisplayMode, GradientMode,
-                              LogicOperation, MaskChannel, PixelSortMode,
-                              SwitchInput, TransformBorderMode, Waveform)
+                              DecodeQuality, EaseMode, EdgeDisplayMode,
+                              GradientMode, LogicOperation, MaskChannel,
+                              PixelSortMode, SwitchInput, TrackerShape,
+                              TransformBorderMode, Waveform)
 from core.tracking.model import GapPolicy
-from core.nodes.enums import TrackerShape
 from render.preview import ViewerBackground, ViewportFitMode
 
 APH_FORMAT_ID: str = "aphelion-project"
@@ -33,6 +33,7 @@ _ENUM_TYPES: dict[str, type[Enum]] = {
     "BlendMode": BlendMode,
     "CombineMaskMode": CombineMaskMode,
     "ComparisonOperation": ComparisonOperation,
+    "DecodeQuality": DecodeQuality,
     "EaseMode": EaseMode,
     "EdgeDisplayMode": EdgeDisplayMode,
     "GradientMode": GradientMode,

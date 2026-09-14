@@ -73,6 +73,13 @@ class FrameDeadline:
     ) -> bool:
         """Whether starting this frame now can still make its deadline.
 
+        The test is not merely "does it fit" — a frame that finishes with
+        microseconds to spare has still monopolised the worker and will
+        delay the *next* frame, which is on screen sooner. So the predicted
+        cost must fit with half a frame budget left over: enough headroom
+        that starting this work cannot be the reason the following frame is
+        late.
+
         Parameters:
             now: Current monotonic time.
             budget_ms: Frame budget at the active rate.
@@ -83,8 +90,12 @@ class FrameDeadline:
         if pipeline_ms is not None:
             cost += pipeline_ms
         if cost <= 0.0:
-            cost = budget_ms
-        return (self.due_at - now) * 1000.0 > cost * 0.5
+            # No cost estimate: assume the pessimistic case of a whole frame
+            # budget rather than optimistically starting everything.
+            cost = max(0.0, float(budget_ms))
+
+        slack = (self.due_at - now) * 1000.0
+        return slack > cost + float(budget_ms) * 0.5
 
 
 class DeadlineQueue:

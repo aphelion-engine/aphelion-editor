@@ -185,6 +185,45 @@ class Waveform(IntEnum):
     Random = auto()
 
 
+class DecodeQuality(IntEnum):
+    """How much of the source resolution ``VideoInputNode`` decodes.
+
+    This is the single most effective playback control for high-detail
+    sources. Decoding 4K and then scaling down in software costs the full
+    4K decode plus a full-frame scale; asking the decoder to emit the
+    smaller frame costs a fraction of both, because the scaler runs inside
+    the codec pipeline before the frame is ever materialised in memory.
+
+    ``Auto`` follows the Viewer's preview width, which is what playback
+    wants: never decode pixels the viewport cannot show.
+    """
+
+    #: Match the Viewer's preview width — never decode unseen pixels.
+    Auto = auto()
+    #: Full source resolution. Sharpest, and by far the most expensive.
+    Full = auto()
+    #: 3/4 resolution. Useful when zooming into a 4K source.
+    High = auto()
+    #: 1/2 resolution.
+    Medium = auto()
+    #: 1/3 resolution.
+    Low = auto()
+    #: 1/4 resolution. Cheapest fixed setting.
+    Lowest = auto()
+
+
+#: Resolution multiplier applied by each :class:`DecodeQuality` member.
+#: ``None`` means "derive from the Viewer preview width".
+DECODE_QUALITY_SCALE: dict["DecodeQuality", float | None] = {
+    DecodeQuality.Auto: None,
+    DecodeQuality.Full: 1.0,
+    DecodeQuality.High: 0.75,
+    DecodeQuality.Medium: 0.5,
+    DecodeQuality.Low: 1.0 / 3.0,
+    DecodeQuality.Lowest: 0.25,
+}
+
+
 class EaseMode(IntEnum):
     """Interpolation curve applied by ``SmoothStepNode``."""
 

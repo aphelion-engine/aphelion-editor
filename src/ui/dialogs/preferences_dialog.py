@@ -310,6 +310,15 @@ class PreferencesDialog(QDialog):
         low_lag.clicked.connect(self._use_low_lag_preset)
         profile_form.addRow(low_lag)
 
+        self._native_button = QPushButton("Rebuild native kernels")
+        self._native_button.setToolTip(
+            "Recompile the C frame kernels in place and switch to them"
+            " without restarting. Requires a C compiler; the editor keeps"
+            " running on the reference implementations if it fails."
+        )
+        self._native_button.clicked.connect(self._rebuild_native_kernels)
+        profile_form.addRow(self._native_button)
+
         layout.addWidget(profile_group)
 
         # ------------------------------------------------------------------
@@ -600,8 +609,9 @@ class PreferencesDialog(QDialog):
         """Describe the detected machine in one short line.
 
         Includes the frame-kernel backend so it is unambiguous whether the
-        optional native extension is actually in use, rather than something
-        the user has to infer from a benchmark.
+        native extension is actually in use — it is built automatically at
+        boot, so the interesting question is never "was it built?" but "did
+        the build succeed, and if not, why not?".
         """
         caps = detect_capabilities()
         parts = [
@@ -611,10 +621,86 @@ class PreferencesDialog(QDialog):
         if caps.gpu_name:
             parts.append(caps.gpu_name)
         parts.append(caps.platform or "unknown OS")
-        parts.append(
-            "native kernels" if caps.native_kernels else "python kernels"
-        )
+        parts.append(self._native_status_text())
         return "Detected: " + " · ".join(parts)
+
+    @staticmethod
+    def _native_status_text() -> str:
+        """One phrase describing the native kernel state, with the reason."""
+        from core.native import build_in_progress, last_build_outcome, probe
+
+        if probe().available:
+            return "native kernels"
+
+        if build_in_progress():
+            return "native kernels building…"
+
+        outcome = last_build_outcome()
+        if outcome is not None and outcome.message:
+            return f"python kernels ({outcome.message})"
+        return "python kernels"
+
+    def _rebuild_native_kernels(self) -> None:
+        """Kick off a rebuild and report the result when it lands.
+
+        The build runs off the GUI thread, so the button returns straight
+        away and the summary label is refreshed from the completion
+        callback — which is why the callback is wrapped rather than
+        connected directly.
+        """
+        from core.native import (add_build_listener, build_in_progress,
+                                 ensure_available)
+        from PyQt6.QtCore import QTimer
+
+        if build_in_progress():
+            QMessageBox.information(
+                self, "Native Kernels", "A native build is already running."
+            )
+            return
+
+        self._native_button.setEnabled(False)
+        self._hardware_summary.setText(self._hardware_summary_text())
+
+        def _on_complete(outcome) -> None:
+            # Called from the build thread; hop to the GUI thread before
+            # touching any widget.
+            QTimer.singleShot(0, lambda: self._native_build_finished(outcome))
+
+        add_build_listener(_on_complete)
+        ensure_available(background=True, force_build=True)
+
+        QMessageBox.information(
+            self,
+            "Native Kernels",
+            "Rebuilding the native frame kernels in the background.\n\n"
+            "Playback continues on the current kernels; the editor switches "
+            "over automatically when the build finishes.",
+        )
+
+    def _native_build_finished(self, outcome) -> None:
+        """Refresh the summary label after a background build completes."""
+        self._native_button.setEnabled(True)
+        if not self.isVisible():
+            return
+        self._hardware_summary.setText(self._hardware_summary_text())
+        if outcome.built:
+            QMessageBox.information(
+                self,
+                "Native Kernels",
+                "Native frame kernels are built and active.\n\n"
+                "No restart was needed.",
+            )
+        else:
+            QMessageBox.warning(
+                self,
+                "Native Kernels",
+                "The native build did not produce a usable module.\n\n"
+                f"{outcome.message}\n\n"
+                "The editor keeps running on the NumPy/OpenCV reference "
+                "kernels, so nothing is broken — only slower. Install a C "
+                "toolchain (Visual Studio Build Tools on Windows) and try "
+                "again to get the native speed-up.",
+            )
 
     def _auto_configure_performance(self) -> None:
         """Detect hardware and apply the recommended profile."""

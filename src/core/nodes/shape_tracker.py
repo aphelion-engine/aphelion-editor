@@ -1,11 +1,14 @@
 """A point-driven shape matte with editable polygon outlines."""
 from __future__ import annotations
+
 import json
+
 import cv2
 import numpy as np
 from core.nodes.base import NodeSocketType
 from core.nodes.enums import TrackerShape
-from core.nodes.property_factory import choice_property, number_property, text_property
+from core.nodes.property_factory import (choice_property, number_property,
+                                         text_property)
 from core.nodes.tracking_nodes import TrackerNode
 
 
@@ -24,9 +27,6 @@ class ShapeTrackerNode(TrackerNode):
                 suffix=" px" if key == "feather" else "%"))
         self.set_property("vertices",text_property("[]",priority=30,group="Shape",label="Polygon vertices",
             description="JSON list of [x,y] offsets from the tracked point in frame percent. Use Draw polygon above the preview to place vertices."))
-
-    def input_required(self, slot: str) -> bool:
-        return True
 
     def polygon_vertices(self):
         try:
@@ -64,18 +64,43 @@ class ShapeTrackerNode(TrackerNode):
 
     def evaluate(self, frame_num):
         result = super().evaluate(frame_num)
-        frame = self.input_frame()
-        if frame is None:
-            width,height = self.evaluation_frame_size()
-        else:
-            height,width = frame.shape[:2]
+        # The shape only needs the frame's *dimensions*, which always match the
+        # evaluation size. Inheriting ``TrackerNode.input_required`` keeps the
+        # connected plate from being decoded for this node alone (the tracking
+        # worker samples the source explicitly), so a Shape Tracker in the
+        # graph cannot force a source evaluation on every playback frame.
+        width,height = self.evaluation_frame_size()
         mask = np.zeros((height,width),np.float32)
         points = self.outline(frame_num)
         if len(points) >= 3:
             pixels = np.rint(points*[max(1,width-1),max(1,height-1)]).astype(np.int32)
-            cv2.fillPoly(mask,[pixels],1.0)
             radius = max(0,min(100,round(self.float_value("feather",0))))
             if radius:
-                mask = cv2.GaussianBlur(mask,(radius*2+1,radius*2+1),0,borderType=cv2.BORDER_CONSTANT)
+                self._rasterize_feathered(mask,pixels,radius)
+            else:
+                cv2.fillPoly(mask,[pixels],1.0)
         result["mask"] = mask
         return result
+
+    @staticmethod
+    def _rasterize_feathered(mask,pixels,radius):
+        """Rasterize and feather only the polygon's neighbourhood.
+
+        A Gaussian blur of an all-zero region can only produce zeros, so
+        blurring the whole frame is pure waste for the usual small shape. The
+        polygon's bounding box padded by the kernel half-width is the only area
+        that can become non-zero, and blurring that crop with a constant zero
+        border matches the full-frame blur to float32 precision.
+        """
+        height,width = mask.shape
+        pad = radius+1
+        x0 = max(0,int(pixels[:,0].min())-pad)
+        y0 = max(0,int(pixels[:,1].min())-pad)
+        x1 = min(width,int(pixels[:,0].max())+pad+1)
+        y1 = min(height,int(pixels[:,1].max())+pad+1)
+        if x1 <= x0 or y1 <= y0:
+            return
+        local = np.zeros((y1-y0,x1-x0),np.float32)
+        cv2.fillPoly(local,[pixels-np.array([x0,y0],np.int32)],1.0)
+        local = cv2.GaussianBlur(local,(radius*2+1,radius*2+1),0,borderType=cv2.BORDER_CONSTANT)
+        mask[y0:y1,x0:x1] = local
