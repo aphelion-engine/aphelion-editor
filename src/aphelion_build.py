@@ -633,7 +633,7 @@ def create_exe_build_options(
     Returns:
         Mapping suitable for ``setup(options={"build_exe": ...})``.
     """
-    includes: list[str] = ["aphelion_cli"]
+    includes: list[str] = ["aphelion_cli", "cryptography.hazmat.primitives.asymmetric.ed25519"]
     # Ask for the native kernels explicitly as well as copying the artifact:
     # the freezer's bytecode scan is not guaranteed to see the import, which
     # lives inside a ``try``/``except ImportError`` in a function.

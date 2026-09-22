@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from core.boot import BootRequest, RecentProjectsStore
 from core.project import Project
+from core.license import LicenseStore
 from ui.windows.launcher import ProjectLauncher
 from utils.logging_setup import get_logger
 from utils.qt_window import present_window
@@ -37,6 +38,7 @@ class ApplicationSession(QObject):
         self._editor: Editor | None = None
         self._pending_project: Project | None = None
         self._shutting_down: bool = False
+        self._license_dialog = None
 
     def start(self, *, initial_request: BootRequest | None = None) -> None:
         """Schedule the first UI after the event loop is running.
@@ -148,8 +150,21 @@ class ApplicationSession(QObject):
         self._editor = editor
         editor.destroyed.connect(self._on_editor_destroyed)
         present_window(editor)
+        self._show_license_reminder(editor)
         self._dispose_bootloader()
         _LOG.info("Editor shown for '%s'", project.name)
+
+    def _show_license_reminder(self, editor: Editor) -> None:
+        from ui.dialogs.license_dialog import LicenseDialog
+
+        store = LicenseStore()
+        status = store.status()
+        if status.activated:
+            return
+        dialog = LicenseDialog(store, status, editor)
+        self._license_dialog = dialog
+        dialog.finished.connect(lambda _result: setattr(self, "_license_dialog", None))
+        dialog.open()
 
     def _on_editor_destroyed(self, *_args: object) -> None:
         if self._shutting_down:

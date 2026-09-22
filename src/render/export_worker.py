@@ -437,6 +437,9 @@ class ExportWorker(QThread):
         self.finished_ok.emit(str(out_dir))
 
     def _export_mp4(self, start: int, end: int, total: int) -> None:
+        if not self._request.export_audio_enabled and self._try_parallel_video_export(start, end, total):
+            return
+
         audio_sample_rate = max(1, int(self._request.export_sample_rate))
         audio_channels = 1 if int(self._request.export_channels) == 1 else 2
         include_audio: bool = self._request.export_audio_enabled
@@ -508,3 +511,93 @@ class ExportWorker(QThread):
             self.failed.emit(self._no_frames_message("written"))
             return
         self.finished_ok.emit(str(output))
+
+    def _try_parallel_video_export(self, start: int, end: int, total: int) -> bool:
+        """Render independent video-only chunks concurrently.
+
+        ``Project`` intentionally serializes one live graph because nodes are
+        stateful. Export snapshots remove that constraint for video-only jobs:
+        each worker owns a complete project and decoder, while this thread
+        writes completed chunks in timeline order to the native encoder.
+        Audio-enabled graphs stay on the ordered path so synchronization and
+        stateful audio nodes cannot be changed accidentally.
+        """
+        # Audio decoding currently materializes a complete track per decoder;
+        # duplicating that work in worker snapshots is slower than the ordered
+        # path. Parallel rendering is therefore reserved for silent exports.
+        if total < 4 or self._request.export_audio_enabled:
+            return False
+
+        try:
+            from concurrent.futures import ThreadPoolExecutor
+            from core.project import Project
+
+            document = self._project.to_dict()
+            cpu_count = os.cpu_count() or 2
+            workers = max(2, min( min(8, cpu_count), total))
+            chunk_size = max(1, (total + workers - 1) // workers)
+            chunks = [
+                (chunk_start, min(end + 1, chunk_start + chunk_size))
+                for chunk_start in range(start, end + 1, chunk_size)
+            ]
+            viewer_id = self._request.viewer_id
+
+            def render_chunk(bounds: tuple[int, int]):
+                clone = Project.from_dict(document)
+                clone.set_full_resolution_override(self._request.full_resolution)
+                clone.set_export_mode(True)
+                clone.set_export_audio_enabled(False)
+                local = ExportWorker(clone, self._request)
+                return bounds[0], [
+                    (frame_num, *local._evaluate_frame_rgb(frame_num))
+                    for frame_num in range(*bounds)
+                ], local._skipped_frames
+
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="AphelionRender") as pool:
+                futures = [pool.submit(render_chunk, bounds) for bounds in chunks]
+                rendered_chunks = [future.result() for future in futures]
+        except Exception as exc:  # noqa: BLE001 - normal path remains authoritative
+            _LOG.warning("Parallel export unavailable; using ordered renderer: %s", exc)
+            return False
+
+        rendered_chunks.sort(key=lambda item: item[0])
+        writer: Mp4VideoWriter | None = None
+        width = height = written = skipped = 0
+        output = self._request.output_path
+        fps = float(max(1, self._request.fps))
+        try:
+            for _, frames, chunk_skipped in rendered_chunks:
+                skipped += chunk_skipped
+                for index, (frame_num, frame, _audio) in enumerate(frames):
+                    if self._cancelled or self.isInterruptionRequested():
+                        self.failed.emit("Export cancelled.")
+                        return True
+                    if frame is None:
+                        continue
+                    if writer is None:
+                        height, width = frame.shape[:2]
+                        output.parent.mkdir(parents=True, exist_ok=True)
+                        writer = Mp4VideoWriter(
+                            output,
+                            fps=fps,
+                            width=width,
+                            height=height,
+                            include_audio=False,
+                            quality=self._request.export_quality,
+                        )
+                    elif frame.shape[:2] != (height, width):
+                        interpolation = cv2.INTER_AREA if frame.shape[0] > height or frame.shape[1] > width else cv2.INTER_LINEAR
+                        frame = cv2.resize(frame, (width, height), interpolation=interpolation)
+                    writer.write_video_only(frame)
+                    written += 1
+                self.progress.emit(min(end + 1, rendered_chunks[-1][0] + len(frames)), total)
+        finally:
+            if writer is not None:
+                writer.close()
+
+        if written == 0:
+            self._skipped_frames += skipped
+            self.failed.emit(self._no_frames_message("written"))
+            return True
+        self.finished_ok.emit(str(output))
+        return True
