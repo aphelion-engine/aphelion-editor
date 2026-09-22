@@ -110,8 +110,9 @@ def _kernels():
     from importing, and so the probe happens on first decode rather than at
     application start.
     """
-    from core.native import kernels
+    from core.native import kernels, require_available
 
+    require_available()
     return kernels()
 
 # ----------------------------------------------------------------

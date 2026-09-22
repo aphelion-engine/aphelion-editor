@@ -602,8 +602,10 @@ class VideoInputNode(Node):
             self._previous_frame = self._current_frame
             self._current_frame = frame
 
-            # Get audio for this frame
-            audio = self._decoder.read_audio(source_frame)
+            # Audio is independent of video pixels. Do not slice the decoded
+            # audio buffer for every frame when the export has disabled audio.
+            export_audio = getattr(self, "_export_audio_enabled", True)
+            audio = self._decoder.read_audio(source_frame) if export_audio else None
             if audio is None:
                 audio = self._get_silence_audio()
             else:

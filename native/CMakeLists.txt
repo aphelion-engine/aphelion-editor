@@ -1,4 +1,4 @@
-# CMake build for the optional aphelion_native extension.
+# CMake build for the required aphelion_native media extension.
 #
 # The primary build path is `python native/build.py`, which uses setuptools
 # and needs nothing beyond the Python headers. This CMake project exists for
@@ -33,7 +33,7 @@ endif()
 
 message(STATUS "aphelion_native: building against Python ${Python_VERSION}")
 
-add_library(aphelion_native MODULE aphelion_native.c)
+add_library(aphelion_native MODULE aphelion_native.c frame_render.c)
 
 target_include_directories(aphelion_native PRIVATE ${Python_INCLUDE_DIRS})
 

@@ -39,6 +39,7 @@ NATIVE_DIR = Path(__file__).resolve().parent
 EDITOR_ROOT = NATIVE_DIR.parent
 SRC_DIR = EDITOR_ROOT / "src"
 SOURCE = NATIVE_DIR / "aphelion_native.c"
+FRAME_RENDER_SOURCE = NATIVE_DIR / "frame_render.c"
 MODULE_NAME = "aphelion_native"
 
 #: The name the extension is *installed* under, without the ABI tag.
@@ -153,7 +154,7 @@ def _extension():
     """Return a configured ``Extension`` for the kernels."""
     return _extension_class()(
         MODULE_NAME,
-        sources=[str(SOURCE)],
+        sources=[str(SOURCE), str(FRAME_RENDER_SOURCE)],
         include_dirs=[],
         extra_compile_args=_EXTRA_COMPILE_ARGS[_compiler_family()],
     )
@@ -546,7 +547,13 @@ def check() -> int:
         version = getattr(aphelion_native, "APHELION_NATIVE_VERSION", 0)
         kernels_found = sorted(
             name
-            for name in ("swap_bgr_rgb_inplace", "resize_bgr_to_rgb", "rgb_to_luma")
+            for name in (
+                "swap_bgr_rgb_inplace",
+                "resize_bgr_to_rgb",
+                "rgb_to_luma",
+                "render_rgb_u8",
+                "quantize_f32_u8",
+            )
             if hasattr(aphelion_native, name)
         )
         print(f"built and importable: {artifacts[0]}")

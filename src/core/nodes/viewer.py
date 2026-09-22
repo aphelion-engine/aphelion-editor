@@ -196,6 +196,35 @@ class ViewerNode(Node):
         else:
             return self.blank_frame()
 
+        # Keep the presentation boundary native for the common decoder-native
+        # uint8 path. This avoids Python slicing, float promotion, and a
+        # second Python/OpenCV pass for exposure and mirroring.
+        if (
+            getattr(self, "_emit_u8_allowed", False)
+            and frame.dtype == np.uint8
+            and frame.ndim == 3
+            and frame.shape[2] == 3
+        ):
+            exposure_prop = self.get_property("exposure")
+            exposure = 1.0 if exposure_prop is None or exposure_prop.value is None else float(exposure_prop.value) / 100.0
+            flip_horizontal = self._bool_prop("flip_horizontal", False)
+            flip_vertical = self._bool_prop("flip_vertical", False)
+            if flip_horizontal or flip_vertical or abs(exposure - 1.0) >= 0.001:
+                rendered = np.empty_like(frame)
+                from core.native import kernels, require_available
+
+                require_available()
+                kernels().render_rgb_u8(
+                    frame,
+                    rendered,
+                    exposure=exposure,
+                    flip_horizontal=flip_horizontal,
+                    flip_vertical=flip_vertical,
+                )
+                if audio is not None:
+                    audio = self._apply_viewer_audio(audio)
+                return FrameWithAudio(frame=rendered, audio=audio) if audio is not None else rendered
+
         # Apply display transforms
         if self._bool_prop("flip_horizontal", False):
             frame = np.ascontiguousarray(np.fliplr(frame))

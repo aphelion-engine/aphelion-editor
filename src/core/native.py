@@ -17,24 +17,18 @@ allocate/discard churn that shows up as allocator time and GC pressure.
 Built automatically, not optionally
 -----------------------------------
 This is not a feature the user has to remember to enable. The editor's boot
-pipeline calls :func:`ensure_available`, which compiles the extension in
-place when it is missing, on a **background thread** so a cold build never
-delays startup or holds the splash screen. When the build lands,
-:func:`refresh` re-probes and swaps the new kernels into the live process —
-no restart.
+pipeline calls :func:`require_available`, which compiles the extension in
+place when it is missing before media work can begin.
 
-What it still is not is a *hard* requirement. A machine with no C toolchain
-must remain able to run the editor, so every operation has an equivalent
-NumPy/OpenCV reference implementation. The difference from a purely
-optional design is what happens on failure: the reason is recorded in
-:func:`last_build_outcome` and surfaced in Preferences → Performance and in
-the Viewer overlay, rather than being silently absorbed.
+The native module is a hard production requirement. The NumPy/OpenCV
+implementations remain available for tests, but playback and export fail fast
+when this module cannot be built or imported.
 
 Why the indirection
 -------------------
 1. **Failure is contained.** A missing module, a stale ABI, a partially
-   built artefact — all degrade to the reference path rather than raising
-   at import time.
+    built artefact — diagnostics may use the reference path, but production
+    media operations raise instead of degrading silently.
 2. **One place to look.** Callers ask for :func:`kernels` and use the
    returned object; they never branch on native availability themselves.
 3. **The fallback cannot rot.** The test suite exercises it directly, so
@@ -64,6 +58,7 @@ __all__ = [
     "kernels",
     "last_build_outcome",
     "native_available",
+    "require_available",
     "probe",
     "refresh",
 ]
@@ -117,7 +112,13 @@ def probe(refresh: bool = False) -> KernelProbe:
         try:
             import aphelion_native  # type: ignore[import-not-found]
 
-            required = ("swap_bgr_rgb_inplace", "resize_bgr_to_rgb", "rgb_to_luma")
+            required = (
+                "swap_bgr_rgb_inplace",
+                "resize_bgr_to_rgb",
+                "rgb_to_luma",
+                "render_rgb_u8",
+                "quantize_f32_u8",
+            )
             missing = [name for name in required if not hasattr(aphelion_native, name)]
             if missing:
                 _MODULE = None
@@ -148,6 +149,21 @@ def probe(refresh: bool = False) -> KernelProbe:
 def native_available() -> bool:
     """Return whether the native kernels are usable."""
     return probe().available
+
+
+def require_available() -> KernelProbe:
+    """Require the compiled native backend used by playback and export."""
+    current = probe()
+    if not current.available:
+        outcome = ensure_available(background=False)
+        current = probe(refresh=True)
+        if not current.available:
+            detail = outcome.message or current.error or "module is unavailable"
+            raise RuntimeError(
+                "Aphelion's native video backend is required but unavailable: "
+                f"{detail}. Build it with 'python native/build.py'."
+            )
+    return current
 
 
 def _native_module() -> Any:
@@ -403,6 +419,52 @@ class FrameKernels:
 
         _luma_python(frame, out)
         return out
+
+    def render_rgb_u8(
+        self,
+        source: np.ndarray,
+        destination: np.ndarray,
+        exposure: float = 1.0,
+        flip_horizontal: bool = False,
+        flip_vertical: bool = False,
+    ) -> None:
+        """Render an RGB uint8 frame for presentation without Python loops."""
+        if source.dtype != np.uint8 or destination.dtype != np.uint8:
+            raise ValueError("render_rgb_u8 expects uint8 buffers")
+        if source.shape != destination.shape or source.ndim != 3 or source.shape[2] != 3:
+            raise ValueError("render_rgb_u8 expects matching HxWx3 buffers")
+        if self._module is None:
+            rendered = source
+            if flip_horizontal:
+                rendered = rendered[:, ::-1]
+            if flip_vertical:
+                rendered = rendered[::-1]
+            if exposure != 1.0:
+                rendered = np.clip(rendered.astype(np.float32) * exposure, 0, 255).astype(np.uint8)
+            destination[...] = rendered
+            return
+        self._module.render_rgb_u8(
+            source,
+            destination,
+            source.shape[1],
+            source.shape[0],
+            float(exposure),
+            int(bool(flip_horizontal)),
+            int(bool(flip_vertical)),
+        )
+
+    def quantize_f32_u8(self, source: np.ndarray, destination: np.ndarray) -> None:
+        """Clamp and quantize a float RGB frame in native code."""
+        if source.dtype != np.float32 or destination.dtype != np.uint8:
+            raise ValueError("quantize_f32_u8 expects float32 source and uint8 destination")
+        if source.ndim != 3 or source.shape[2] != 3 or destination.shape != source.shape:
+            raise ValueError("quantize_f32_u8 expects matching HxWx3 buffers")
+        if self._module is None:
+            destination[...] = np.clip(source, 0.0, 1.0) * 255.0 + 0.5
+            return
+        self._module.quantize_f32_u8(
+            source, destination, source.shape[1], source.shape[0]
+        )
 
 
 # ----------------------------------------------------------------------

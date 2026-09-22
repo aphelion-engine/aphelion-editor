@@ -18,6 +18,8 @@ Optimization strategy:
 from __future__ import annotations
 
 import os
+import subprocess
+import time
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
@@ -26,9 +28,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import cv2
+import imageio_ffmpeg
 import numpy as np
 from core.audio import AudioData, FrameWithAudio
-from effects.frame_ops import to_display_u8
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
 from render.video_writer import ExportQuality, Mp4VideoWriter
 
@@ -66,7 +68,7 @@ class ExportRequest:
     png_compression: int = 1
 
 
-_PROGRESS_UPDATE_INTERVAL: int = 8
+_PROGRESS_UPDATE_SECONDS: float = 0.1
 
 # Upper bound on encoder threads. PNG compression scales well across
 # cores, but past this point memory bandwidth and the single evaluation
@@ -135,9 +137,18 @@ class ExportWorker(QThread):
             self.wait(1000)
 
     def run(self) -> None:
+        from core.native import require_available
+
+        try:
+            require_available()
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(str(exc))
+            return
+
         # Full-resolution export must not be quietly downgraded by whatever
         # proxy width the interactive Viewer happens to be set to.
         self._project.set_full_resolution_override(self._request.full_resolution)
+        self._project.set_export_audio_enabled(self._request.export_audio_enabled)
         # Sequential rendering never revisits a frame, so disable the
         # interactive cross-frame cache for the duration of the export.
         self._project.set_export_mode(True)
@@ -151,6 +162,7 @@ class ExportWorker(QThread):
             self.failed.emit(str(exc))
         finally:
             self._project.set_export_mode(False)
+            self._project.set_export_audio_enabled(True)
             self._project.set_full_resolution_override(False)
 
     def _export(self) -> None:
@@ -165,7 +177,101 @@ class ExportWorker(QThread):
         if request.format == ExportFormat.PNG_SEQUENCE:
             self._export_png_sequence(start, end, total)
             return
+        if self._try_native_stream_copy(start, end, total):
+            return
         self._export_mp4(start, end, total)
+
+    def _try_native_stream_copy(self, start: int, end: int, total: int) -> bool:
+        """Copy an unchanged source directly through native FFmpeg.
+
+        A two-node source/viewer project has no pixels to render. Decoding it
+        in Python and encoding it again is pure wasted work, and was the main
+        reason simple MP4 exports appeared capped. This path is deliberately
+        conservative: any graph operation, timing change, trim, or audio
+        control sends the job through the normal renderer.
+        """
+        project = self._project
+        request = self._request
+        if len(project.nodes) != 2 or len(project.connections) != 1:
+            return False
+        connection = next(iter(project.connections))
+        if (
+            connection.input_node_id != request.viewer_id
+            or connection.output_slot != "frame"
+            or connection.input_slot != "frame"
+        ):
+            return False
+
+        source = project.nodes.get(connection.output_node_id)
+        viewer = project.nodes.get(request.viewer_id)
+        if source is None or viewer is None or getattr(source, "node_type", "") != "Video Input":
+            return False
+
+        def value(node: object, key: str, default: object) -> object:
+            prop = node.get_property(key)  # type: ignore[attr-defined]
+            return default if prop is None or prop.value is None else prop.value
+
+        if not bool(value(source, "enabled", True)) or not bool(value(viewer, "enabled", True)):
+            return False
+        if bool(value(source, "reverse", False)) or abs(float(value(source, "speed", 1.0)) - 1.0) > 1e-6:
+            return False
+        if int(value(source, "frame_offset", 0)) != 0 or int(value(source, "start_frame", 0)) != 0:
+            return False
+        if int(value(source, "end_frame", -1)) != -1:
+            return False
+        exposure_enabled = bool(value(viewer, "apply_exposure", True))
+        exposure = float(value(viewer, "exposure", 100))
+        if (exposure_enabled and abs(exposure - 100.0) > 1e-6) or bool(value(viewer, "flip_horizontal", False)) or bool(value(viewer, "flip_vertical", False)):
+            return False
+        if not bool(value(viewer, "audio_enabled", True)) or float(value(viewer, "audio_volume", 100)) != 100.0:
+            return False
+        if not bool(value(source, "audio_enabled", True)) or float(value(source, "audio_volume", 100)) != 100.0:
+            return False
+
+        path = str(value(source, "file_path", ""))
+        if not path or not Path(path).is_file() or start != 0:
+            return False
+        try:
+            info = source.probe_media()
+            if info is None or end < int(round(float(info[1]) * float(info[0]))) - 1:
+                return False
+            if abs(float(request.fps) - float(info[0])) > 0.01:
+                return False
+        except Exception:  # noqa: BLE001 - normal renderer remains authoritative
+            return False
+
+        output = request.output_path
+        if output.resolve() == Path(path).resolve():
+            return False
+        output.parent.mkdir(parents=True, exist_ok=True)
+        temp = output.with_name(f".{output.stem}.native-copy{output.suffix}")
+        command = [
+            imageio_ffmpeg.get_ffmpeg_exe(),
+            "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+            "-i", path,
+            "-map", "0:v:0",
+        ]
+        if request.export_audio_enabled:
+            command.extend(("-map", "0:a:0?"))
+        command.extend(("-c", "copy", "-movflags", "+faststart", str(temp)))
+        try:
+            result = subprocess.run(
+                command,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=600,
+            )
+            if result.returncode != 0:
+                temp.unlink(missing_ok=True)
+                return False
+            os.replace(temp, output)
+            self.progress.emit(total, total)
+            self.finished_ok.emit(str(output))
+            return True
+        except (OSError, subprocess.TimeoutExpired):
+            temp.unlink(missing_ok=True)
+            return False
 
     def _evaluate_frame_rgb(self, frame_num: int) -> tuple[np.ndarray | None, AudioData | None]:
         """Evaluate a frame and return it as a contiguous uint8 RGB array with audio.
@@ -196,7 +302,16 @@ class ExportWorker(QThread):
         # than display-ready 8-bit RGB. The common case is already uint8,
         # and ``to_display_u8`` always allocates, so re-normalizing here
         # would cost an extra full-frame copy on every exported frame.
-        frame = frame_result if frame_result.dtype == np.uint8 else to_display_u8(frame_result)
+        if frame_result.dtype == np.uint8:
+            frame = frame_result
+        else:
+            # Quantization is part of the native export boundary. Keep the
+            # allocation in Python for ownership, but perform every pixel
+            # operation in the compiled backend.
+            frame = np.empty(frame_result.shape, dtype=np.uint8)
+            from core.native import kernels
+
+            kernels().quantize_f32_u8(np.ascontiguousarray(frame_result), frame)
         if frame.ndim == 2:
             frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
         elif frame.shape[2] == 4:
@@ -236,11 +351,14 @@ class ExportWorker(QThread):
         workers: int = self._encode_workers()
         # Enough queued work to keep every worker busy while staying within
         # roughly two frames of buffering per worker.
-        backlog: int = max(8, workers * 2)
+        # Backpressure is sized from the worker pool, not a fixed eight-frame
+        # batch. Small exports should not pause after an arbitrary 8 frames.
+        backlog: int = max(2, workers * 2)
 
         written = 0
         in_flight: deque[Future[bool]] = deque()
         evaluate = self._evaluate_frame_rgb
+        last_progress = time.monotonic()
 
         def drain(count: int) -> int:
             """Collect ``count`` completed encodes, returning successes."""
@@ -284,8 +402,10 @@ class ExportWorker(QThread):
                 if len(in_flight) >= backlog:
                     written += drain(len(in_flight) - workers + 1)
 
-                if ((index + 1) % _PROGRESS_UPDATE_INTERVAL == 0) or (index + 1 == total):
+                now = time.monotonic()
+                if now - last_progress >= _PROGRESS_UPDATE_SECONDS or index + 1 == total:
                     self.progress.emit(index + 1, total)
+                    last_progress = now
 
             written += drain(len(in_flight))
         finally:
@@ -313,6 +433,7 @@ class ExportWorker(QThread):
         written = 0
         evaluate = self._evaluate_frame_rgb
         fps = float(max(1, self._request.fps))
+        last_progress = time.monotonic()
 
         try:
             for index, frame_num in enumerate(range(start, end + 1)):
@@ -353,8 +474,10 @@ class ExportWorker(QThread):
                 writer_write(frame, audio=audio if include_audio else None)
                 written += 1
 
-                if ((index + 1) % _PROGRESS_UPDATE_INTERVAL == 0) or (index + 1 == total):
+                now = time.monotonic()
+                if now - last_progress >= _PROGRESS_UPDATE_SECONDS or index + 1 == total:
                     self.progress.emit(index + 1, total)
+                    last_progress = now
         finally:
             if writer is not None:
                 writer.close()

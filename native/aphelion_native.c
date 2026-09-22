@@ -24,9 +24,9 @@
  *
  * Design constraints
  * ------------------
- * * **Optional.** The Python package works exactly as before when this
- *   module is not built. ``core.native`` reports availability and every call
- *   site has a verified fallback.
+ * * **Required in production.** ``core.native`` rejects a missing or stale
+ *   module before playback/export starts. Reference implementations remain
+ *   available for isolated tests only.
  * * **No third-party headers.** Only the CPython C API and the C standard
  *   library, so the module builds with MSVC, GCC, or Clang without any SDK
  *   beyond the Python headers.
@@ -45,6 +45,8 @@
 
 #include <stddef.h>
 #include <string.h>
+
+#include "frame_render.h"
 
 /* ---------------------------------------------------------------------- */
 /* Geometry helpers                                                        */
@@ -749,6 +751,10 @@ static PyMethodDef aphelion_methods[] = {
     {"resize_bgr_to_rgb", aphelion_resize_bgr_to_rgb, METH_VARARGS,
      resize_bgr_to_rgb_doc},
     {"rgb_to_luma", aphelion_rgb_to_luma, METH_VARARGS, rgb_to_luma_doc},
+    {"render_rgb_u8", aphelion_render_rgb_u8, METH_VARARGS,
+     "render_rgb_u8(src, dst, width, height, exposure, flip_h, flip_v) -> None"},
+    {"quantize_f32_u8", aphelion_quantize_f32_u8, METH_VARARGS,
+     "quantize_f32_u8(src, dst, width, height) -> None"},
     {NULL, NULL, 0, NULL}
 };
 
@@ -785,7 +791,7 @@ PyInit_aphelion_native(void)
         return NULL;
     }
 
-    if (PyModule_AddIntConstant(module, "APHELION_NATIVE_VERSION", 1) < 0) {
+    if (PyModule_AddIntConstant(module, "APHELION_NATIVE_VERSION", 2) < 0) {
         Py_DECREF(module);
         return NULL;
     }

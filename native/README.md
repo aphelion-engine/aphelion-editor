@@ -1,7 +1,8 @@
 # Aphelion native core
 
-Optional C acceleration for the media engine. **Everything here is optional** —
-the editor runs unchanged without it.
+Required C acceleration for the media engine. The editor refuses to start
+without this module because playback and export must use the native pipeline.
+The reference implementations in `src/core/native.py` are test fixtures only.
 
 ## Build
 
@@ -14,6 +15,20 @@ python native/build.py --clean   # remove artefacts
 Needs a C compiler and the Python headers: Visual Studio Build Tools on
 Windows, `build-essential` + `python3-dev` on Linux, Xcode Command Line Tools
 on macOS. A CMake project (`CMakeLists.txt`) is also provided for IDE builds.
+Release packaging treats failure to produce this artifact as fatal.
+
+## Runtime ownership
+
+The media path is native at every I/O and presentation boundary:
+
+- OpenCV's FFmpeg backend performs video decode in native C++.
+- The kernels in this module perform decode-buffer conversion and Viewer
+  presentation transforms in C.
+- FFmpeg performs H.264 encoding and muxing in native C.
+- This module performs the float-to-byte export boundary in C.
+
+Python still schedules graph evaluation and invokes Python-authored effect
+plugins. Those are graph semantics, not media playback or codec work.
 
 After building, verify with:
 
@@ -77,6 +92,17 @@ stretches so exact-size hits dominate and no splitting logic is needed.
 released it may be reused by the very next acquire. See
 `VideoDecoder._convert_bgr_to_rgb`, which deliberately allocates normally
 because its output is cached and can outlive any borrowing scheme.
+
+### `render_rgb_u8(src, dst, width, height, exposure, flip_h, flip_v)`
+
+The Viewer presentation boundary. Exposure multiplication, clamping,
+quantization, and horizontal/vertical mirroring are performed in one native
+pass for decoder-native uint8 frames.
+
+### `quantize_f32_u8(src, dst, width, height)`
+
+The export boundary. Float32 graph output is clamped and quantized directly
+into the encoder-owned uint8 buffer without a Python/NumPy temporary chain.
 
 ## What is deliberately *not* here
 

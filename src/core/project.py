@@ -148,6 +148,7 @@ class Project:
         # --------------------------------------------------------------
 
         self._export_mode = False
+        self._export_audio_enabled = True
         self._export_frame_cache: dict[
             tuple[str, int, str],
             Any,
@@ -988,6 +989,10 @@ class Project:
         self._export_mode = enabled
         self._export_frame_cache.clear()
 
+    def set_export_audio_enabled(self, enabled: bool) -> None:
+        """Avoid decoding audio when the active export cannot use it."""
+        self._export_audio_enabled = bool(enabled)
+
     def _resolve_named_property_for_frame(
         self,
         node_name: str,
@@ -1104,6 +1109,7 @@ class Project:
         # via ``ensure_rgb_f32``. One set-membership test per node per
         # frame is the entire cost.
         node._emit_u8_allowed = node_id in self._eval_u8_sources
+        node._export_audio_enabled = self._export_audio_enabled
 
         # --------------------------------------------------------------
         # Resolver setup

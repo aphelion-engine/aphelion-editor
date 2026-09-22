@@ -120,6 +120,8 @@ class FrameEvaluationWorker(QThread):
         self._running = True
         self._playing = False
         self._max_prefetch = DEFAULT_MAX_PREFETCH_FRAMES
+        #: Last frame the UI asked for, used to spot a backwards jump.
+        self._last_requested_frame: int | None = None
 
         self._drop_policy = FrameDropPolicy(FrameDropMode.ADAPTIVE, 30.0)
         self._stale_discarded = 0
@@ -301,9 +303,27 @@ class FrameEvaluationWorker(QThread):
             generation = self._generation
 
         if playing and not scrubbing:
+            # A backwards move while playing means the playhead wrapped round
+            # (or was seeked), and the clock has to be told. Every deadline is
+            # derived from the anchor taken in ``set_playing``, so leaving that
+            # anchor in place makes each frame after the wrap look late by the
+            # length of the jump. The drop policy then discards every one of
+            # them — and keeps discarding them, because the offset never
+            # decays — so the viewport stops updating for good. That is the
+            # freeze the moment playback reaches the end of the timeline.
+            #
+            # Forward moves are deliberately not treated this way: the playhead
+            # tracking wall-clock time and the clock drifting apart by a frame
+            # or two is ordinary, and re-anchoring on lateness would make the
+            # timeline slow down instead of skipping frames.
+            previous = self._last_requested_frame
+            if previous is not None and int(frame_num) < previous:
+                self._clock.seek(int(frame_num), now)
             due_at = self._clock.due_time(frame_num)
         else:
             due_at = now
+
+        self._last_requested_frame = int(frame_num)
 
         queue_changed = False
         if not playing or scrubbing:
@@ -368,6 +388,9 @@ class FrameEvaluationWorker(QThread):
                 self._clock.start(int(self._project.current_frame), now)
             except Exception:  # noqa: BLE001
                 self._clock.start(0, now)
+            # The clock is anchored at the playhead just above, so the
+            # backwards-jump tracking starts from a clean slate.
+            self._last_requested_frame = None
             # A new playback session is a fresh measurement.
             self._governor.reset(now)
             self._render_ahead_cursor = None

@@ -84,7 +84,7 @@ NATIVE_INSTALL_NAME: Final[str] = (
 NATIVE_INSTALL_PATH: Final[Path] = SRC_ROOT / NATIVE_INSTALL_NAME
 
 
-def ensure_native_module(*, rebuild: bool = False) -> Path | None:
+def ensure_native_module(*, rebuild: bool = False) -> Path:
     """Build the native kernel extension if it is not already present.
 
     The extension is compiled from C, so a source checkout has no artifact
@@ -92,22 +92,20 @@ def ensure_native_module(*, rebuild: bool = False) -> Path | None:
     ships the fast kernels instead of silently falling back to the Python
     reference implementations.
 
-    Failure is not fatal. A machine without a C toolchain still produces a
-    working installer; it just ships the slower kernels, and the build log
-    says so.
+    Failure is fatal. A package without this artifact cannot provide the
+    required native playback/export backend.
 
     Parameters:
         rebuild: Compile again even when an artifact already exists.
 
     Returns:
-        The module path, or ``None`` when it could not be produced.
+        The module path.
     """
     if NATIVE_INSTALL_PATH.exists() and not rebuild:
         return NATIVE_INSTALL_PATH
 
     if not NATIVE_BUILD_SCRIPT.is_file():
-        print(f"warning: no native build script at {NATIVE_BUILD_SCRIPT}")
-        return NATIVE_INSTALL_PATH if NATIVE_INSTALL_PATH.exists() else None
+        raise RuntimeError(f"no native build script at {NATIVE_BUILD_SCRIPT}")
 
     print(f"building native kernels: {NATIVE_BUILD_SCRIPT.name}")
     try:
@@ -118,17 +116,14 @@ def ensure_native_module(*, rebuild: bool = False) -> Path | None:
             text=True,
         )
     except OSError as exc:
-        print(f"warning: could not run the native build: {exc}")
-        return NATIVE_INSTALL_PATH if NATIVE_INSTALL_PATH.exists() else None
+        raise RuntimeError(f"could not run the native build: {exc}") from exc
 
     if completed.returncode != 0 or not NATIVE_INSTALL_PATH.exists():
         detail = (completed.stderr or completed.stdout or "").strip()
-        print(
-            "warning: the native kernels could not be built; the bundle will "
-            "run on the NumPy/OpenCV reference implementations.\n"
-            f"         {detail.splitlines()[-1] if detail else 'no compiler output'}"
+        raise RuntimeError(
+            "the required native video backend could not be built: "
+            f"{detail.splitlines()[-1] if detail else 'no compiler output'}"
         )
-        return NATIVE_INSTALL_PATH if NATIVE_INSTALL_PATH.exists() else None
 
     print(f"native kernels: {NATIVE_INSTALL_PATH.name}")
     return NATIVE_INSTALL_PATH
@@ -146,7 +141,9 @@ def native_include_files() -> list[tuple[str, str]]:
     the finder decided.
     """
     if not NATIVE_INSTALL_PATH.is_file():
-        return []
+        raise RuntimeError(
+            f"required native video backend is missing: {NATIVE_INSTALL_PATH}"
+        )
     return [(str(NATIVE_INSTALL_PATH), NATIVE_INSTALL_NAME)]
 
 

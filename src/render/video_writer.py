@@ -288,6 +288,9 @@ class Mp4VideoWriter:
         queue_size: int = _DEFAULT_QUEUE_SIZE,
         encoder: VideoEncoder = VideoEncoder.AUTO,
     ) -> None:
+        from core.native import require_available
+
+        require_available()
         output_path = Path(output_path)
 
         width = int(width)
