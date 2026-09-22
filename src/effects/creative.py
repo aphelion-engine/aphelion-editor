@@ -338,6 +338,10 @@ def pixel_sort(
     Contiguous runs of pixels whose key exceeds ``threshold`` are reordered
     in place, which produces the signature streaking of "pixel sorting"
     glitch art without touching the dark background.
+
+    The whole frame is processed with one vectorized argsort pass instead of
+    a Python loop per pixel — the per-pixel loop ran millions of iterations
+    per HD frame and froze playback on larger projects.
     """
     source: np.ndarray = ensure_rgb_f32(frame)
     keys: np.ndarray = _pixel_sort_keys(source, mode)
@@ -347,37 +351,60 @@ def pixel_sort(
     output: np.ndarray = source.copy()
     span: int = max(2, int(max_length))
     cut: float = float(np.clip(threshold, 0.0, 1.0))
-    for row in range(height):
-        row_keys: np.ndarray = keys[row]
-        row_pixels: np.ndarray = output[row]
-        start: int = -1
-        for column in range(width + 1):
-            selected: bool = column < width and float(row_keys[column]) >= cut
-            if selected and start < 0:
-                start = column
-            elif not selected and start >= 0:
-                _sort_span(row_keys, row_pixels, start, column, span, reverse)
-                start = -1
-    return output
 
+    mask: np.ndarray = keys >= cut
+    if not mask.any():
+        return output
 
-def _sort_span(
-    keys: np.ndarray,
-    pixels: np.ndarray,
-    start: int,
-    end: int,
-    max_length: int,
-    reverse: bool,
-) -> None:
-    """Sort ``pixels[start:end]`` by ``keys``, in bounded chunks."""
-    cursor: int = start
-    while cursor < end:
-        stop: int = min(end, cursor + max_length)
-        order: np.ndarray = np.argsort(keys[cursor:stop], kind="stable")
+    # Segment runs (vectorized). A run starts where a row's mask flips
+    # False -> True; selected pixels carry the 0-based index of their run.
+    shifted = np.zeros_like(mask)
+    shifted[:, 1:] = mask[:, :-1]
+    starts: np.ndarray = mask & ~shifted
+    run_id: np.ndarray = np.cumsum(starts, axis=1, dtype=np.int64) - 1
+
+    # Position within a run, then the bounded chunk of ``span`` it falls in.
+    # ``run_start_pos`` is forward-filled from each run's first selected
+    # pixel, so it is constant within a run.
+    pos: np.ndarray = np.cumsum(mask, axis=1, dtype=np.int64) - 1
+    run_start_pos: np.ndarray = np.maximum.accumulate(
+        np.where(starts, pos, -1), axis=1
+    )
+    within: np.ndarray = np.where(mask, pos - run_start_pos, 0)
+    chunk: np.ndarray = within // span
+
+    selected: np.ndarray = mask.ravel()
+    indices: np.ndarray = np.flatnonzero(selected)
+    if indices.size == 0:
+        return output
+
+    row_id = np.repeat(np.arange(height, dtype=np.int64), width)
+    run_global: np.ndarray = (row_id * width + run_id.ravel())[indices]
+    chunk_sel: np.ndarray = chunk.ravel()[indices]
+    key_sel: np.ndarray = keys.ravel()[indices]
+    group: np.ndarray = run_global * width + chunk_sel
+
+    # Single exact argsort pass. Keys are in [0, 1], so their float32 bit
+    # patterns are monotonic; packing the group in the high 32 bits and the
+    # key bits in the low 32 bits sorts by (run, chunk) then by exact key.
+    # This replaces both the per-pixel Python loop and a multi-pass lexsort.
+    # For enormous images whose group id exceeds 32 bits, fall back to two
+    # exact stable passes.
+    if int(group.max()) < (1 << 32):
+        key_bits: np.ndarray = key_sel.view(np.uint32)
         if reverse:
-            order = order[::-1]
-        pixels[cursor:stop] = pixels[cursor:stop][order]
-        cursor = stop
+            key_bits = np.uint32(0x7FFFFFFF) - key_bits
+        composite: np.ndarray = (group.astype(np.uint64) << 32) | key_bits.astype(np.uint64)
+        order: np.ndarray = np.argsort(composite, kind="stable")
+    else:
+        if reverse:
+            key_sel = -key_sel
+        by_key: np.ndarray = np.argsort(key_sel, kind="stable")
+        order = by_key[np.argsort(group[by_key], kind="stable")]
+
+    flat: np.ndarray = output.reshape(-1, 3)
+    flat[indices] = flat[indices[order]]
+    return output
 
 
 def _pixel_sort_keys(frame: np.ndarray, mode: PixelSortMode) -> np.ndarray:

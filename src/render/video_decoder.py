@@ -29,6 +29,7 @@ os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "loglevel;quiet")
 
 import cv2
 from render.audio_decoder import AudioDecoder, AudioInfo
+from render.ffmpeg_pipe import FfmpegPipe
 
 # Prefer sequential decode over hard seeks within this many frames.
 _MAX_FORWARD_GRABS: int = 48
@@ -281,6 +282,15 @@ class VideoDecoder:
         self._audio_decoder: AudioDecoder = AudioDecoder()
         self._audio_info: AudioInfo | None = None
         self._audio_enabled: bool = True
+
+        # Fused FFmpeg decode+scale pipe. Serves reduced-width sequential
+        # reads when OpenCV's backend refuses mid-stream rescaling; falls
+        # back to the OpenCV path on any failure.
+        self._pipe = FfmpegPipe()
+        self._pipe_width: int = 0
+        self._pipe_path: str | None = None
+        self._pipe_target: int = -1
+        self._pipe_scale_supported: bool = True
 
     @property
     def path(self) -> str | None:
@@ -596,6 +606,10 @@ class VideoDecoder:
             self._capture_height = native_height
             self._decode_scale_supported = True
             self._force_seek = False
+            self._pipe_scale_supported = True
+            self._pipe_width = 0
+            self._pipe_path = None
+            self._pipe_target = -1
 
             self._frame_cache.clear()
 
@@ -650,6 +664,10 @@ class VideoDecoder:
         if self._capture is not None:
             self._capture.release()
         self._capture = None
+        self._pipe.stop()
+        self._pipe_width = 0
+        self._pipe_path = None
+        self._pipe_target = -1
         self._path = None
         self._source_path = None
         self._proxy_path = None
@@ -723,6 +741,19 @@ class VideoDecoder:
                     self._frame_cache.move_to_end(key)
                     return cached
 
+                # Fused FFmpeg decode+scale fast path. OpenCV's backend
+                # ignores the mid-stream resize on this build, so a
+                # reduced-width read would otherwise materialise the full
+                # frame and downscale it in a second pass. The pipe fuses
+                # both into one pass; on any failure the OpenCV path below
+                # still runs and produces a correct frame.
+                effective = self._effective_decode_width(max_width)
+                if 0 < effective < self._native_width:
+                    piped = self._read_pipe_rgb(target, effective)
+                    if piped is not None:
+                        self._remember(key, piped)
+                        return piped
+
                 # Ask the decoder to emit the size we actually need before
                 # decoding anything. This is the difference between a 4K
                 # source costing a full 4K decode plus a software downscale
@@ -746,6 +777,65 @@ class VideoDecoder:
 
                 self._remember(key, rgb)
                 return rgb
+
+    def _read_pipe_rgb(self, target: int, width: int) -> np.ndarray | None:
+        """Decode ``target`` through the fused FFmpeg scale pipe.
+
+        Sequential reads reuse the running process. A non-sequential read
+        restarts the process at the preceding keyframe and walks forward to
+        the target. Returns ``None`` when the pipe cannot serve the frame,
+        in which case the caller falls back to the OpenCV path.
+        """
+        pipe = self._pipe
+        if (
+            pipe.active
+            and self._pipe_width == width
+            and self._pipe_path == self._path
+            and target == self._pipe_target
+        ):
+            frame = pipe.read()
+            if frame is not None:
+                self._pipe_target = target + 1
+            return frame
+
+        if not self._pipe_scale_supported or not self._path:
+            return None
+
+        index = self._keyframes
+        if index is not None and index.complete:
+            keyframe = index.nearest_before(target)
+        elif target > 0:
+            # No keyframe index yet. ``-ss`` before ``-i`` lands on an
+            # unknown keyframe, so a seek would be off by up to a whole GOP.
+            # Only the very first frame of the clip is reachable from the
+            # start; leave other random access to the OpenCV path. Playback
+            # from frame 0 starts the pipe here and then reads sequentially.
+            return None
+        else:
+            keyframe = 0
+
+        start_sec = keyframe / max(self._fps, 0.001)
+        pipe.start(
+            self._path,
+            target_width=width,
+            native_width=self._native_width,
+            native_height=self._native_height,
+            start_time_sec=start_sec,
+        )
+        if not pipe.active:
+            self._pipe_scale_supported = False
+            return None
+        self._pipe_width = width
+        self._pipe_path = self._path
+        self._pipe_target = -1
+
+        for _ in range(max(0, target - keyframe)):
+            if pipe.read() is None:
+                return None
+        frame = pipe.read()
+        if frame is not None:
+            self._pipe_target = target + 1
+        return frame
 
     def _convert_bgr_to_rgb(
         self, frame: np.ndarray, max_width: int

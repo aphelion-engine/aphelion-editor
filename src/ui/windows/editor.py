@@ -34,6 +34,7 @@ from ui.keybinds import EditorActions, status_hint_line
 from ui.node_graph import NodeGraphView
 from ui.node_graph import operations as node_ops
 from ui.timeline import TimelineWidget
+from ui.timeline_editor import TimelineEditorWidget
 from ui.widgets import (EditorStatusBar, KeyframesPanelWidget, LogViewerWidget,
                         MediaPoolWidget, PropertiesPanel, ViewportWidget)
 from ui.widgets.plugin_host import EditorWidgetHost
@@ -121,6 +122,7 @@ class Editor(QMainWindow):
         self.keyframes = KeyframesPanelWidget(self.project, self.history)
         self.log_viewer = LogViewerWidget()
         self.media_pool = MediaPoolWidget(self.project)
+        self.timeline_editor = TimelineEditorWidget(self.project)
 
         viewport_dock = self.create_dock("Viewport", self.viewport)
         timeline_dock = self.create_dock("Timeline", self.timeline)
@@ -129,6 +131,7 @@ class Editor(QMainWindow):
         keyframes_dock = self.create_dock("Keyframes", self.keyframes)
         logs_dock = self.create_dock("Logs", self.log_viewer)
         media_pool_dock = self.create_dock("Media Pool", self.media_pool)
+        self.timeline_editor_dock = self.create_dock("Timeline Editor", self.timeline_editor)
         logs_dock.setVisible(False)
         keyframes_dock.setVisible(False)
         media_pool_dock.setVisible(True)
@@ -152,10 +155,9 @@ class Editor(QMainWindow):
 
         apply_layout(self, self.docks, LayoutMode.DEFAULT)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, logs_dock)
-        self.tabifyDockWidget(timeline_dock, logs_dock)
-        self.tabifyDockWidget(properties_dock, media_pool_dock)
-        self.tabifyDockWidget(properties_dock, keyframes_dock)
-        properties_dock.raise_()
+        self._arrange_secondary_docks()
+
+        self.timeline_editor.timeline_changed.connect(self._on_timeline_changed)
 
         self.properties.set_widget_host_factory(
             lambda ctx: EditorWidgetHost(self, ctx)
@@ -233,12 +235,17 @@ class Editor(QMainWindow):
         selected_items = self.node_graph.scene.selectedItems()
         if not selected_items:
             self.viewport.set_edit_target(None)
+            self.timeline_editor.set_node(None)
             return
         item = selected_items[0]
         if not hasattr(item, "node_id"):
+            self.timeline_editor.set_node(None)
             return
         self.properties.set_node(item.node_id)
         node = self.project.nodes[item.node_id]
+        self.timeline_editor.set_node(node)
+        if node.node_type == "Timeline Input":
+            self.timeline_editor_dock.raise_()
         # Roto and Tracker/Planar Tracker each get their own interactive
         # viewport overlay; ViewportWidget.set_edit_target fans this out to
         # both and each one ignores node types that aren't its own.
@@ -256,6 +263,25 @@ class Editor(QMainWindow):
         status = self.statusBar()
         if status is not None:
             status.showMessage(f"Added node: {name}", 2500)
+
+    def _on_timeline_changed(self) -> None:
+        """Re-render the preview when the edited timeline changes."""
+        node = getattr(self.timeline_editor, "_node", None)
+        if node is None:
+            return
+        # Timeline edits change the source graph while playback may still be
+        # asking for frames. Stop the clock first so the decoder never mixes
+        # old and new clip ranges during a drag.
+        if self.timeline.is_playing:
+            self.timeline.pause_playback()
+        for node_id, candidate in self.project.nodes.items():
+            if candidate is node:
+                self.project.invalidate_cache(node_id)
+                # Timeline clips are owned by the node and are edited in place,
+                # so explicitly emit the document event used by save/dirty UI.
+                self.project.notify_observers(ObserverEvent.ProjectModified, node_id)
+                self.viewport.request_update()
+                return
 
     def create_node_from_slot(self, slot_id: str) -> None:
         """Create the node currently assigned to a create-keybind slot.
@@ -540,6 +566,7 @@ class Editor(QMainWindow):
         self.properties.set_project(project, self.history)
         self.keyframes.set_project(project, self.history)
         self.media_pool.set_project(project)
+        self.timeline_editor.set_project(project)
         self.history.subscribe(self._on_history_changed)
         self.project.subscribe(self._on_project_dirty_event)
         self._sync_history_actions()
@@ -721,6 +748,7 @@ class Editor(QMainWindow):
         self.properties.shutdown()
         self.log_viewer.shutdown()
         self.media_pool.shutdown()
+        self.timeline_editor.shutdown()
         self.project.unsubscribe(self._on_project_dirty_event)
         self.project.close()
         # Do not leave worker threads alive past interpreter shutdown.
@@ -811,10 +839,20 @@ class Editor(QMainWindow):
         """Apply a named workspace layout preset."""
         self.layout_mode = mode
         apply_layout(self, self.docks, mode)
+        self._arrange_secondary_docks()
         self._sync_layout_action_checks()
         status = self.statusBar()
         if status is not None:
             status.showMessage(f"Layout: {mode.value.replace('_', ' ').title()}", 2500)
+
+    def _arrange_secondary_docks(self) -> None:
+        """Tabify secondary panels with their primary companions."""
+        self.tabifyDockWidget(self.docks.node_graph, self.timeline_editor_dock)
+        self.tabifyDockWidget(self.docks.timeline, self.docks.logs)
+        self.tabifyDockWidget(self.docks.properties, self.docks.media_pool)
+        self.tabifyDockWidget(self.docks.properties, self.docks.keyframes)
+        self.docks.node_graph.raise_()
+        self.docks.properties.raise_()
 
     def reset_layout(self) -> None:
         """Restore the default dock arrangement."""

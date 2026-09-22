@@ -62,6 +62,7 @@ from core.nodes.generator_nodes import (CheckerboardNode, ColorBarsNode,
                                         UVMapNode, VolumetricLightNode,
                                         ZFogNode)
 from core.nodes.image_input import ImageInputNode
+from core.nodes.timeline_input import TimelineInputNode
 from core.nodes.keying_nodes import (ChromaKeyNode, CleanPlateNode,
                                      CombineMasksNode, DespillProNode,
                                      MatteEdgeNode, PremultNode,
@@ -103,6 +104,7 @@ BUILTIN_NODE_TYPES: tuple[type[Node], ...] = (
     VideoInputNode,
     FrozenVideoInputNode,
     ImageInputNode,
+    TimelineInputNode,
     ViewerNode,
     # Audio
     AudioExtractNode,
