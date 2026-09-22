@@ -38,6 +38,7 @@ class ViewerNode(Node):
 
     def _setup_sockets(self) -> None:
         self.add_input("frame", NodeSocketType.Frame)
+        self.add_input("audio", NodeSocketType.Audio)
         self.set_property(
             "enabled",
             NodeProperty(
@@ -178,6 +179,23 @@ class ViewerNode(Node):
             return default
         return bool(prop.value)
 
+    def input_required_for_output(self, input_slot: str, output_slot: str) -> bool:
+        if output_slot == "audio" and "audio" in getattr(self, "_connected_input_slots", ()):
+            return input_slot == "audio"
+        return True
+
+    def _resolved_audio(self) -> AudioData | None:
+        if "audio" in getattr(self, "_connected_input_slots", ()) or self.get_input_value("audio") is not None:
+            value = self.get_input_value("audio")
+        else:
+            value = self.get_input_value("frame")
+        return value.audio if isinstance(value, FrameWithAudio) else value if isinstance(value, AudioData) else None
+
+    def evaluate_output(self, frame_num: int, output_slot: str):
+        if output_slot == "audio":
+            return self._apply_viewer_audio(self._resolved_audio())
+        return self.evaluate(frame_num)
+
     def evaluate(self, frame_num: int) -> np.ndarray | FrameWithAudio:
         """Return the connected frame with optional exposure / flips and audio."""
         del frame_num
@@ -194,7 +212,8 @@ class ViewerNode(Node):
             frame = input_frame
             audio = None
         else:
-            return self.blank_frame()
+            frame = self.blank_frame()
+        audio = self._resolved_audio()
 
         # Keep the presentation boundary native for the common decoder-native
         # uint8 path. This avoids Python slicing, float promotion, and a

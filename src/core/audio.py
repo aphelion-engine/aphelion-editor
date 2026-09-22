@@ -66,7 +66,7 @@ class AudioData:
 
     def is_silent(self, threshold: float = 1e-6) -> bool:
         """Check if audio is effectively silent."""
-        return np.max(np.abs(self.samples)) < threshold
+        return self.samples.size == 0 or bool(np.max(np.abs(self.samples)) < threshold)
 
     def to_bytes(self) -> bytes:
         """Convert audio samples to bytes for transport/serialization."""
@@ -109,3 +109,44 @@ class FrameWithAudio:
     def audio_channels(self) -> int:
         """Get number of audio channels, defaulting to 2 if no audio."""
         return self.audio.num_channels if self.audio else 2
+
+
+def frame_sample_bounds(frame_num: int, fps: float, sample_rate: int) -> tuple[int, int]:
+    """Absolute sample boundaries; fractional FPS never accumulates rounding drift."""
+    if not np.isfinite(fps) or fps <= 0 or sample_rate <= 0:
+        raise ValueError("FPS and sample rate must be positive")
+    return round(frame_num * sample_rate / fps), round((frame_num + 1) * sample_rate / fps)
+
+
+def convert_audio(audio: AudioData | None, sample_rate: int, channels: int,
+                  sample_count: int | None = None) -> AudioData:
+    """Convert rate/layout and pad or trim a timeline block without mutating it."""
+    if channels < 1 or sample_rate < 1:
+        raise ValueError("Invalid output audio format")
+    if audio is None:
+        samples = np.zeros((sample_count or 0, channels), np.float32)
+    else:
+        samples = np.asarray(audio.samples, dtype=np.float32)
+        if samples.ndim == 1:
+            samples = samples[:, None]
+        if channels == 1 and samples.shape[1] > 1:
+            samples = samples.mean(axis=1, keepdims=True)
+        elif samples.shape[1] == 1 and channels > 1:
+            samples = np.repeat(samples, channels, axis=1)
+        elif samples.shape[1] != channels:
+            converted = np.zeros((len(samples), channels), np.float32)
+            n = min(channels, samples.shape[1])
+            converted[:, :n] = samples[:, :n]
+            samples = converted
+        if audio.sample_rate != sample_rate and len(samples):
+            count = round(len(samples) * sample_rate / audio.sample_rate)
+            positions = np.arange(count, dtype=np.float64) * audio.sample_rate / sample_rate
+            samples = np.column_stack([np.interp(positions, np.arange(len(samples)), samples[:, c])
+                                       for c in range(channels)]).astype(np.float32)
+        if sample_count is not None:
+            block = np.zeros((sample_count, channels), np.float32)
+            count = min(sample_count, len(samples))
+            block[:count] = samples[:count]
+            samples = block
+    samples = np.array(samples, dtype=np.float32, copy=True, order="C")
+    return AudioData(samples[:, 0] if channels == 1 else samples, sample_rate)

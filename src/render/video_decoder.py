@@ -30,6 +30,12 @@ os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "loglevel;quiet")
 import cv2
 from render.audio_decoder import AudioDecoder, AudioInfo
 
+try:
+    import av
+    _AV_AVAILABLE = True
+except ImportError:
+    _AV_AVAILABLE = False
+
 # Prefer sequential decode over hard seeks within this many frames.
 _MAX_FORWARD_GRABS: int = 48
 _SEEK_READ_RETRIES: int = 3
@@ -237,6 +243,12 @@ class VideoDecoder:
         # slow GOP seek or audio setup stall every source in the editor.
         self._lock = threading.RLock()
         self._capture: cv2.VideoCapture | None = None
+        self._av_container = None
+        self._av_stream = None
+        self._av_generator = None
+        self._av_time_base: float = 1.0
+        self._av_next_index: int = 0
+        self._use_av: bool = False
         self._path: str | None = None
         #: Original media path; differs from ``_path`` when a proxy is used.
         self._source_path: str | None = None
@@ -299,6 +311,8 @@ class VideoDecoder:
 
     @property
     def is_open(self) -> bool:
+        if self._use_av and self._av_container is not None:
+            return True
         return self._capture is not None and self._capture.isOpened()
 
     def decode_distance(self, frame_num: int) -> int:
@@ -532,35 +546,70 @@ class VideoDecoder:
                 return self.info()
 
             self._close_unlocked()
-            capture = cv2.VideoCapture(decode_path, cv2.CAP_FFMPEG)
-            _apply_decode_threads(capture, self._decode_threads)
-            if _HARDWARE_DECODE_ENABLED:
-                _try_enable_hardware_acceleration(capture)
-            if not capture.isOpened() and adopted is not None:
-                # A broken proxy must never make the media unopenable: fall
-                # back to the original file and carry on.
-                capture.release()
-                adopted = None
-                decode_path = path
-                capture = cv2.VideoCapture(path, cv2.CAP_FFMPEG)
-                _apply_decode_threads(capture, self._decode_threads)
-            if not capture.isOpened():
-                capture.release()
-                return None
 
-            fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
-            if fps <= 0.001:
-                fps = 30.0
-            frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-            # Read the *native* size before anything can change it. These
-            # are the codec's real dimensions, and they are what decode
-            # scaling is a fraction of.
-            native_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
-            native_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-            width, height = native_width, native_height
-            if width <= 0 or height <= 0:
-                capture.release()
-                return None
+            opened_av = False
+            if _AV_AVAILABLE:
+                try:
+                    container = av.open(decode_path)
+                    video_streams = container.streams.video
+                    if video_streams:
+                        stream = video_streams[0]
+                        stream.thread_type = "AUTO"
+                        if self._decode_threads > 0:
+                            try:
+                                stream.codec_context.thread_count = self._decode_threads
+                            except Exception:
+                                pass
+                        fps = float(stream.average_rate or stream.base_rate or 30.0)
+                        if fps <= 0.001:
+                            fps = 30.0
+                        frame_count = int(stream.frames or 0)
+                        native_width = int(stream.codec_context.width or 0)
+                        native_height = int(stream.codec_context.height or 0)
+                        if frame_count <= 0 and stream.duration:
+                            frame_count = int(round(float(stream.duration * stream.time_base) * fps))
+                        if native_width > 0 and native_height > 0:
+                            self._av_container = container
+                            self._av_stream = stream
+                            self._av_time_base = float(stream.time_base)
+                            self._av_generator = container.decode(stream)
+                            self._av_next_index = 0
+                            self._use_av = True
+                            opened_av = True
+                except Exception:
+                    opened_av = False
+
+            if not opened_av:
+                self._use_av = False
+                capture = cv2.VideoCapture(decode_path, cv2.CAP_FFMPEG)
+                _apply_decode_threads(capture, self._decode_threads)
+                if _HARDWARE_DECODE_ENABLED:
+                    _try_enable_hardware_acceleration(capture)
+                if not capture.isOpened() and adopted is not None:
+                    # A broken proxy must never make the media unopenable: fall
+                    # back to the original file and carry on.
+                    capture.release()
+                    adopted = None
+                    decode_path = path
+                    capture = cv2.VideoCapture(path, cv2.CAP_FFMPEG)
+                    _apply_decode_threads(capture, self._decode_threads)
+                if not capture.isOpened():
+                    capture.release()
+                    return None
+
+                fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+                if fps <= 0.001:
+                    fps = 30.0
+                frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+                native_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+                native_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+                width, height = native_width, native_height
+                if width <= 0 or height <= 0:
+                    capture.release()
+                    return None
+                self._capture = capture
+            else:
+                width, height = native_width, native_height
 
             if adopted is not None:
                 # Prefer the source's own metadata over the proxy's.
@@ -576,7 +625,6 @@ class VideoDecoder:
                 if source_fps > 0.0:
                     fps = source_fps
 
-            self._capture = capture
             self._path = decode_path
             self._source_path = path
             self._proxy_path = decode_path if adopted is not None else None
@@ -973,6 +1021,11 @@ class VideoDecoder:
                 fps=self._fps,
                 duration_per_frame=duration_per_frame
             )
+
+    def read_audio_times(self, times: np.ndarray) -> AudioData:
+        """Sample audio independently of video frame decoding."""
+        with self._lock:
+            return self._audio_decoder.sample_at_times(times)
 
     def read_audio_range(self, start_time_sec: float, duration_sec: float) -> "AudioData | None":
         """Read a contiguous audio range by time for smoother preview playback."""

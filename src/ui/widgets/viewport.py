@@ -18,6 +18,7 @@ from PyQt6.QtCore import QEvent, QRect, Qt, QTimer
 from PyQt6.QtGui import QCloseEvent, QImage, QPixmap, QResizeEvent
 from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
 from render.audio_playback import get_audio_engine
+from render.audio_graph import GraphAudioProducer
 from render.frame_evaluator import FrameEvaluationWorker
 from render.preview import ViewportFitMode
 from ui.widgets.roto_overlay import RotoOverlayWidget
@@ -91,6 +92,8 @@ class ViewportWidget(QWidget):
         self._displayed_fps: float = 0.0
         self._last_display_time: float | None = None
         self._audio_engine = get_audio_engine()
+        self._audio_producer = GraphAudioProducer(self.project, self._audio_engine)
+        self._audio_last_playhead = self.project.current_frame
         self._queued_audio_until_frame: int | None = None
         self._audio_prefetch_frames: int = 4
 
@@ -295,6 +298,8 @@ class ViewportWidget(QWidget):
         if self._scrubbing:
             return
         self._scrubbing = True
+        self._audio_producer.stop()
+        self._audio_engine.clear_buffer()
         self._worker.set_scrubbing(True)
         self._worker.invalidate()
         self._sync_playback_proxy_override()
@@ -306,6 +311,9 @@ class ViewportWidget(QWidget):
         if not self._scrubbing:
             return
         self._scrubbing = False
+        if self._playback_active and self.project.active_viewer:
+            self._audio_producer.start(self.project.active_viewer, self.project.current_frame)
+            self._audio_last_playhead = self.project.current_frame
         self._worker.set_scrubbing(False)
         self._sync_playback_proxy_override()
         self._render_high_quality_if_idle(after_scrub=True)
@@ -358,8 +366,11 @@ class ViewportWidget(QWidget):
 
     def set_project(self, project: Project) -> None:
         """Retarget this viewport at a newly loaded project."""
+        self._audio_producer.stop()
+        self._audio_engine.clear_buffer()
         self.project.unsubscribe(self.on_project_changed)
         self.project = project
+        self._audio_producer = GraphAudioProducer(project, self._audio_engine)
         self._adaptive_width = None
         self._scrubbing = False
         self._worker.set_scrubbing(False)
@@ -378,6 +389,15 @@ class ViewportWidget(QWidget):
         self.request_update()
 
     def on_project_changed(self, event: ObserverEvent, _data: Any) -> None:
+        if self._playback_active and not self._scrubbing:
+            current = self.project.current_frame
+            seek = event == ObserverEvent.FrameChanged and (current < self._audio_last_playhead)
+            if event != ObserverEvent.FrameChanged or seek:
+                self._audio_producer.stop()
+                self._audio_engine.clear_buffer()
+                if self.project.active_viewer:
+                    self._audio_producer.start(self.project.active_viewer, current)
+            self._audio_last_playhead = current
         if event in {
             ObserverEvent.FrameChanged,
             ObserverEvent.NodeModified,
@@ -437,8 +457,6 @@ class ViewportWidget(QWidget):
         if isinstance(frame, FrameWithAudio):
             frame_data = frame.frame
             audio_data = frame.audio
-            if self._playback_active and audio_data is not None and self._audio_engine.is_enabled():
-                self._feed_smoother_preview_audio(frame_num, audio_data)
         elif isinstance(frame, np.ndarray):
             frame_data = frame
         else:
@@ -725,35 +743,6 @@ class ViewportWidget(QWidget):
             xform,
         )
 
-    def _feed_smoother_preview_audio(self, frame_num: int, fallback_audio: AudioData) -> None:
-        """Queue contiguous processed viewer audio ahead of the playhead.
-
-        Uses the already-evaluated audio for the displayed frame, then fills a
-        short forward window by reusing cached viewer evaluations when possible.
-        This keeps preview audio routed through the graph while reducing gaps
-        when the viewport drops visual frames during playback.
-        """
-        start_frame = frame_num
-        if self._queued_audio_until_frame is not None:
-            start_frame = max(start_frame, self._queued_audio_until_frame)
-        end_frame = max(frame_num + 1, frame_num + self._audio_prefetch_frames)
-        viewer_id = self.project.active_viewer
-        if not viewer_id:
-            return
-
-        for queued_frame in range(start_frame, end_frame):
-            audio_to_feed: AudioData | None = None
-            if queued_frame == frame_num:
-                audio_to_feed = fallback_audio
-            else:
-                result = self.project.cached_preview_frame(viewer_id, queued_frame)
-                if isinstance(result, FrameWithAudio):
-                    audio_to_feed = result.audio
-            if audio_to_feed is None:
-                break
-            self._audio_engine.feed_audio(audio_to_feed)
-            self._queued_audio_until_frame = queued_frame + 1
-
     def _prime_audio_playback(self) -> None:
         """Reset audio queue state when playback begins."""
         self._queued_audio_until_frame = None
@@ -786,10 +775,14 @@ class ViewportWidget(QWidget):
         self._queued_audio_until_frame = None
 
         # Start/stop audio playback
+        self._audio_producer.stop()
         self._audio_engine.clear_buffer()
         if active and self._audio_engine.is_enabled():
             self._prime_audio_playback()
             self._audio_engine.start()
+            self._audio_last_playhead = self.project.current_frame
+            if self.project.active_viewer:
+                self._audio_producer.start(self.project.active_viewer, self.project.current_frame)
 
             # Audio becomes the master clock as soon as the device is
             # actually consuming samples; until the first resync lands, the
@@ -827,6 +820,7 @@ class ViewportWidget(QWidget):
     def shutdown(self) -> None:
         """Stop background evaluation before the editor window is torn down."""
         self._audio_clock_timer.stop()
+        self._audio_producer.stop()
         self._audio_engine.stop()
         self._worker.stop()
         # Never leave the collector in a playback-scoped state: the editor

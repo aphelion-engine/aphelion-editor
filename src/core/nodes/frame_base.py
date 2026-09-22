@@ -44,6 +44,47 @@ class FrameNode(Node):
             return value.audio
         return None
 
+    def input_audio_samples(self, offset: int, count: int, slot: str = "audio") -> np.ndarray:
+        """Read a sample window relative to this frame, including upstream history.
+
+        Graph evaluation supplies random access, so seeks, repeated evaluations
+        and export do not depend on a mutable DSP ring buffer. Before time zero
+        and disconnected inputs are silent. Returns a two-dimensional buffer.
+        """
+        from core.audio import convert_audio, frame_sample_bounds
+        audio = self.input_audio(slot)
+        if audio is None:
+            return np.zeros((count, 1), np.float32)
+        result = np.zeros((count, audio.num_channels), np.float32)
+        sampler = getattr(self, "_input_resamplers", {}).get(slot)
+        current_start, _ = frame_sample_bounds(self._current_frame_num, self._project_fps, audio.sample_rate)
+        absolute_start = current_start + offset
+        # The current block can also be used directly by standalone node tests.
+        lo, hi = max(0, offset), min(audio.num_samples, offset + count)
+        if hi > lo:
+            result[lo - offset:hi - offset] = np.asarray(audio.samples).reshape(-1, audio.num_channels)[lo:hi]
+        if sampler is None or offset >= 0:
+            return result
+        position = max(0, absolute_start)
+        end = min(current_start, absolute_start + count)
+        frame = max(0, int(position * self._project_fps / audio.sample_rate) - 1)
+        while position < end:
+            start, stop = frame_sample_bounds(frame, self._project_fps, audio.sample_rate)
+            if stop <= position:
+                frame += 1
+                continue
+            payload = sampler(frame)
+            if isinstance(payload, FrameWithAudio):
+                payload = payload.audio
+            block = convert_audio(payload if isinstance(payload, AudioData) else None,
+                                  audio.sample_rate, audio.num_channels, stop - start)
+            take_end = min(stop, end)
+            values = block.samples.reshape(-1, audio.num_channels)
+            result[position - absolute_start:take_end - absolute_start] = values[position - start:take_end - start]
+            position = take_end
+            frame += 1
+        return result
+
     def input_number(self, slot: str, default: float = 0.0) -> float:
         """Return a connected Number-socket scalar, or ``default``."""
         value: object | None = self.get_input_value(slot)

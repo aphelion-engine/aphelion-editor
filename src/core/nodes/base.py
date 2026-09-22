@@ -231,6 +231,13 @@ class Node(ABC):
     def _setup_sockets(self) -> None:
         return
 
+    def evaluate_output(self, frame_num: int, output_slot: str) -> NodeValue:
+        """Optional output-specific evaluation; existing plugins use evaluate unchanged."""
+        return self.evaluate(frame_num)
+
+    def input_required_for_output(self, input_slot: str, output_slot: str) -> bool:
+        return self.input_required(input_slot)
+
     def add_input(self, name: str, socket_type: NodeSocketType) -> None:
         """Allow Any to accept ANY output type."""
         if socket_type == NodeSocketType.Node:

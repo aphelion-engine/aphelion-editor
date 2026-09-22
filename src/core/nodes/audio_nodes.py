@@ -62,6 +62,7 @@ def _apply_audio_gate(samples: np.ndarray, threshold: float, ratio: float) -> np
 def _moving_average(samples: np.ndarray, radius: int) -> np.ndarray:
     if radius <= 1 or samples.shape[0] <= 1:
         return samples
+    radius = min(radius, samples.shape[0])
     kernel = np.ones(radius, dtype=np.float32) / float(radius)
     filtered = np.empty_like(samples)
     for channel in range(samples.shape[1]):
@@ -155,7 +156,7 @@ def _match_audio_layout(audio: AudioData, sample_rate: int, channels: int, quali
         else:
             samples = np.concatenate((samples, np.zeros(
                 (samples.shape[0], channels - samples.shape[1]), dtype=np.float32)), axis=1)
-    return samples
+    return samples.copy()
 
 
 def _pad_audio_length(samples: np.ndarray, length: int) -> np.ndarray:
@@ -215,7 +216,9 @@ def _effect_levels(node: FrameNode, group: str, default_wet: float = 100.0) -> t
 
 
 def _add_standard_effect_mix(node: FrameNode, *, group: str, wet_default: int = 100, output_priority: int = 99) -> None:
-    node.set_property("dry", slider_property(100, 0, 200, priority=90, group=group,
+    node.set_property("enabled", toggle_property(True, priority=-1, group=group, label="Enabled"))
+    dry_default = 100 if group in {"Delay", "Reverb"} else 0
+    node.set_property("dry", slider_property(dry_default, 0, 200, priority=90, group=group,
                       label="Dry", description="Dry/original signal level.", suffix="%"))
     node.set_property("wet", slider_property(wet_default, 0, 200, priority=91,
                       group=group, label="Wet", description="Processed signal level.", suffix="%"))
@@ -319,6 +322,8 @@ class AudioGainNode(FrameNode):
     def evaluate(self, frame_num: int) -> NodeValue:
         del frame_num
         audio, frame = _input_audio_payload(self, "audio")
+        if audio is not None and not self.bool_value("enabled", True):
+            return _effect_result(audio, frame)
         if audio is None:
             silent = AudioData.silence(
                 duration=1.0 / max(self._project_fps, 1.0))
@@ -360,10 +365,12 @@ class AudioMixNode(FrameNode):
         del frame_num
         audio_a = self.input_audio("a")
         audio_b = self.input_audio("b")
+        if audio_a is None and audio_b is None:
+            return AudioData.silence(duration=1.0 / max(self._project_fps, 1.0))
         if audio_a is None:
-            return audio_b if audio_b is not None else AudioData.silence(duration=1.0 / max(self._project_fps, 1.0))
+            audio_a = AudioData(np.zeros_like(audio_b.samples), audio_b.sample_rate)
         if audio_b is None:
-            return audio_a
+            audio_b = AudioData(np.zeros_like(audio_a.samples), audio_a.sample_rate)
         quality = self.enum_value(
             "quality", AudioMixQuality, AudioMixQuality.Balanced)
         sample_rate = max(audio_a.sample_rate, audio_b.sample_rate)
@@ -403,6 +410,8 @@ class AudioDelayNode(FrameNode):
     def evaluate(self, frame_num: int) -> NodeValue:
         del frame_num
         audio, frame = _input_audio_payload(self, "audio")
+        if audio is not None and not self.bool_value("enabled", True):
+            return _effect_result(audio, frame)
         if audio is None:
             silent = AudioData.silence(
                 duration=1.0 / max(self._project_fps, 1.0))
@@ -411,12 +420,15 @@ class AudioDelayNode(FrameNode):
         delay_samples = max(
             1, int(audio.sample_rate * self.float_value("delay_ms", 120.0) / 1000.0))
         feedback = self.float_value("feedback", 35.0) / 100.0
+        # Read delayed upstream samples across timeline blocks. Re-evaluation
+        # after a seek produces the same result as sequential playback.
         wet = np.zeros_like(samples)
-        wet += samples * 0.2
-        for i in range(delay_samples, samples.shape[0]):
-            wet[i] += samples[i - delay_samples]
-            if i >= delay_samples * 2:
-                wet[i] += wet[i - delay_samples] * feedback
+        gain = 1.0
+        for tap in range(1, 33):
+            wet += self.input_audio_samples(-delay_samples * tap, len(samples)) * gain
+            gain *= max(0.0, min(0.95, feedback))
+            if gain < 0.001:
+                break
         dry_level, wet_level, output_gain = _effect_levels(
             self, "Delay", default_wet=70.0)
         out = _apply_output_gain(_blend_dry_wet(
@@ -444,18 +456,20 @@ class AudioReverbNode(FrameNode):
     def evaluate(self, frame_num: int) -> NodeValue:
         del frame_num
         audio, frame = _input_audio_payload(self, "audio")
+        if audio is not None and not self.bool_value("enabled", True):
+            return _effect_result(audio, frame)
         if audio is None:
             silent = AudioData.silence(
                 duration=1.0 / max(self._project_fps, 1.0))
             return _effect_result(silent, frame)
         samples = _ensure_2d(np.asarray(audio.samples, dtype=np.float32))
-        wet = _simple_reverb(
-            samples,
-            audio.sample_rate,
-            self.float_value("decay", 55.0) / 100.0,
-            self.float_value("pre_delay_ms", 35.0),
-            self.int_value("reflections", 4),
-        )
+        decay = self.float_value("decay", 55.0) / 100.0
+        delay = max(1, round(audio.sample_rate * self.float_value("pre_delay_ms", 35.0) / 1000))
+        spread = max(1, delay // 2)
+        wet = samples * np.float32(0.35)
+        for tap in range(1, self.int_value("reflections", 4) + 1):
+            shifted = self.input_audio_samples(-(delay + (tap - 1) * spread), len(samples))
+            wet += shifted * (decay ** tap) * (0.9 - min(0.6, tap * 0.08))
         dry_level, wet_level, output_gain = _effect_levels(
             self, "Reverb", default_wet=70.0)
         out = _apply_output_gain(_blend_dry_wet(
@@ -487,6 +501,8 @@ class AudioEqNode(FrameNode):
     def evaluate(self, frame_num: int) -> NodeValue:
         del frame_num
         audio, frame = _input_audio_payload(self, "audio")
+        if audio is not None and not self.bool_value("enabled", True):
+            return _effect_result(audio, frame)
         if audio is None:
             silent = AudioData.silence(
                 duration=1.0 / max(self._project_fps, 1.0))
@@ -553,6 +569,8 @@ class AudioPanNode(FrameNode):
     def evaluate(self, frame_num: int) -> NodeValue:
         del frame_num
         audio, frame = _input_audio_payload(self, "audio")
+        if audio is not None and not self.bool_value("enabled", True):
+            return _effect_result(audio, frame)
         if audio is None:
             silent = AudioData.silence(
                 duration=1.0 / max(self._project_fps, 1.0), channels=2)
@@ -593,6 +611,8 @@ class AudioCompressorNode(FrameNode):
     def evaluate(self, frame_num: int) -> NodeValue:
         del frame_num
         audio, frame = _input_audio_payload(self, "audio")
+        if audio is not None and not self.bool_value("enabled", True):
+            return _effect_result(audio, frame)
         if audio is None:
             silent = AudioData.silence(
                 duration=1.0 / max(self._project_fps, 1.0))
@@ -630,6 +650,8 @@ class AudioLimiterNode(FrameNode):
     def evaluate(self, frame_num: int) -> NodeValue:
         del frame_num
         audio, frame = _input_audio_payload(self, "audio")
+        if audio is not None and not self.bool_value("enabled", True):
+            return _effect_result(audio, frame)
         if audio is None:
             silent = AudioData.silence(
                 duration=1.0 / max(self._project_fps, 1.0))
@@ -662,6 +684,8 @@ class AudioGateNode(FrameNode):
     def evaluate(self, frame_num: int) -> NodeValue:
         del frame_num
         audio, frame = _input_audio_payload(self, "audio")
+        if audio is not None and not self.bool_value("enabled", True):
+            return _effect_result(audio, frame)
         if audio is None:
             silent = AudioData.silence(
                 duration=1.0 / max(self._project_fps, 1.0))
@@ -693,6 +717,8 @@ class AudioNormalizeNode(FrameNode):
     def evaluate(self, frame_num: int) -> NodeValue:
         del frame_num
         audio, frame = _input_audio_payload(self, "audio")
+        if audio is not None and not self.bool_value("enabled", True):
+            return _effect_result(audio, frame)
         if audio is None:
             silent = AudioData.silence(
                 duration=1.0 / max(self._project_fps, 1.0))
@@ -726,6 +752,8 @@ class AudioStereoWidthNode(FrameNode):
     def evaluate(self, frame_num: int) -> NodeValue:
         del frame_num
         audio, frame = _input_audio_payload(self, "audio")
+        if audio is not None and not self.bool_value("enabled", True):
+            return _effect_result(audio, frame)
         if audio is None:
             silent = AudioData.silence(
                 duration=1.0 / max(self._project_fps, 1.0), channels=2)
@@ -839,6 +867,8 @@ class AudioToMonoNode(FrameNode):
     def evaluate(self, frame_num: int) -> NodeValue:
         del frame_num
         audio, frame = _input_audio_payload(self, "audio")
+        if audio is not None and not self.bool_value("enabled", True):
+            return _effect_result(audio, frame)
         if audio is None:
             silent = AudioData.silence(
                 duration=1.0 / max(self._project_fps, 1.0), channels=1)

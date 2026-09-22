@@ -1180,6 +1180,7 @@ class Project:
 
         node.clear_input_values()
         node.set_time_resampler(None)
+        node._input_resamplers = {}
 
         input_connections = (
             self.dependency_graph
@@ -1188,9 +1189,10 @@ class Project:
             )
         )
 
+        node._connected_input_slots = frozenset(conn.input_slot for conn in input_connections)
         for conn in input_connections:
             input_slot = conn.input_slot
-            if not node.input_required(input_slot):
+            if not node.input_required_for_output(input_slot, output_slot):
                 continue
 
             in_sock = node.inputs[
@@ -1220,6 +1222,9 @@ class Project:
                 input_slot,
                 dep_output,
             )
+            sampler = _TimeResampler(self, self.evaluate_node)
+            sampler.bind(conn.output_node_id, conn.output_slot)
+            node._input_resamplers[input_slot] = sampler
 
             if input_slot == "frame":
                 resampler = node._eval_resampler
@@ -1250,9 +1255,9 @@ class Project:
             # allocates a metric name for every node of every frame.
             if profiler.enabled:
                 with profiler.scope(f"node:{node.node_type}"):
-                    raw_result = node.evaluate(frame_num)
+                    raw_result = node.evaluate_output(frame_num, output_slot)
             else:
-                raw_result = node.evaluate(frame_num)
+                raw_result = node.evaluate_output(frame_num, output_slot)
 
             if isinstance(
                 raw_result,

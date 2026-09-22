@@ -876,12 +876,16 @@ class PropertiesPanel(QWidget):
 
     def browse_file(self, prop_name: str, widget: FilePropertyWidget) -> None:
         is_image = widget.prop.input_type == NodePropertyInputType.ImageFile
-        caption = "Select an image file" if is_image else "Select a video file"
+        node = self.project.nodes.get(self.current_node_id)
+        is_audio = node is not None and node.node_type == "Audio Input"
+        caption = "Select an audio file" if is_audio else "Select an image file" if is_image else "Select a video file"
         file_filter = (
             "Image Files (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp);;All Files (*)"
             if is_image
             else "Video Files (*.mp4 *.avi *.mov *.mkv);;All Files (*)"
         )
+        if is_audio:
+            file_filter = "Audio Files (*.wav *.mp3 *.flac *.ogg *.m4a *.aac *.aiff *.opus);;All Files (*)"
         file_path, _ = QFileDialog.getOpenFileName(self, caption, "", file_filter)
         if file_path:
             widget.set_value(file_path)

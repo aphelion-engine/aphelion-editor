@@ -5,12 +5,12 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
 import imageio_ffmpeg
 import numpy as np
-
 from core.audio import AudioData
 from utils.logging_setup import get_logger
 
@@ -45,6 +45,25 @@ class AudioInfo:
     has_audio: bool = True
 
 
+_AUDIO_CACHE_LIMIT: int = 32
+_AUDIO_CACHE: dict[tuple[str, int, int], tuple[AudioInfo, np.ndarray | None]] = {}
+_AUDIO_CACHE_LOCK = threading.Lock()
+
+
+def _audio_cache_key(path: str) -> tuple[str, int, int] | None:
+    try:
+        stat = os.stat(path)
+        return (os.path.normcase(os.path.abspath(path)), int(stat.st_size), int(stat.st_mtime_ns))
+    except OSError:
+        return None
+
+
+def clear_audio_cache() -> None:
+    """Clear cached audio buffers."""
+    with _AUDIO_CACHE_LOCK:
+        _AUDIO_CACHE.clear()
+
+
 class AudioDecoder:
     """Extract audio from video files using FFmpeg."""
 
@@ -67,6 +86,15 @@ class AudioDecoder:
             return self._audio_info
 
         self._close()
+
+        key = _audio_cache_key(path)
+        if key is not None:
+            with _AUDIO_CACHE_LOCK:
+                cached = _AUDIO_CACHE.get(key)
+                if cached is not None:
+                    self._path = path
+                    self._audio_info, self._decoded_samples = cached
+                    return self._audio_info
 
         try:
             ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
@@ -155,6 +183,12 @@ class AudioDecoder:
                 self._audio_info.duration_sec,
             )
 
+            if key is not None:
+                with _AUDIO_CACHE_LOCK:
+                    if len(_AUDIO_CACHE) >= _AUDIO_CACHE_LIMIT:
+                        _AUDIO_CACHE.pop(next(iter(_AUDIO_CACHE)))
+                    _AUDIO_CACHE[key] = (self._audio_info, self._decoded_samples)
+
             return self._audio_info
 
         except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError, ValueError, FileNotFoundError) as exc:
@@ -183,6 +217,21 @@ class AudioDecoder:
         self._audio_info = None
         self._decoded_samples = None
 
+    def sample_at_times(self, times: np.ndarray) -> AudioData:
+        """Read fractional source positions; out-of-media samples are silent."""
+        rate = self._audio_info.sample_rate if self._audio_info else 48000
+        channels = self._audio_info.num_channels if self._audio_info else 2
+        result = np.zeros((len(times), channels), np.float32)
+        if self._decoded_samples is not None and self._decoded_samples.size:
+            source = self._decoded_samples.reshape(-1, channels)
+            positions = np.asarray(times, dtype=np.float64) * rate
+            valid = np.isfinite(positions) & (positions >= 0) & (positions < len(source))
+            left = np.floor(positions[valid]).astype(np.int64)
+            right = np.minimum(left + 1, len(source) - 1)
+            weight = (positions[valid] - left)[:, None]
+            result[valid] = source[left] * (1 - weight) + source[right] * weight
+        return AudioData(result[:, 0] if channels == 1 else result, rate)
+
     def extract_audio_for_time_range(
         self,
         start_time_sec: float,
@@ -209,7 +258,7 @@ class AudioDecoder:
         end_index = max(start_index, int(round((safe_start + safe_duration) * sample_rate)))
         sliced = self._decoded_samples[start_index:end_index]
 
-        expected_samples = max(1, int(round(safe_duration * sample_rate)))
+        expected_samples = end_index - start_index
         if sliced.shape[0] < expected_samples:
             if channels > 1:
                 pad = np.zeros((expected_samples - sliced.shape[0], channels), dtype=np.float32)

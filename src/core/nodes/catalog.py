@@ -6,6 +6,7 @@ from core.nodes.vfx_tools import VFX_NODE_TYPES
 from core.nodes.advanced_color_nodes import (ClarityNode, ColorBalanceNode,
                                              LevelsNode, ShadowsHighlightsNode,
                                              VibranceNode)
+from core.nodes.audio_input import AudioInputNode
 from core.nodes.audio_nodes import (AudioAdvancedMixerNode, AudioAttachNode,
                                     AudioCompressorNode, AudioDelayNode,
                                     AudioEqNode, AudioExtractNode,
@@ -98,6 +99,7 @@ from core.nodes.viewer import ViewerNode
 
 BUILTIN_NODE_TYPES: tuple[type[Node], ...] = (
     # Input / output
+    AudioInputNode,
     VideoInputNode,
     FrozenVideoInputNode,
     ImageInputNode,

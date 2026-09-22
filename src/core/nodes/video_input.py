@@ -6,7 +6,7 @@ from enum import IntEnum, auto
 
 import numpy as np
 from config.constants import DEFAULT_FPS, DEFAULT_PREVIEW_MAX_WIDTH
-from core.audio import AudioData, FrameWithAudio
+from core.audio import AudioData, FrameWithAudio, frame_sample_bounds
 from core.nodes.base import (FRAME_DTYPE, MediaEdgeMode, Node, NodeProperty,
                              NodePropertyInputType, NodeSocketType,
                              PreviewCost, VideoFrameErrorMethod)
@@ -64,6 +64,7 @@ class VideoInputNode(Node):
 
     def _setup_sockets(self) -> None:
         self.add_output("frame", NodeSocketType.Frame)
+        self.add_output("audio", NodeSocketType.Audio)
         self.set_property(
             "file_path",
             NodeProperty(
@@ -556,6 +557,40 @@ class VideoInputNode(Node):
             )
         return start + int(local)
 
+    def evaluate_output(self, frame_num: int, output_slot: str):
+        if output_slot == "audio":
+            if not self._bool_prop("enabled", True) or not self._file_path():
+                return self._get_silence_audio()
+            info = self._ensure_open()
+            return self._timeline_audio(frame_num, info) if info is not None else self._get_silence_audio()
+        return self.evaluate(frame_num)
+
+    def _timeline_audio(self, frame_num: int, info: MediaInfo) -> AudioData:
+        """Sample the timeline continuously, including speed, reverse and looping."""
+        rate = info.audio_sample_rate if info.audio_sample_rate > 0 else 48000
+        first, last = frame_sample_bounds(frame_num, self._project_fps, rate)
+        if not getattr(self, "_export_audio_enabled", True):
+            return AudioData.silence((last - first) / rate, rate, max(1, info.audio_channels))
+        start, end = self._media_range(info.frame_count)
+        source_fps = info.fps if info.fps > 0 else self._project_fps
+        play_fps = self._float_prop("fps", 0.0) or source_fps
+        speed = max(0.01, self._float_prop("speed", 1.0))
+        times = np.arange(first, last, dtype=np.float64) / rate
+        local = (times + self._int_prop("frame_offset", 0) / self._project_fps) * play_fps * speed
+        length = end - start + 1
+        if self._bool_prop("reverse", False):
+            local = length - 1e-9 - local
+        valid = (local >= 0) & (local < length)
+        for mask, key, default in ((local < 0, "before_start", MediaEdgeMode.Black),
+                                    (local >= length, "after_end", MediaEdgeMode.Hold)):
+            if self._edge_mode(key, default) == MediaEdgeMode.Loop:
+                local[mask] %= length
+                valid[mask] = True
+        # Holding a picture after the clip ends must not repeat a frozen sound.
+        source_times = (local + start) / source_fps
+        source_times[~valid] = -1
+        return self._process_audio(self._decoder.read_audio_times(source_times))
+
     def evaluate(self, frame_num: int) -> FrameWithAudio:
         if not self._bool_prop("enabled", True):
             frame = self.blank_frame()
@@ -608,12 +643,9 @@ class VideoInputNode(Node):
             # Audio is independent of video pixels. Do not slice the decoded
             # audio buffer for every frame when the export has disabled audio.
             export_audio = getattr(self, "_export_audio_enabled", True)
-            audio = self._decoder.read_audio(source_frame) if export_audio else None
+            audio = self._timeline_audio(frame_num, info) if export_audio else None
             if audio is None:
                 audio = self._get_silence_audio()
-            else:
-                # Apply audio controls
-                audio = self._process_audio(audio)
 
             return FrameWithAudio(frame=frame, audio=audio)
 

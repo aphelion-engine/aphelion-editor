@@ -28,6 +28,7 @@ logs/
 *.aph
 tests/*
 !tests/test_editor_sdk_extensions.py
+!tests/test_audio_pipeline.py
 .vscode/
 AphelionEditor/
 .pytest_cache/

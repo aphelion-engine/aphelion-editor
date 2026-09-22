@@ -11,7 +11,7 @@ import numpy as np
 _FALLBACK_SAMPLE_RATES: tuple[int, ...] = (48000, 44100)
 _MAX_WRITE_CHUNKS: int = 4
 
-from core.audio import AudioData
+from core.audio import AudioData, convert_audio
 from utils.logging_setup import get_logger
 
 
@@ -200,8 +200,8 @@ class AudioPlaybackEngine:
             self._playing = True
             self._paused = False
             self._samples_presented = 0
-            self._stop_event.clear()
-            self._playback_thread = threading.Thread(target=self._playback_loop, daemon=True)
+            self._stop_event = threading.Event()
+            self._playback_thread = threading.Thread(target=self._playback_loop, args=(self._stop_event,), daemon=True)
             self._playback_thread.start()
             _LOG.info("Audio playback engine started")
 
@@ -236,46 +236,25 @@ class AudioPlaybackEngine:
         with self._lock:
             self._paused = False
 
-    def feed_audio(self, audio: AudioData) -> None:
-        """Feed audio data for playback."""
-        if not self._playing or self._paused or not self._enabled:
-            return
-
+    @property
+    def buffered_chunks(self) -> int:
         with self._lock:
-            samples = np.asarray(audio.samples, dtype=np.float32)
-            target_channels = max(1, int(audio.num_channels))
+            return len(self._buffer)
 
-            if samples.ndim == 1:
-                samples = samples[:, np.newaxis]
-
-            if samples.shape[1] > target_channels:
-                samples = samples[:, :target_channels]
-            elif samples.shape[1] < target_channels:
-                padding = np.zeros(
-                    (samples.shape[0], target_channels - samples.shape[1]),
-                    dtype=np.float32,
-                )
-                samples = np.concatenate((samples, padding), axis=1)
-
-            # Avoid mid-playback device/stream reconfiguration churn.
-            target_sample_rate = self._sample_rate if self._buffer else self._preferred_sample_rate
-            target_channels = self._channels if self._buffer else self._preferred_channels
-            samples = _resample_audio(samples, int(audio.sample_rate), int(target_sample_rate))
-            if samples.shape[1] > target_channels:
-                samples = samples[:, :target_channels]
-            elif samples.shape[1] < target_channels:
-                padding = np.zeros(
-                    (samples.shape[0], target_channels - samples.shape[1]),
-                    dtype=np.float32,
-                )
-                samples = np.concatenate((samples, padding), axis=1)
-            self._sample_rate = max(1, int(target_sample_rate))
-            self._channels = max(1, int(target_channels))
-
-            samples = np.clip(samples * self._volume, -1.0, 1.0).astype(np.float32, copy=False)
-            if len(self._buffer) == self._buffer.maxlen:
-                self._buffer.popleft()
-            self._buffer.append(samples)
+    def feed_audio(self, audio: AudioData) -> bool:
+        """Queue audio without dropping earlier samples. False means retry later."""
+        with self._lock:
+            if not self._playing or self._paused or not self._enabled:
+                return False
+            if len(self._buffer) >= self._buffer_limit:
+                return False
+            # Queue format is stable even when the device negotiates a fallback.
+            block = convert_audio(audio, self._preferred_sample_rate, self._preferred_channels)
+            samples = block.samples.reshape(-1, self._preferred_channels)
+            if not len(samples):
+                return True
+            self._buffer.append(np.clip(samples * self._volume, -1, 1).astype(np.float32))
+            return True
 
     def _open_stream(self, sd: object, device_index: int | None, sample_rate: int, channels: int) -> object:
         preferred_rates: list[int] = [sample_rate]
@@ -315,28 +294,29 @@ class AudioPlaybackEngine:
         assert last_error is not None
         raise last_error
 
-    def _playback_loop(self) -> None:
+    def _playback_loop(self, stop_event: threading.Event | None = None) -> None:
         """Main playback loop running in background thread."""
+        stop_event = stop_event or self._stop_event
         try:
             import sounddevice as sd
         except ImportError:
             _LOG.warning("sounddevice is unavailable; preview audio playback disabled")
-            while not self._stop_event.is_set():
+            while not stop_event.is_set():
                 with self._lock:
                     if self._buffer:
                         self._buffer.popleft()
-                self._stop_event.wait(0.01)
+                stop_event.wait(0.01)
             return
 
         stream = None
         stream_failed = False
         try:
-            while not self._stop_event.is_set():
+            while not stop_event.is_set():
                 with self._lock:
                     paused = self._paused
                     buffered_chunks = len(self._buffer)
-                    sample_rate = self._sample_rate
-                    channels = self._channels
+                    sample_rate = self._preferred_sample_rate
+                    channels = self._preferred_channels
                     device_index = (
                         None
                         if self._current_device is None or self._current_device.index < 0
@@ -353,7 +333,7 @@ class AudioPlaybackEngine:
                         wait_time = 0.0
 
                 if chunk is None:
-                    self._stop_event.wait(wait_time)
+                    stop_event.wait(wait_time)
                     continue
 
                 try:
@@ -363,8 +343,7 @@ class AudioPlaybackEngine:
                         current_channels = int(getattr(stream, "channels", channels))
                         current_device = self._stream_device_index
                         needs_new_stream = (
-                            current_samplerate != sample_rate
-                            or current_channels != channels
+                            current_channels != channels
                             or current_device != device_index
                         )
 
@@ -421,7 +400,7 @@ class AudioPlaybackEngine:
                     with self._lock:
                         self._stream = None
                         self._stream_device_index = None
-                    self._stop_event.wait(0.1)
+                    stop_event.wait(0.1)
         finally:
             if stream is not None:
                 try:

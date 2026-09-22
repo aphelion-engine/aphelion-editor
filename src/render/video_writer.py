@@ -32,7 +32,7 @@ from types import TracebackType
 
 import imageio_ffmpeg
 import numpy as np
-from core.audio import AudioData
+from core.audio import AudioData, convert_audio, frame_sample_bounds
 from render.audio_playback import _resample_audio
 
 # ============================================================================
@@ -1086,13 +1086,10 @@ class Mp4VideoWriter:
         # frame.
         # ==============================================================
 
-        if (
-            self._include_audio
-            and audio is not None
-        ):
-            audio_pcm = self._prepare_audio(
-                audio,
-            )
+        if self._include_audio:
+            first, last = frame_sample_bounds(self._frame_count, self._fps, self._audio_sample_rate)
+            block = convert_audio(audio, self._audio_sample_rate, self._audio_channels, last - first)
+            audio_pcm = self._prepare_audio(block)
 
             if audio_pcm.size:
                 with self._audio_lock:
@@ -1113,6 +1110,8 @@ class Mp4VideoWriter:
                         >= self._audio_flush_bytes
                     ):
                         self._flush_audio_buffer_locked()
+
+        self._frame_count += 1
 
     def write_video_only(
         self,
