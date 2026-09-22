@@ -98,8 +98,9 @@ class ExportDialog(QDialog):
 
         self._full_resolution = QCheckBox("Render at full project resolution")
         self._full_resolution.setChecked(True)
+        self._full_resolution.setEnabled(False)
         self._full_resolution.setToolTip(
-            "Bypasses the Viewer's interactive Proxy Width for this export."
+            "Final exports always bypass the Viewer's interactive Proxy Width."
         )
         output_form.addRow("Resolution", self._full_resolution)
 

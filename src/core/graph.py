@@ -335,13 +335,9 @@ class DependencyGraph:
     ) -> None:
         """Invalidate a node and everything downstream."""
 
-        cache = self.cache
-
-        cache.invalidate_node(node_id)
-
         downstream = self._downstream
 
-        visited: set[str] = set()
+        visited: set[str] = {node_id}
         stack = list(
             downstream.get(
                 node_id,
@@ -356,15 +352,14 @@ class DependencyGraph:
                 continue
 
             visited.add(current)
-
-            cache.invalidate_node(current)
-
             stack.extend(
                 downstream.get(
                     current,
                     (),
                 )
             )
+
+        self.cache.invalidate_nodes(visited)
 
     def clear_cache(self) -> None:
         self.cache.clear()

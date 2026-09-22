@@ -78,6 +78,12 @@ class EditorSettings:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> EditorSettings:
+        try:
+            graph_layout_mode = node_ops.GraphLayoutMode(
+                int(data.get("graph_layout_mode", node_ops.GraphLayoutMode.HIERARCHICAL.value))
+            )
+        except (TypeError, ValueError):
+            graph_layout_mode = node_ops.GraphLayoutMode.HIERARCHICAL
         return cls(
             editor_font_family=str(data.get("editor_font_family", "JetBrains Mono")),
             editor_font_size=int(data.get("editor_font_size", 13)),
@@ -88,6 +94,7 @@ class EditorSettings:
             ),
             show_status_key_hints=bool(data.get("show_status_key_hints", True)),
             show_pin_bar=bool(data.get("show_pin_bar", False)),
+            graph_layout_mode=graph_layout_mode,
         )
 
 

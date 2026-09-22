@@ -152,7 +152,9 @@ class ExportWorker(QThread):
 
         # Full-resolution export must not be quietly downgraded by whatever
         # proxy width the interactive Viewer happens to be set to.
-        self._project.set_full_resolution_override(self._request.full_resolution)
+        # Exports are never preview renders. Ignore interactive proxy settings
+        # and the legacy request toggle so every final frame uses project size.
+        self._project.set_full_resolution_override(True)
         self._project.set_export_audio_enabled(self._request.export_audio_enabled)
         # Sequential rendering never revisits a frame, so disable the
         # interactive cross-frame cache for the duration of the export.
@@ -543,7 +545,7 @@ class ExportWorker(QThread):
             ]
             def render_chunk(bounds: tuple[int, int]):
                 clone = Project.from_dict(document)
-                clone.set_full_resolution_override(self._request.full_resolution)
+                clone.set_full_resolution_override(True)
                 clone.set_export_mode(True)
                 clone.set_export_audio_enabled(False)
                 local = ExportWorker(clone, self._request)

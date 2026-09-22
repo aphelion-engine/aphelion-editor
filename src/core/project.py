@@ -408,18 +408,18 @@ class Project:
             viewer
         )
 
+        if self._full_resolution_override:
+            return replace(
+                settings,
+                max_width=0,
+            )
+
         override_width = self._preview_width_override
 
         if override_width is not None:
             return replace(
                 settings,
                 max_width=override_width,
-            )
-
-        if self._full_resolution_override:
-            return replace(
-                settings,
-                max_width=0,
             )
 
         override = (
@@ -1180,7 +1180,8 @@ class Project:
 
         node.clear_input_values()
         node.set_time_resampler(None)
-        node._input_resamplers = {}
+        input_resamplers = node._input_resamplers
+        input_resamplers.clear()
 
         input_connections = (
             self.dependency_graph
@@ -1222,9 +1223,11 @@ class Project:
                 input_slot,
                 dep_output,
             )
-            sampler = _TimeResampler(self, self.evaluate_node)
+            sampler = input_resamplers.get(input_slot)
+            if sampler is None or sampler.owner is not self:
+                sampler = _TimeResampler(self, self.evaluate_node)
             sampler.bind(conn.output_node_id, conn.output_slot)
-            node._input_resamplers[input_slot] = sampler
+            input_resamplers[input_slot] = sampler
 
             if input_slot == "frame":
                 resampler = node._eval_resampler

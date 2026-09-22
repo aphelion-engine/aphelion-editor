@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import threading
 from collections import OrderedDict
+from collections.abc import Iterable
 from typing import Any
 
 import numpy as np
@@ -164,11 +165,7 @@ class FrameCache:
                 return
 
             # Iterate over a snapshot of keys to avoid mutation-during-iteration.
-            remove = [
-                key
-                for key in list(entries.keys())
-                if key[0] == node_id
-            ]
+            remove = [key for key in entries if key[0] == node_id]
 
             for key in remove:
                 size = sizes.pop(key, 0)
@@ -177,6 +174,22 @@ class FrameCache:
                 self._current_bytes -= size
                 if self._current_bytes < 0:
                     self._current_bytes = 0
+
+    def invalidate_nodes(self, node_ids: Iterable[str]) -> None:
+        """Remove entries for several nodes with one cache scan."""
+        targets = set(node_ids)
+        if not targets:
+            return
+        with self._lock:
+            entries = self._entries
+            sizes = self._sizes
+            for key in list(entries):
+                if key[0] not in targets:
+                    continue
+                self._current_bytes -= sizes.pop(key, 0)
+                del entries[key]
+            if self._current_bytes < 0:
+                self._current_bytes = 0
 
     def clear(self) -> None:
         with self._lock:

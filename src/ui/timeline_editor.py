@@ -15,8 +15,9 @@ from core.events import ObserverEvent
 from core.timeline import ClipKind, Timeline, TimelineClip
 from PyQt6.QtCore import QEvent, QPoint, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPolygon
-from PyQt6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QMenu,
-                             QComboBox, QPushButton, QScrollArea, QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QLabel,
+                             QMenu, QPushButton, QScrollArea, QVBoxLayout,
+                             QWidget)
 from render.audio_decoder import AudioDecoder
 from render.media_probe import probe_media_cached
 from render.video_decoder import probe_video

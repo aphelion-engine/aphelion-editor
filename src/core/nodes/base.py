@@ -210,6 +210,7 @@ class Node(ABC):
         self._project_max_frame: int = 0
         self._current_frame_num: int = 0
         self._time_resampler: TimeResampler | None = None
+        self._input_resamplers: dict[str, Any] = {}
         self._property_resolver: PropertyResolver | None = None
         self._node_property_resolver: NodePropertyResolver | None = None
         self._property_drive_lookup: PropertyDriveLookup | None = None

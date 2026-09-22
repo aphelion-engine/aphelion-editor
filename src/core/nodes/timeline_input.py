@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
-
 from core.audio import AudioData, FrameWithAudio
 from core.nodes.base import NodeSocketType, NodeValue
 from core.nodes.frame_base import FrameNode

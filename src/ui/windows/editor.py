@@ -742,6 +742,15 @@ class Editor(QMainWindow):
         """Stop timers, playback, and background workers before exit."""
         self._autosave_timer.stop()
         self.timeline.pause_playback()
+        # Preferences can also be changed by toolbar/keybind surfaces outside
+        # the Preferences dialog. Capture the live stores one last time so a
+        # normal close never loses an in-memory preference change.
+        try:
+            self.preferences_store.capture_keybinds(self.keybinds)
+            self.preferences_store.capture_node_colors_from_registry()
+            self.preferences_store.save()
+        except OSError as exc:
+            _LOG.warning("Could not save preferences during shutdown: %s", exc)
         if self._status_bar is not None:
             self._status_bar.shutdown()
         self.viewport.shutdown()
