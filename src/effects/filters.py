@@ -25,10 +25,10 @@ def gaussian_blur(
     replicate, wrap), and ``passes`` repeats the blur to approximate a wider
     kernel cheaply at small radii.
     """
-    source: np.ndarray = ensure_rgb_f32(frame)
     safe_radius: int = max(0, min(100, radius))
     if safe_radius == 0:
-        return source
+        return frame if frame.dtype == np.float32 else ensure_rgb_f32(frame)
+    source: np.ndarray = ensure_rgb_f32(frame)
     kernel: int = safe_radius * 2 + 1
     result: np.ndarray = cv2.GaussianBlur(
         source,
@@ -109,10 +109,10 @@ def edge_detect(
 
 def motion_blur(frame: np.ndarray, *, angle_degrees: float, distance: int) -> np.ndarray:
     """Simulate linear motion blur with a normalized directional line kernel."""
-    source: np.ndarray = ensure_rgb_f32(frame)
     length: int = max(1, min(200, distance))
     if length <= 1:
-        return source
+        return frame if frame.dtype == np.float32 else ensure_rgb_f32(frame)
+    source: np.ndarray = ensure_rgb_f32(frame)
     kernel: np.ndarray = _motion_blur_kernel(length, round(angle_degrees, 1))
     return cv2.filter2D(source, -1, kernel, borderType=cv2.BORDER_REPLICATE)
 
@@ -134,10 +134,10 @@ def _motion_blur_kernel(length: int, angle_degrees: float) -> np.ndarray:
 
 def pixelate(frame: np.ndarray, *, block_size: int) -> np.ndarray:
     """Pixelate by downsampling then nearest-neighbor upsampling."""
-    source: np.ndarray = ensure_rgb_f32(frame)
     block: int = max(1, min(256, block_size))
     if block == 1:
-        return source
+        return frame if frame.dtype == np.float32 else ensure_rgb_f32(frame)
+    source: np.ndarray = ensure_rgb_f32(frame)
     height: int
     width: int
     height, width = source.shape[:2]

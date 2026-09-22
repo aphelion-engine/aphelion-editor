@@ -21,6 +21,7 @@ class SolidColorNode(FrameNode):
     node_category: str = GENERATOR_CATEGORY
     node_description: str = "Generate a project-sized frame filled with one color"
     node_color: tuple[int, int, int] = (148, 92, 170)
+    is_static_output = True
 
     def _setup_sockets(self) -> None:
         """Register output and fill color."""

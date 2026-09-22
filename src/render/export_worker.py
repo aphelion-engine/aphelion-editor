@@ -33,6 +33,7 @@ import numpy as np
 from core.audio import AudioData, FrameWithAudio
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
 from render.video_writer import ExportQuality, Mp4VideoWriter
+from utils.logging_setup import get_logger
 
 if TYPE_CHECKING:
     from core.project import Project
@@ -74,6 +75,7 @@ _PROGRESS_UPDATE_SECONDS: float = 0.1
 # cores, but past this point memory bandwidth and the single evaluation
 # producer become the limit.
 _MAX_ENCODE_WORKERS: int = 16
+_LOG = get_logger("render.export")
 
 
 def _default_encode_workers() -> int:
@@ -123,6 +125,9 @@ class ExportWorker(QThread):
         self._cancelled = False
         self._skipped_frames: int = 0
         self._last_error: str | None = None
+        self._render_seconds = 0.0
+        self._encode_seconds = 0.0
+        self._frames_rendered = 0
 
     def cancel(self) -> None:
         """Request a graceful stop after the current frame."""
@@ -158,6 +163,15 @@ class ExportWorker(QThread):
             node.exception_log.clear()
         try:
             self._export()
+            if self._frames_rendered:
+                _LOG.info(
+                    "Export stages: frames=%d render_fps=%.2f render_seconds=%.3f "
+                    "encode_handoff_seconds=%.3f",
+                    self._frames_rendered,
+                    self._frames_rendered / max(self._render_seconds, 1e-9),
+                    self._render_seconds,
+                    self._encode_seconds,
+                )
         except Exception as exc:  # noqa: BLE001
             self.failed.emit(str(exc))
         finally:
@@ -253,7 +267,10 @@ class ExportWorker(QThread):
         ]
         if request.export_audio_enabled:
             command.extend(("-map", "0:a:0?"))
-        command.extend(("-c", "copy", "-movflags", "+faststart", str(temp)))
+        # Do not request +faststart here. That flag rewrites the completed
+        # file after the stream copy, which defeats the point of this native
+        # zero-render path. The source's existing MP4 layout is preserved.
+        command.extend(("-c", "copy", str(temp)))
         try:
             result = subprocess.run(
                 command,
@@ -280,7 +297,10 @@ class ExportWorker(QThread):
             Tuple of (frame_rgb, audio_data). Frame may be None if evaluation fails.
             Audio may be None if no audio is available.
         """
+        started = time.perf_counter()
         result = self._project.evaluate_node(self._request.viewer_id, frame_num)
+        self._render_seconds += time.perf_counter() - started
+        self._frames_rendered += 1
 
         # Handle FrameWithAudio (frame with audio data)
         if isinstance(result, FrameWithAudio):
@@ -471,7 +491,9 @@ class ExportWorker(QThread):
                     )
                     frame = cv2.resize(frame, (width, height), interpolation=interpolation)
 
+                started = time.perf_counter()
                 writer_write(frame, audio=audio if include_audio else None)
+                self._encode_seconds += time.perf_counter() - started
                 written += 1
 
                 now = time.monotonic()

@@ -285,6 +285,7 @@ class GlowNode(FrameEffectNode):
     node_category = CREATIVE_CATEGORY
     node_description = "Soft glow with threshold and blur"
     node_color = (220, 140, 180)
+    is_static_output = True
 
     def setup_effect_properties(self):
         self.set_property(

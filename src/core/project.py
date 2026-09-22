@@ -153,6 +153,8 @@ class Project:
             tuple[str, int, str],
             Any,
         ] = {}
+        self._export_static_cache: dict[str, Any] = {}
+        self._export_static_nodes: set[str] = set()
 
         # Pre-bound resolvers: created once here instead of allocating a
         # lambda for every node on every evaluated frame.
@@ -988,6 +990,27 @@ class Project:
 
         self._export_mode = enabled
         self._export_frame_cache.clear()
+        self._export_static_cache.clear()
+        self._export_static_nodes = self._compute_export_static_nodes() if enabled else set()
+
+    def _compute_export_static_nodes(self) -> set[str]:
+        """Find explicitly static nodes with only static frame inputs."""
+        static: set[str] = set()
+        changed = True
+        while changed:
+            changed = False
+            for node_id, node in self.nodes.items():
+                if node_id in static or not getattr(node, "is_static_output", False):
+                    continue
+                inputs = [
+                    connection.output_node_id
+                    for connection in self.dependency_graph.get_input_connections(node_id)
+                    if connection.input_slot == "frame"
+                ]
+                if all(source_id in static for source_id in inputs):
+                    static.add(node_id)
+                    changed = True
+        return static
 
     def set_export_audio_enabled(self, enabled: bool) -> None:
         """Avoid decoding audio when the active export cannot use it."""
@@ -1060,6 +1083,11 @@ class Project:
         # --------------------------------------------------------------
 
         export_cache = self._export_frame_cache if self._export_mode else None
+
+        if export_cache is not None and node_id in self._export_static_nodes:
+            static_result = self._export_static_cache.get(node_id, _CACHE_MISS)
+            if static_result is not _CACHE_MISS:
+                return static_result
 
         if export_cache is not None:
             cache_key = (node_id, frame_num, output_slot)
@@ -1244,6 +1272,9 @@ class Project:
                     export_cache[(node_id,frame_num,slot)] = value
                 else:
                     self._frame_cache.set_fast((node_id,frame_num,f"{slot}@{settings.max_width}"),value)
+
+            if export_cache is not None and node_id in self._export_static_nodes:
+                self._export_static_cache[node_id] = result
 
             return result
 

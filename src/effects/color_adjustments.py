@@ -17,6 +17,8 @@ def exposure_contrast(
     contrast: float,
 ) -> np.ndarray:
     """Adjust exposure stops, brightness offset, and midpoint contrast."""
+    if abs(exposure) <= 1e-12 and abs(brightness) <= 1e-12 and abs(contrast - 1.0) <= 1e-12:
+        return frame if frame.dtype == np.float32 else ensure_rgb_f32(frame)
     source: np.ndarray = ensure_rgb_f32(frame)
     gain: float = (2.0**exposure) * contrast
     offset: float = brightness * 0.01 + 0.5 * (1.0 - contrast)
@@ -31,6 +33,8 @@ def hue_saturation(
     lightness: float,
 ) -> np.ndarray:
     """Adjust HSV hue/saturation plus a final lightness offset."""
+    if abs(hue_degrees) <= 1e-12 and abs(saturation - 1.0) <= 1e-12 and abs(lightness) <= 1e-12:
+        return frame if frame.dtype == np.float32 else ensure_rgb_f32(frame)
     source: np.ndarray = ensure_rgb_f32(frame)
     hsv: np.ndarray = cv2.cvtColor(source, cv2.COLOR_RGB2HSV)
     hue: np.ndarray = hsv[:, :, 0]
@@ -49,6 +53,8 @@ def white_balance(
     tint: float,
 ) -> np.ndarray:
     """Apply warm/cool and green/magenta channel gains."""
+    if abs(temperature) <= 1e-12 and abs(tint) <= 1e-12:
+        return frame if frame.dtype == np.float32 else ensure_rgb_f32(frame)
     source: np.ndarray = ensure_rgb_f32(frame)
     temp: float = float(np.clip(temperature, -1.0, 1.0))
     tint_value: float = float(np.clip(tint, -1.0, 1.0))

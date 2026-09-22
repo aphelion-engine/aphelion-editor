@@ -319,6 +319,10 @@ class FrameEvaluationWorker(QThread):
             previous = self._last_requested_frame
             if previous is not None and int(frame_num) < previous:
                 self._clock.seek(int(frame_num), now)
+                # A wrap/seek invalidates every deadline anchored to the old
+                # timeline position. Leaving it queued lets an obsolete
+                # frame win the heap and makes the new playhead appear frozen.
+                self._dropped_pending += self._queue.clear()
             due_at = self._clock.due_time(frame_num)
         else:
             due_at = now
@@ -377,7 +381,18 @@ class FrameEvaluationWorker(QThread):
         makes *playback start* cheap: frames already evaluated while paused
         satisfy the first deadlines without any additional work.
         """
-        self._playing = bool(playing)
+        playing = bool(playing)
+        was_playing = self._playing
+        self._playing = playing
+
+        if playing != was_playing:
+            # Requests carry deadlines from a specific clock anchor. A pause
+            # followed by resume creates a new anchor, so queued work from the
+            # previous session must not be allowed to win the new queue.
+            with self._request_lock:
+                self._generation += 1
+                self._pending = None
+            self._dropped_pending += self._queue.clear()
 
         if playing:
             fps = float(self._project.fps)
@@ -428,6 +443,10 @@ class FrameEvaluationWorker(QThread):
         self._queue.clear()
         self._clock = MediaClock(
             fps=float(getattr(project, "fps", 30.0) or 30.0))
+        if self._playing:
+            now = time.monotonic()
+            self._clock.start(int(getattr(project, "current_frame", 0)), now)
+        self._last_requested_frame = None
         self._governor.reset()
         self._cost.reset()
         self.clear_prefetch_tracking(wasted=True)
@@ -789,6 +808,10 @@ class FrameEvaluationWorker(QThread):
 
             self._evaluate(node_id, next_frame)
             self._prefetched.add(next_frame)
+            # Prefetch is deliberately one frame per worker turn. Rendering a
+            # whole look-ahead window inline can starve the next real request
+            # and makes playback appear frozen during expensive effects.
+            break
 
         self._trim_prefetch_tracking()
 

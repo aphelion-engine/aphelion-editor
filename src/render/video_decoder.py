@@ -233,6 +233,9 @@ class VideoDecoder:
     """Stateful decoder optimized for scrub + forward playback."""
 
     def __init__(self) -> None:
+        # Capture state belongs to this decoder. A process-wide lock made one
+        # slow GOP seek or audio setup stall every source in the editor.
+        self._lock = threading.RLock()
         self._capture: cv2.VideoCapture | None = None
         self._path: str | None = None
         #: Original media path; differs from ``_path`` when a proxy is used.
@@ -513,7 +516,7 @@ class VideoDecoder:
         adopted = self._adopt_proxy(path, use_proxy)
         decode_path = adopted[0] if adopted is not None else path
 
-        with _CAPTURE_LOCK:
+        with self._lock:
             if self._path == decode_path and self._source_path == path and self.is_open:
                 return self.info()
 
@@ -627,7 +630,7 @@ class VideoDecoder:
         )
 
     def close(self) -> None:
-        with _CAPTURE_LOCK:
+        with self._lock:
             self._close_unlocked()
 
     def _close_unlocked(self) -> None:
@@ -693,7 +696,7 @@ class VideoDecoder:
         decode-time scale is never scaled a second time.
         """
         with profiler.scope("decode"):
-            with _CAPTURE_LOCK:
+            with self._lock:
                 if not self.is_open or self._capture is None:
                     return None
 
@@ -796,7 +799,7 @@ class VideoDecoder:
         a private-attribute poke from outside the class is exactly the kind
         of coupling this module should not encourage.
         """
-        with _CAPTURE_LOCK:
+        with self._lock:
             self._frame_cache.clear()
 
     def cache_stats(self) -> dict[str, int]:
@@ -940,30 +943,32 @@ class VideoDecoder:
 
     def read_audio(self, frame_num: int) -> "AudioData | None":
         """Read audio samples for a specific frame."""
-        if not self.is_open or self._audio_info is None or not self._audio_info.has_audio:
-            duration_per_frame = 1.0 / max(self._fps, 0.001)
-            return AudioData.silence(
-                duration=duration_per_frame,
-                sample_rate=self._audio_info.sample_rate if self._audio_info else 48000,
-                channels=self._audio_info.num_channels if self._audio_info else 2
-            )
+        with self._lock:
+            if not self.is_open or self._audio_info is None or not self._audio_info.has_audio:
+                duration_per_frame = 1.0 / max(self._fps, 0.001)
+                return AudioData.silence(
+                    duration=duration_per_frame,
+                    sample_rate=self._audio_info.sample_rate if self._audio_info else 48000,
+                    channels=self._audio_info.num_channels if self._audio_info else 2
+                )
 
-        duration_per_frame = 1.0 / max(self._fps, 0.001)
-        return self._audio_decoder.extract_audio_for_frame(
-            frame_num=frame_num,
-            fps=self._fps,
-            duration_per_frame=duration_per_frame
-        )
+            duration_per_frame = 1.0 / max(self._fps, 0.001)
+            return self._audio_decoder.extract_audio_for_frame(
+                frame_num=frame_num,
+                fps=self._fps,
+                duration_per_frame=duration_per_frame
+            )
 
     def read_audio_range(self, start_time_sec: float, duration_sec: float) -> "AudioData | None":
         """Read a contiguous audio range by time for smoother preview playback."""
-        if not self.is_open or self._audio_info is None or not self._audio_info.has_audio:
-            return AudioData.silence(
-                duration=max(0.0, float(duration_sec)),
-                sample_rate=self._audio_info.sample_rate if self._audio_info else 48000,
-                channels=self._audio_info.num_channels if self._audio_info else 2,
-            )
-        return self._audio_decoder.extract_audio_for_time_range(start_time_sec, duration_sec)
+        with self._lock:
+            if not self.is_open or self._audio_info is None or not self._audio_info.has_audio:
+                return AudioData.silence(
+                    duration=max(0.0, float(duration_sec)),
+                    sample_rate=self._audio_info.sample_rate if self._audio_info else 48000,
+                    channels=self._audio_info.num_channels if self._audio_info else 2,
+                )
+            return self._audio_decoder.extract_audio_for_time_range(start_time_sec, duration_sec)
 
 
 def _lookup_keyframe_index(path: str, fps: float):
