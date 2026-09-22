@@ -528,6 +528,7 @@ class ExportWorker(QThread):
         if total < 4 or self._request.export_audio_enabled:
             return False
 
+        writer: Mp4VideoWriter | None = None
         try:
             from concurrent.futures import ThreadPoolExecutor
             from core.project import Project
@@ -540,8 +541,6 @@ class ExportWorker(QThread):
                 (chunk_start, min(end + 1, chunk_start + chunk_size))
                 for chunk_start in range(start, end + 1, chunk_size)
             ]
-            viewer_id = self._request.viewer_id
-
             def render_chunk(bounds: tuple[int, int]):
                 clone = Project.from_dict(document)
                 clone.set_full_resolution_override(self._request.full_resolution)
@@ -552,45 +551,53 @@ class ExportWorker(QThread):
                     (frame_num, *local._evaluate_frame_rgb(frame_num))
                     for frame_num in range(*bounds)
                 ], local._skipped_frames
+            width = height = written = skipped = 0
+            output = self._request.output_path
+            fps = float(max(1, self._request.fps))
 
-            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="AphelionRender") as pool:
-                futures = [pool.submit(render_chunk, bounds) for bounds in chunks]
-                rendered_chunks = [future.result() for future in futures]
-        except Exception as exc:  # noqa: BLE001 - normal path remains authoritative
-            _LOG.warning("Parallel export unavailable; using ordered renderer: %s", exc)
-            return False
-
-        rendered_chunks.sort(key=lambda item: item[0])
-        writer: Mp4VideoWriter | None = None
-        width = height = written = skipped = 0
-        output = self._request.output_path
-        fps = float(max(1, self._request.fps))
-        try:
-            for _, frames, chunk_skipped in rendered_chunks:
+            def write_chunk(result: tuple[int, list[tuple[int, np.ndarray | None, AudioData | None]], int]) -> None:
+                nonlocal writer, width, height, written, skipped
+                chunk_start, frames, chunk_skipped = result
                 skipped += chunk_skipped
-                for index, (frame_num, frame, _audio) in enumerate(frames):
+                for _, frame, _audio in frames:
                     if self._cancelled or self.isInterruptionRequested():
-                        self.failed.emit("Export cancelled.")
-                        return True
+                        return
                     if frame is None:
                         continue
                     if writer is None:
                         height, width = frame.shape[:2]
                         output.parent.mkdir(parents=True, exist_ok=True)
-                        writer = Mp4VideoWriter(
-                            output,
-                            fps=fps,
-                            width=width,
-                            height=height,
-                            include_audio=False,
-                            quality=self._request.export_quality,
-                        )
+                        writer = Mp4VideoWriter(output, fps=fps, width=width, height=height,
+                                                include_audio=False, quality=self._request.export_quality)
                     elif frame.shape[:2] != (height, width):
                         interpolation = cv2.INTER_AREA if frame.shape[0] > height or frame.shape[1] > width else cv2.INTER_LINEAR
                         frame = cv2.resize(frame, (width, height), interpolation=interpolation)
                     writer.write_video_only(frame)
                     written += 1
-                self.progress.emit(min(end + 1, rendered_chunks[-1][0] + len(frames)), total)
+                self.progress.emit(min(end + 1, chunk_start + len(frames)), total)
+
+            # Keep only a small ordered window in memory. Rendering continues
+            # ahead, but the entire export is never materialized before the
+            # encoder starts consuming frames.
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="AphelionRender") as pool:
+                pending = {
+                    index: pool.submit(render_chunk, bounds)
+                    for index, bounds in enumerate(chunks[:workers])
+                }
+                next_index = min(workers, len(chunks))
+                for index in range(len(chunks)):
+                    result = pending.pop(index).result()
+                    write_chunk(result)
+                    if next_index < len(chunks):
+                        pending[next_index] = pool.submit(render_chunk, chunks[next_index])
+                        next_index += 1
+                    if self._cancelled or self.isInterruptionRequested():
+                        for future in pending.values():
+                            future.cancel()
+                        break
+        except Exception as exc:  # noqa: BLE001 - ordered path remains authoritative
+            _LOG.warning("Parallel export unavailable; using ordered renderer: %s", exc)
+            return False
         finally:
             if writer is not None:
                 writer.close()

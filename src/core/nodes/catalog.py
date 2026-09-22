@@ -93,11 +93,13 @@ from core.nodes.value_nodes import (TimelineFpsNode, TimelineFrameNode,
                                     TimelineMaxFrameNode,
                                     TimelineNormalizedNode, TimelineTimeNode)
 from core.nodes.video_input import VideoInputNode
+from core.nodes.frozen_input import FrozenVideoInputNode
 from core.nodes.viewer import ViewerNode
 
 BUILTIN_NODE_TYPES: tuple[type[Node], ...] = (
     # Input / output
     VideoInputNode,
+    FrozenVideoInputNode,
     ImageInputNode,
     ViewerNode,
     # Audio

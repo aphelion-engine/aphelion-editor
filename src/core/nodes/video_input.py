@@ -467,6 +467,9 @@ class VideoInputNode(Node):
             self._decoder.close()
             return None
         self._apply_decode_preferences()
+        self._decoder.set_audio_enabled(
+            bool(getattr(self, "_export_audio_enabled", True))
+        )
         return self._decoder.open(path, use_proxy=self._bool_prop("use_proxy", True))
 
     def probe_media(self) -> tuple[float, float, int, int] | None:

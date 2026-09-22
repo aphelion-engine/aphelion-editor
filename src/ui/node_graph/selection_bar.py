@@ -15,6 +15,7 @@ import ui.node_graph.operations as node_ops
 import ui.node_graph.selection_ops as selection_ops
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QToolButton, QWidget
+from aphelion_styling.component_styles import SELECTION_BAR_STYLE
 from ui.icons import AppIcon, make_icon
 from ui.node_graph.constants import MENU_ICON_SIZE_PX
 
@@ -23,43 +24,6 @@ if TYPE_CHECKING:
     from ui.node_graph.view import NodeGraphView
 
 _BAR_MARGIN_PX: int = 12
-
-SELECTION_BAR_STYLE = """
-    QFrame#SelectionActionBar {
-        background-color: rgba(26, 26, 32, 235);
-        border: 1px solid #383842;
-        border-radius: 8px;
-    }
-    QLabel#SelectionActionCount {
-        color: #eaeaf0;
-        font-size: 11px;
-        font-weight: 600;
-        padding: 0 4px 0 2px;
-    }
-    QLabel#SelectionActionDivider {
-        background-color: #3a3a44;
-        max-width: 1px;
-        min-width: 1px;
-    }
-    QToolButton#SelectionActionButton {
-        background-color: transparent;
-        border: 1px solid transparent;
-        border-radius: 5px;
-        padding: 3px;
-    }
-    QToolButton#SelectionActionButton:hover:enabled {
-        background-color: #2b6ea8;
-        border-color: #3d84c0;
-    }
-    QToolButton#SelectionActionButton:checked {
-        background-color: #2b6ea8;
-        border-color: #4a95d6;
-    }
-    QToolButton#SelectionActionButton:disabled {
-        background-color: transparent;
-    }
-"""
-
 
 class SelectionActionBar(QFrame):
     """Compact toolbar exposing the actions that make sense right now."""

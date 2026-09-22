@@ -20,6 +20,7 @@ dependencies = [
     "sounddevice>=0.4.6",
     "cryptography>=42.0.0",
     "aphelion-plugin-sdk @ file:../aphelion-sdk",
+    "aphelion-styling @ file:../aphelion-styling",
 
 ]
 

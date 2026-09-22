@@ -267,6 +267,14 @@ class NodeItem(QGraphicsRectItem):
             QPointF(header.x() + 8, header.bottom()),
             QPointF(header.right() - 8, header.bottom()),
         )
+        if self.node.node_type == "Frozen Video Input":
+            painter.setPen(QPen(QColor(190, 240, 198), 1.0))
+            painter.setFont(QFont("Segoe UI", 7, QFont.Weight.Bold))
+            painter.drawText(
+                QRect(int(header.right()) - 58, int(header.y()) + 3, 50, 14),
+                int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+                "FROZEN",
+            )
 
     def _paint_labels(self, painter: QPainter, body: QRectF, palette: GraphThemePalette) -> None:
         title_font = QFont("Segoe UI", 10)

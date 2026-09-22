@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from typing import Any, ClassVar
+from pathlib import Path
+from uuid import uuid4
 
 import ui.node_graph.custom_node_ops as custom_node_ops
 import ui.node_graph.operations as node_ops
@@ -15,11 +17,17 @@ from core.history import (AddNodeCommand, CompositeCommand, ConnectCommand,
                           RemoveNodesCommand)
 from core.nodes import global_node_registry
 from core.project import Project
+from core.nodes.frozen_input import FrozenVideoInputNode
+from core.nodes.video_input import VideoInputNode
+from core.nodes.viewer import ViewerNode
 from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (QBrush, QColor, QKeyEvent, QLinearGradient, QPainter,
                          QPainterPath, QPen, QRadialGradient, QWheelEvent)
 from PyQt6.QtWidgets import (QDialog, QFrame, QGraphicsScene, QGraphicsView,
-                             QMenu, QMessageBox)
+                             QMenu, QMessageBox, QProgressDialog)
+from render.export_worker import ExportFormat, ExportRequest, ExportWorker
+from render.video_writer import ExportQuality
+from utils.paths import app_data_path
 from ui.node_graph.clipboard import GraphClipboard
 from ui.node_graph.connection_item import ConnectionItem, PreviewWireItem
 from ui.node_graph.constants import GRID_SPACING_PX, SOCKET_SNAP_DISTANCE_PX
@@ -72,6 +80,11 @@ class NodeGraphView(QGraphicsView):
         self._search_palette: NodeSearchPalette | None = None
         self._selection_bar: SelectionActionBar | None = None
         self._spotlight: bool = False
+        self._freeze_worker: ExportWorker | None = None
+        self._freeze_output: Path | None = None
+        self._freeze_selection: set[str] = set()
+        self._freeze_viewer_id: str | None = None
+        self._freeze_progress: QProgressDialog | None = None
         self.layout_mode = node_ops.GraphLayoutMode.HIERARCHICAL
 
         self._configure_view()
@@ -85,6 +98,13 @@ class NodeGraphView(QGraphicsView):
 
     def set_project(self, project: Project, history: HistoryStack) -> None:
         """Rebuild the graph view for a newly loaded project document."""
+        if self._freeze_worker is not None:
+            self._freeze_worker.cancel()
+            self._freeze_worker.wait(30000)
+            self._freeze_worker = None
+            if self._freeze_progress is not None:
+                self._freeze_progress.close()
+                self._freeze_progress = None
         self.cancel_connection_drag()
         self.project.unsubscribe(self.on_project_changed)
         self.project = project
@@ -640,6 +660,130 @@ class NodeGraphView(QGraphicsView):
 
     def selected_nodes(self) -> list[NodeItem]:
         return node_ops.selected_node_items(self)
+
+    def can_freeze_selection(self, items: list[NodeItem] | None = None) -> bool:
+        """Return whether the selection is one complete Video Input → Viewer chain."""
+        if self._freeze_worker is not None:
+            return False
+        selected = {item.node_id for item in (items or self.selected_nodes())}
+        viewer_ids = {
+            node_id for node_id in selected
+            if isinstance(self.project.nodes.get(node_id), ViewerNode)
+        }
+        source_ids = {
+            node_id for node_id in selected
+            if isinstance(self.project.nodes.get(node_id), VideoInputNode)
+            and not isinstance(self.project.nodes.get(node_id), FrozenVideoInputNode)
+        }
+        if len(viewer_ids) != 1 or len(source_ids) != 1:
+            return False
+        viewer_id = next(iter(viewer_ids))
+        if self.project.active_viewer != viewer_id:
+            return False
+
+        # Every frame dependency of every selected node must stay inside the
+        # selection. This prevents baking a partial graph with hidden inputs.
+        for connection in self.project.connections:
+            if connection.input_node_id in selected and connection.input_slot == "frame":
+                if connection.output_node_id not in selected:
+                    return False
+        return True
+
+    def freeze_selection(self) -> None:
+        """Bake the selected chain into a new input node asynchronously."""
+        items = self.selected_nodes()
+        if not self.can_freeze_selection(items):
+            QMessageBox.information(
+                self,
+                "Freeze Selection",
+                "Select one complete chain containing exactly one Video Input "
+                "and the active Viewer.",
+            )
+            return
+        if self._freeze_worker is not None:
+            return
+
+        node_ids = {item.node_id for item in items}
+        viewer_id = next(node_id for node_id in node_ids if isinstance(self.project.nodes.get(node_id), ViewerNode))
+        output = app_data_path("cache", "frozen", f"freeze-{uuid4().hex}.mp4")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        request = ExportRequest(
+            viewer_id=viewer_id,
+            start_frame=0,
+            end_frame=self.project.max_frame,
+            output_path=output,
+            format=ExportFormat.MP4,
+            fps=int(self.project.fps),
+            full_resolution=True,
+            export_audio_enabled=True,
+            export_quality=ExportQuality.FAST,
+        )
+        worker = ExportWorker(self.project, request, parent=self)
+        self._freeze_worker = worker
+        self._freeze_output = output
+        self._freeze_selection = node_ids
+        self._freeze_viewer_id = viewer_id
+        progress = QProgressDialog("Preparing freeze…", "Cancel", 0, 100, self)
+        progress.setWindowTitle("Freeze Selection")
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.setMinimumDuration(0)
+        progress.canceled.connect(worker.cancel)
+        progress.show()
+        self._freeze_progress = progress
+        worker.progress.connect(self._freeze_progress_changed)
+        worker.finished_ok.connect(lambda path: setattr(self, "_freeze_output", Path(path)))
+        worker.failed.connect(self._freeze_failed)
+        worker.finished.connect(self._finish_freeze)
+        worker.start()
+        self.notify("Freezing selection… live upstream nodes will be replaced after the bake.", 5000)
+
+    def _freeze_failed(self, message: str) -> None:
+        if self._freeze_progress is not None:
+            self._freeze_progress.close()
+        self.notify(f"Freeze failed: {message}", 6000)
+
+    def _freeze_progress_changed(self, current: int, total: int) -> None:
+        if self._freeze_progress is None:
+            return
+        self._freeze_progress.setMaximum(max(1, total))
+        self._freeze_progress.setValue(current)
+        self._freeze_progress.setLabelText(f"Freezing selection: {current} / {total} frames")
+
+    def _finish_freeze(self) -> None:
+        worker = self._freeze_worker
+        output = self._freeze_output
+        selected = self._freeze_selection
+        viewer_id = self._freeze_viewer_id
+        self._freeze_worker = None
+        self._freeze_output = None
+        self._freeze_selection = set()
+        self._freeze_viewer_id = None
+        if self._freeze_progress is not None:
+            self._freeze_progress.close()
+            self._freeze_progress = None
+        if worker is None or output is None or not output.is_file() or viewer_id is None:
+            return
+
+        viewer = self.project.nodes.get(viewer_id)
+        if not isinstance(viewer, ViewerNode):
+            return
+        source = next(
+            (self.project.nodes[node_id] for node_id in selected
+             if isinstance(self.project.nodes.get(node_id), VideoInputNode)
+             and not isinstance(self.project.nodes.get(node_id), FrozenVideoInputNode)),
+            None,
+        )
+        frozen = FrozenVideoInputNode("Frozen Video Input")
+        frozen.set_property("file_path", str(output))
+        if source is not None:
+            frozen.x, frozen.y = source.x, source.y
+        frozen_id = self.project.add_node(frozen)
+        for node_id in tuple(selected):
+            if node_id != viewer_id and node_id in self.project.nodes:
+                self.project.remove_node(node_id)
+        self.project.connect_nodes(frozen_id, "frame", viewer_id, "frame")
+        self.notify("Selection frozen to native video input.", 5000)
 
     def show_context_menu(self, position: QPoint) -> None:
         from ui.node_graph.menus import GraphContextMenu

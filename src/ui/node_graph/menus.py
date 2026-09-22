@@ -200,6 +200,12 @@ class NodeOperationsMenu(QMenu):
         )
         create.triggered.connect(self.view.create_custom_node_from_selection)
 
+        freeze = self.addAction("Freeze Selection to Video")
+        assert freeze is not None
+        freeze.setEnabled(self.view.can_freeze_selection(items))
+        freeze.setToolTip("Bake Video Input through Viewer into a new input file")
+        freeze.triggered.connect(self.view.freeze_selection)
+
         edit = self.addAction(
             make_icon(AppIcon.SETTINGS), "Edit Custom Node…"
         )

@@ -280,6 +280,7 @@ class VideoDecoder:
         # Audio decoder for extracting audio from video files
         self._audio_decoder: AudioDecoder = AudioDecoder()
         self._audio_info: AudioInfo | None = None
+        self._audio_enabled: bool = True
 
     @property
     def path(self) -> str | None:
@@ -385,6 +386,10 @@ class VideoDecoder:
         self._quality_scale = quality
         self._decode_width_cap = cap
         self._decode_threads = max(0, int(threads))
+
+    def set_audio_enabled(self, enabled: bool) -> None:
+        """Skip audio setup entirely for video-only render jobs."""
+        self._audio_enabled = bool(enabled)
 
     def _effective_decode_width(self, max_width: int) -> int:
         """Width the decoder should emit for a request of ``max_width``.
@@ -517,7 +522,13 @@ class VideoDecoder:
         decode_path = adopted[0] if adopted is not None else path
 
         with self._lock:
-            if self._path == decode_path and self._source_path == path and self.is_open:
+            audio_state_matches = self._audio_enabled == (self._audio_info is not None)
+            if (
+                self._path == decode_path
+                and self._source_path == path
+                and self.is_open
+                and audio_state_matches
+            ):
                 return self.info()
 
             self._close_unlocked()
@@ -595,8 +606,12 @@ class VideoDecoder:
             # building happens on the background scheduler.
             self._keyframes = _lookup_keyframe_index(path, fps)
 
-            # Open audio decoder
-            self._audio_info = self._audio_decoder.open(path)
+            # Audio is deliberately lazy for silent exports. Opening the
+            # decoder otherwise launches FFmpeg and materializes the entire
+            # track before the first video frame can be rendered.
+            self._audio_info = (
+                self._audio_decoder.open(path) if self._audio_enabled else None
+            )
 
             return self.info()
 
