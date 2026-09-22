@@ -77,8 +77,7 @@ class WidgetRegistry:
         """Look up a widget on ``plugin_key``, then by unique ``widget_id``."""
         if plugin_key:
             attached = self._by_key.get(widget_registry_key(plugin_key, widget_id))
-            if attached is not None:
-                return attached
+            return attached
         return self._unique_widget_id(widget_id)
 
     def all(self) -> tuple[WidgetRegistration, ...]:

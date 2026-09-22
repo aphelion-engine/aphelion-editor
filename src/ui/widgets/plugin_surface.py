@@ -31,13 +31,17 @@ def realize_plugin_widget(
     if qt_body is not None:
         view = host.create_view()
         view.embed_native(qt_body)
-        return view, native_plugin_widget(view)
+        native = native_plugin_widget(view)
+        _bind_disposal(attached, host, native)
+        return view, native
     try:
         view = attached.build_view(host)
     except Exception:  # noqa: BLE001
         _LOG.exception("Widget %s failed to build_view", type(attached))
         view = host.create_view()
-    return view, native_plugin_widget(view)
+    native = native_plugin_widget(view)
+    _bind_disposal(attached, host, native)
+    return view, native
 
 
 def native_plugin_widget(view: WidgetView) -> QWidget | None:
@@ -67,3 +71,14 @@ def _try_qt_widget(
     if isinstance(built, QWidget):
         return built
     return None
+
+
+def _bind_disposal(attached: PluginWidget, host: WidgetHost, native: QWidget | None) -> None:
+    if native is None:
+        return
+    def dispose(*_args):
+        try:
+            attached.on_dispose(host)
+        except Exception:
+            _LOG.exception("Plugin widget cleanup failed")
+    native.destroyed.connect(dispose)

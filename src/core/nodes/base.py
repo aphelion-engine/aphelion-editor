@@ -11,7 +11,8 @@ from config.constants import DEFAULT_FPS, DEFAULT_HEIGHT, DEFAULT_WIDTH
 from core.animation import AnimationCurve
 from core.audio import AudioData, FrameWithAudio
 
-NodeValue = np.ndarray | float | AudioData | FrameWithAudio | dict[str, float | AudioData | FrameWithAudio]
+NodePayload = np.ndarray | float | tuple[int, int, int] | AudioData | FrameWithAudio | None
+NodeValue = NodePayload | dict[str, NodePayload]
 TimeResampler = Callable[[int], Any]
 PropertyResolver = Callable[[str, str], "float | None"]
 NodePropertyResolver = Callable[[str, str], "float | None"]

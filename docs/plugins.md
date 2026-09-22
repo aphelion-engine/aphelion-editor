@@ -1,5 +1,7 @@
 # Plugins in the editor
 
+Editor nodes, audio, inspector UI, windows, docks and commands are documented in the [Editor SDK guide](../../aphelion-sdk/docs/editor.md). New plugins use `aphelion_sdk.editor`.
+
 Aphelion loads third-party nodes written against [`aphelion_sdk`](../../aphelion-sdk/README.md). Authors never import `core`, `effects`, `render`, or `ui`.
 
 ## Discovery order

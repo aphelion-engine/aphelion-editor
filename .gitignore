@@ -26,7 +26,8 @@ logs/
 
 *.mp4
 *.aph
-tests/
+tests/*
+!tests/test_editor_sdk_extensions.py
 .vscode/
 AphelionEditor/
 .pytest_cache/

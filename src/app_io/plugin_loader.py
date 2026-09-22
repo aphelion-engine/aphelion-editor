@@ -204,6 +204,7 @@ def _directories_to_import(
 class PluginLoader:
     """Bootstraps SDK plugin node classes into ``global_node_registry``."""
 
+    _extensions: ClassVar[dict[str, type[Any]]] = {}
     _loaded: ClassVar[bool] = False
     _registered_keys: ClassVar[list[str]] = []
     _imported_modules: ClassVar[list[str]] = []
@@ -219,6 +220,11 @@ class PluginLoader:
         cls._module_sources[module_name] = source
         if module_name not in cls._imported_modules:
             cls._imported_modules.append(module_name)
+
+    @staticmethod
+    def editor_extensions() -> tuple[tuple[str, type[Any]], ...]:
+        """Enabled editor-wide extension classes."""
+        return tuple(PluginLoader._extensions.items())
 
     @staticmethod
     def listed_plugins() -> tuple[PluginRecord, ...]:
@@ -305,6 +311,7 @@ class PluginLoader:
         if clear_registered_plugins is not None:
             clear_registered_plugins()
         PluginLoader._records = []
+        PluginLoader._extensions = {}
         PluginLoader._entry_point_classes = set()
         PluginLoader._loaded = False
 
@@ -320,9 +327,15 @@ class PluginLoader:
         if settings.load_entry_points:
             entry_classes = tuple(discover_installed_plugins())
         PluginLoader._entry_point_classes = set(entry_classes)
-        registered = tuple(get_registered_plugins())
+        registered = tuple(candidate for candidate in get_registered_plugins()
+                           if not candidate.__module__.startswith(_MODULE_PREFIX)
+                           or (candidate.__module__ in PluginLoader._module_sources
+                               and getattr(sys.modules.get(candidate.__module__), candidate.__name__, None) is candidate))
         merged = _unique_plugin_classes((*entry_classes, *registered))
-        return _latest_by_registry_key(_node_plugin_classes(merged))
+        compatible = tuple(candidate for candidate in merged
+                           if getattr(candidate, "plugin_product", "editor") == "editor"
+                           and getattr(candidate, "plugin_api_version", 1) == 1)
+        return _latest_by_registry_key(compatible)
 
     @staticmethod
     def _unregister_tracked() -> None:
@@ -351,17 +364,32 @@ class PluginLoader:
         registered = 0
         for plugin_class in plugin_classes:
             record = PluginLoader._make_record(plugin_class, disabled)
+            if record.enabled:
+                if PluginLoader._register_enabled(plugin_class, record.key):
+                    registered += 1
+                else:
+                    from dataclasses import replace
+                    record = replace(record, enabled=False)
             records.append(record)
-            if not record.enabled:
-                continue
-            if PluginLoader._register_enabled(plugin_class, record.key):
-                registered += 1
         PluginLoader._records = records
         return registered
 
     @staticmethod
     def _register_enabled(plugin_class: type[Any], key: str) -> bool:
         """Register one enabled plugin node and harvest its widgets."""
+        from aphelion_sdk.editor.extensions import EditorExtension
+        if issubclass(plugin_class, EditorExtension):
+            from aphelion_sdk.editor.extensions import EditorCommand
+            commands = plugin_class.commands
+            if not isinstance(commands, tuple) or any(not isinstance(item, EditorCommand) for item in commands):
+                _LOG.warning("Invalid commands on extension %s", key)
+                return False
+            if len({item.command_id for item in commands}) != len(commands):
+                _LOG.warning("Duplicate command ids on extension %s", key)
+                return False
+            PluginLoader._extensions[key] = plugin_class
+            PluginLoader._register_attached_widgets(plugin_class, key)
+            return True
         if not _is_node_class(plugin_class):
             _LOG.warning("Skipping non-node plugin type: %s", plugin_class)
             return False
@@ -416,6 +444,9 @@ class PluginLoader:
     @staticmethod
     def _register_one(plugin_class: type[Node], key: str) -> bool:
         """Register one plugin class; return whether it succeeded."""
+        if global_node_registry.get_node_info(plugin_class.node_category, plugin_class.node_type) is not None:
+            _LOG.warning("Plugin cannot replace an existing node type: %s", key)
+            return False
         try:
             global_node_registry.register(
                 plugin_class,

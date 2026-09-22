@@ -55,10 +55,10 @@ def _mount_one(editor: Editor, registration: WidgetRegistration) -> QDockWidget 
         project_name=editor.project.name,
     )
     host = EditorWidgetHost(editor, context)
-    instance = registration.widget_class()
-    if not isinstance(instance, PanelWidget):
-        return None
     try:
+        instance = registration.widget_class()
+        if not isinstance(instance, PanelWidget):
+            return None
         _view, native = realize_plugin_widget(instance, host, editor)
     except Exception:  # noqa: BLE001
         _LOG.exception("Panel widget %s failed to build", registration.key)

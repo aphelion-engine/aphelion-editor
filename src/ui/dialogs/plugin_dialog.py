@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from PyQt6.QtCore import Qt
+
 from PyQt6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -44,8 +46,17 @@ def open_attached_dialog(
     if not issubclass(registration.widget_class, DialogWidget):
         _LOG.warning("Widget %s is not a DialogWidget", registration.key)
         return False
-    dialog = PluginPopupDialog(parent, registration, host)
-    dialog.exec()
+    try:
+        dialog = PluginPopupDialog(parent, registration, host)
+    except Exception:
+        _LOG.exception("Failed to construct plugin dialog %s", registration.key)
+        return False
+    if registration.dialog_modal:
+        dialog.exec()
+        dialog.deleteLater()
+    else:
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.show()
     return True
 
 
@@ -88,12 +99,19 @@ class PluginPopupDialog(QDialog):
 
     def accept(self) -> None:
         """Commit dialog state through the widget, then close."""
-        self._widget.on_accept(self._view, self._host)
+        try:
+            self._widget.on_accept(self._view, self._host)
+        except Exception:
+            _LOG.exception("Plugin dialog failed to accept")
+            return
         super().accept()
 
     def reject(self) -> None:
         """Notify the widget of cancel, then close."""
-        self._widget.on_reject(self._view, self._host)
+        try:
+            self._widget.on_reject(self._view, self._host)
+        except Exception:
+            _LOG.exception("Plugin dialog failed to reject")
         super().reject()
 
 

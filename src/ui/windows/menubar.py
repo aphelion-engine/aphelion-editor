@@ -39,6 +39,7 @@ def build_menu_bar(editor: Editor) -> QMenuBar:
     _build_window_menu(menubar, editor)
     _build_playback_menu(menubar, editor)
     _build_render_menu(menubar, editor)
+    _build_plugin_menu(menubar, editor)
     _build_help_menu(menubar, editor)
     return menubar
 
@@ -337,3 +338,36 @@ def _populate_recent_projects(menu: QMenu, editor: Editor) -> None:
         action.triggered.connect(
             lambda _checked=False, path=entry.path: editor.open_recent_project(path)
         )
+
+
+def _build_plugin_menu(menubar: QMenuBar, editor: Editor) -> None:
+    """Build actions from enabled product-scoped editor extensions."""
+    from app_io.plugin_loader import PluginLoader
+    from ui.widgets.plugin_host import EditorWidgetHost
+    from utils.logging_setup import get_logger
+    previous = getattr(editor, "_plugin_command_menu", None)
+    if previous is not None:
+        menubar.removeAction(previous.menuAction())
+        previous.deleteLater()
+    editor._plugin_command_menu = None
+    extensions = [(key, cls) for key, cls in PluginLoader.editor_extensions() if cls.commands]
+    if not extensions:
+        return
+    menu = menubar.addMenu("Plugins")
+    editor._plugin_command_menu = menu
+    _style_menu(menu)
+    for key, extension in extensions:
+        group = menu.addMenu(extension.plugin_name)
+        _style_menu(group)
+        for command in extension.commands:
+            action = QAction(command.title, group)
+            if command.shortcut:
+                action.setShortcut(command.shortcut)
+            def invoke(_checked=False, command=command, key=key):
+                host = EditorWidgetHost(editor, WidgetContext(plugin_key=key, project_name=editor.project.name))
+                try:
+                    command.callback(host)
+                except Exception:
+                    get_logger("plugins").exception("Plugin command %s failed", command.command_id)
+            action.triggered.connect(invoke)
+            group.addAction(action)

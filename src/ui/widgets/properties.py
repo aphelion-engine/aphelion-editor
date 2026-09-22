@@ -403,15 +403,31 @@ class PropertiesPanel(QWidget):
                 project_name=self.project.name,
             )
         )
+        from core.widgets.registry import attached_widget_classes
+        from ui.widgets.plugin_surface import realize_plugin_widget
+        has_attached = False
+        for widget_class in attached_widget_classes(type(node)):
+            if widget_class.widget_kind != "inspector":
+                continue
+            try:
+                _, body = realize_plugin_widget(widget_class(), host, self)
+            except Exception:
+                continue
+            if body is not None:
+                section = QLabel(widget_class.resolved_title())
+                section.setObjectName("PropertySectionLabel")
+                layout.addWidget(section)
+                layout.addWidget(body)
+                has_attached = True
         native = _realize_property_qt_widget(node, host, self)
         if native is None:
             builder = getattr(node, "build_property_panel", None)
             if builder is None:
-                return False
+                return has_attached
             view: WidgetView | None = _safe_build_property_panel(builder, host)
             native = _native_plugin_widget(view)
         if native is None:
-            return False
+            return has_attached
         section: QLabel = QLabel("PLUGIN")
         section.setObjectName("PropertySectionLabel")
         layout.addWidget(section)
