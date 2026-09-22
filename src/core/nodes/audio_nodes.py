@@ -5,7 +5,6 @@ from __future__ import annotations
 from enum import IntEnum, auto
 
 import numpy as np
-
 from core.audio import AudioData, FrameWithAudio
 from core.nodes.base import (NodeProperty, NodePropertyInputType,
                              NodeSocketType, NodeValue)
@@ -216,7 +215,7 @@ def _effect_levels(node: FrameNode, group: str, default_wet: float = 100.0) -> t
 
 
 def _add_standard_effect_mix(node: FrameNode, *, group: str, wet_default: int = 100, output_priority: int = 99) -> None:
-    node.set_property("enabled", toggle_property(True, priority=-1, group=group, label="Enabled"))
+    node.set_property("enabled", toggle_property(True, priority=-1, group=group, label="Enabled", description="Bypass this node without removing it."))
     dry_default = 100 if group in {"Delay", "Reverb"} else 0
     node.set_property("dry", slider_property(dry_default, 0, 200, priority=90, group=group,
                       label="Dry", description="Dry/original signal level.", suffix="%"))

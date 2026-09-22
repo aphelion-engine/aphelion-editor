@@ -1,10 +1,12 @@
 """Audio file source with sample-accurate timeline mapping."""
 from __future__ import annotations
+
 import numpy as np
 from core.audio import AudioData, frame_sample_bounds
 from core.nodes.base import NodeProperty, NodePropertyInputType, NodeSocketType
 from core.nodes.frame_base import FrameNode
-from core.nodes.property_factory import number_property, slider_property, toggle_property
+from core.nodes.property_factory import (number_property, slider_property,
+                                         toggle_property)
 from render.audio_decoder import AudioDecoder
 
 
@@ -21,14 +23,35 @@ class AudioInputNode(FrameNode):
 
     def _setup_sockets(self):
         self.add_output("audio", NodeSocketType.Audio)
-        self.set_property("file_path", NodeProperty(NodePropertyInputType.File, "", label="Audio File"))
-        self.set_property("enabled", toggle_property(True, label="Enabled"))
-        self.set_property("gain", slider_property(100, 0, 300, label="Gain", suffix="%"))
-        self.set_property("start_seconds", number_property(0, 0, 86400, label="Source Start", suffix=" s"))
-        self.set_property("offset_frames", number_property(0, -100000, 100000, label="Timeline Offset", suffix=" fr"))
-        self.set_property("speed", number_property(1, .01, 16, label="Speed"))
-        self.set_property("loop", toggle_property(False, label="Loop"))
-        self.set_property("reverse", toggle_property(False, label="Reverse"))
+        self.set_property("file_path", NodeProperty(
+            input_type=NodePropertyInputType.File,
+            value="",
+            priority=0,
+            group="Source",
+            label="Audio File",
+            description="Audio file decoded by this source node.",
+        ))
+        self.set_property("enabled", toggle_property(
+            True, priority=1, group="Source", label="Enabled",
+            description="Disable decoding without removing graph connections."))
+        self.set_property("gain", slider_property(
+            100, 0, 300, priority=2, group="Source", label="Gain",
+            description="Linear output gain.", suffix="%"))
+        self.set_property("start_seconds", number_property(
+            0, 0, 86400, priority=10, group="Timing", label="Source Start",
+            description="Time offset into the source file.", suffix=" s"))
+        self.set_property("offset_frames", number_property(
+            0, -100000, 100000, priority=11, group="Timing", label="Timeline Offset",
+            description="Project-frame delay before source playback begins.", suffix=" fr"))
+        self.set_property("speed", number_property(
+            1, .01, 16, priority=12, group="Timing", label="Speed",
+            description="Playback speed multiplier."))
+        self.set_property("loop", toggle_property(
+            False, priority=13, group="Timing", label="Loop",
+            description="Loop the source when it runs past its end."))
+        self.set_property("reverse", toggle_property(
+            False, priority=14, group="Timing", label="Reverse",
+            description="Read source audio in reverse order."))
 
     def evaluate(self, frame_num):
         path = self.string_value("file_path")

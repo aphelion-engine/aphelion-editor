@@ -2,11 +2,14 @@
 import threading
 import wave
 from types import SimpleNamespace
+
 import numpy as np
 import pytest
-from core.audio import AudioData, FrameWithAudio, frame_sample_bounds, convert_audio
+from core.audio import (AudioData, FrameWithAudio, convert_audio,
+                        frame_sample_bounds)
+from core.nodes.audio_nodes import (AudioDelayNode, AudioLimiterNode,
+                                    AudioMixNode, AudioReverbNode)
 from core.nodes.base import Node, NodeSocketType
-from core.nodes.audio_nodes import AudioDelayNode, AudioReverbNode, AudioMixNode, AudioLimiterNode
 from core.nodes.video_input import VideoInputNode
 from core.nodes.viewer import ViewerNode
 from core.project import Project
@@ -228,6 +231,7 @@ def test_audio_input_decodes_wav_and_roundtrips(tmp_path):
     viewer=project.add_node(ViewerNode())
     project.connect_nodes(source,"audio",viewer,"audio")
     global_node_registry.register(AudioInputNode,AudioInputNode.node_category,AudioInputNode.node_type)
+    global_node_registry.register(ViewerNode,ViewerNode.node_category,ViewerNode.node_type)
     restored=Project.from_dict(project.to_dict())
     assert restored.nodes[source].node_type=="Audio Input"
     assert isinstance(restored.evaluate_node(viewer,0,"audio"),AudioData)
