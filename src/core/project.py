@@ -650,6 +650,27 @@ class Project:
 
         prop.value = value
 
+        if prop_name == "file_path" and isinstance(node, VideoInputNode):
+            path = str(value or "")
+            if path:
+                # Start proxy/index preparation as soon as media is selected,
+                # not only when an existing project is reopened. The source
+                # remains usable while the background proxy is generated.
+                try:
+                    from render.video_decoder import prepare_media
+                    from core.perf.scheduler import JobPriority, get_scheduler
+
+                    get_scheduler().submit(
+                        prepare_media,
+                        path,
+                        priority=JobPriority.BACKGROUND,
+                        name=f"prepare-media:{node.name}",
+                    )
+                except Exception:
+                    # Proxy generation is an optimization; selection must
+                    # still work when FFmpeg or the media index is unavailable.
+                    pass
+
         self.invalidate_cache(
             node_id
         )
