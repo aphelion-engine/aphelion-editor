@@ -1112,7 +1112,7 @@ class Project:
 
             cached = self._frame_cache.get_fast(cache_key)
 
-            if cached is not None:
+            if cached is not None or self._frame_cache.contains_fast(cache_key):
                 return cached
 
         # --------------------------------------------------------------
@@ -1178,10 +1178,8 @@ class Project:
         # Inputs
         # --------------------------------------------------------------
 
-        node.clear_input_values()
         node.set_time_resampler(None)
         input_resamplers = node._input_resamplers
-        input_resamplers.clear()
 
         input_connections = (
             self.dependency_graph
@@ -1190,10 +1188,21 @@ class Project:
             )
         )
 
-        node._connected_input_slots = frozenset(conn.input_slot for conn in input_connections)
+        topology_changed = node._input_topology_revision != self._topology_revision
+        if topology_changed:
+            # Connected slots and resamplers are topology data, not frame data.
+            # Rebuilding them on every frame was pure allocator churn.
+            node.clear_input_values()
+            input_resamplers.clear()
+            node._connected_input_slots = frozenset(
+                conn.input_slot for conn in input_connections
+            )
+            node._input_topology_revision = self._topology_revision
         for conn in input_connections:
             input_slot = conn.input_slot
             if not node.input_required_for_output(input_slot, output_slot):
+                node.set_input_value(input_slot, None)
+                input_resamplers.pop(input_slot, None)
                 continue
 
             in_sock = node.inputs[

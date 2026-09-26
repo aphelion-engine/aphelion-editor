@@ -94,6 +94,10 @@ class FrameCache:
     def get_fast(self, key: tuple[str, int, str]) -> Any | None:
         return self._get_unlocked(key)
 
+    def contains_fast(self, key: tuple[str, int, str]) -> bool:
+        """Return whether ``key`` is cached, including cached ``None`` values."""
+        return key in self._entries
+
     def set_fast(self, key: tuple[str, int, str], value: Any) -> None:
         self._set_unlocked(key, value)
 

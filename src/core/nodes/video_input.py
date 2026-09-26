@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from enum import IntEnum, auto
+from enum import Enum, IntEnum, auto
 
 import numpy as np
 from config.constants import DEFAULT_FPS, DEFAULT_PREVIEW_MAX_WIDTH
@@ -10,8 +10,9 @@ from core.audio import AudioData, FrameWithAudio, frame_sample_bounds
 from core.nodes.base import (FRAME_DTYPE, MediaEdgeMode, Node, NodeProperty,
                              NodePropertyInputType, NodeSocketType,
                              PreviewCost, VideoFrameErrorMethod)
-from core.nodes.enums import DECODE_QUALITY_SCALE, DecodeQuality
+from core.nodes.enums import DECODE_QUALITY_SCALE, DecodeQuality, InputColorSpace
 from effects.frame_ops import SOURCE_DTYPE, from_source_u8
+from effects.input_color import apply_input_color, load_cube
 from render.video_decoder import MediaInfo, VideoDecoder
 
 
@@ -55,6 +56,8 @@ class VideoInputNode(Node):
         self._previous_frame: np.ndarray | None = None
         self._current_frame: np.ndarray | None = None
         self._preview_max_width: int = DEFAULT_PREVIEW_MAX_WIDTH
+        self._cached_lut_path: str | None = None
+        self._cached_lut = None
         super().__init__(name)
 
     @property
@@ -85,6 +88,42 @@ class VideoInputNode(Node):
                 group="Source",
                 label="Enabled",
                 description="Disable decoding without removing graph connections.",
+            ),
+        )
+        self.set_property(
+            "color_space",
+            NodeProperty(
+                input_type=NodePropertyInputType.CustomChoice,
+                value=InputColorSpace.SRGB,
+                priority=6,
+                group="Color Management",
+                label="Input Color Space",
+                description="Transfer function expected in the decoded media.",
+            ),
+        )
+        self.set_property(
+            "lut_file",
+            NodeProperty(
+                input_type=NodePropertyInputType.File,
+                value="",
+                priority=7,
+                group="Color Management",
+                label="Input LUT",
+                description="Optional .cube LUT applied immediately after decoding.",
+            ),
+        )
+        self.set_property(
+            "lut_strength",
+            NodeProperty(
+                input_type=NodePropertyInputType.Slider,
+                value=100.0,
+                slider_min_value=0.0,
+                slider_max_value=100.0,
+                priority=8,
+                group="Color Management",
+                label="LUT Strength",
+                description="Blend between the original input and the LUT result.",
+                suffix="%",
             ),
         )
         self.set_property(
@@ -416,7 +455,7 @@ class VideoInputNode(Node):
             return prop.value
         return default
 
-    def _enum_prop(self, key: str, enum_type: type[IntEnum]) -> IntEnum:
+    def _enum_prop(self, key: str, enum_type: type[Enum]) -> Enum:
         """Return an enum property's value, falling back to its first member.
 
         Saved projects can carry a member name from a newer build, and a
@@ -428,9 +467,9 @@ class VideoInputNode(Node):
         if isinstance(value, enum_type):
             return value
         try:
+            return enum_type(value)
+        except (TypeError, ValueError):
             return next(iter(enum_type))
-        except StopIteration:  # pragma: no cover - enums are never empty
-            return value
 
     def decode_quality(self) -> DecodeQuality:
         """Return this source's decode-quality setting."""
@@ -470,6 +509,7 @@ class VideoInputNode(Node):
         self._apply_decode_preferences()
         self._decoder.set_audio_enabled(
             bool(getattr(self, "_export_audio_enabled", True))
+            and self._bool_prop("audio_enabled", True)
         )
         return self._decoder.open(path, use_proxy=self._bool_prop("use_proxy", True))
 
@@ -634,9 +674,21 @@ class VideoInputNode(Node):
             # ``ensure_rgb_f32`` produces bit-identical values on the first
             # node that needs float precision, so nothing downstream can
             # tell the difference.
-            frame: np.ndarray = (
-                frame_u8 if self._emit_u8_allowed else from_source_u8(frame_u8)
-            )
+            color_space = self._enum_prop("color_space", InputColorSpace)
+            lut_property = self.get_property("lut_file")
+            lut_path = str(lut_property.value) if lut_property and lut_property.value else ""
+            if color_space != InputColorSpace.SRGB or lut_path:
+                if lut_path != self._cached_lut_path:
+                    self._cached_lut_path = lut_path
+                    self._cached_lut = load_cube(lut_path)
+                frame = apply_input_color(
+                    from_source_u8(frame_u8),
+                    color_space.value,
+                    self._cached_lut,
+                    self._float_prop("lut_strength", 100.0) / 100.0,
+                )
+            else:
+                frame = frame_u8 if self._emit_u8_allowed else from_source_u8(frame_u8)
             self._previous_frame = self._current_frame
             self._current_frame = frame
 

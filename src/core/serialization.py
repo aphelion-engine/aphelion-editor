@@ -10,9 +10,10 @@ from core.nodes.base import (MediaEdgeMode, MediaLoopMode, NodeSocketType,
 from core.nodes.enums import (AnaglyphMode, AutoBalanceMode, BendAxis,
                               BlendMode, CombineMaskMode, ComparisonOperation,
                               DecodeQuality, EaseMode, EdgeDisplayMode,
-                              GradientMode, LogicOperation, MaskChannel,
-                              PixelSortMode, SwitchInput, TrackerShape,
-                              TransformBorderMode, Waveform)
+                               GradientMode, LogicOperation, MaskChannel,
+                               PixelSortMode, SwitchInput, TrackerShape,
+                               TransformBorderMode, Waveform)
+from core.nodes.enums import InputColorSpace
 from core.tracking.model import GapPolicy
 from render.preview import ViewerBackground, ViewportFitMode
 
@@ -44,6 +45,7 @@ _ENUM_TYPES: dict[str, type[Enum]] = {
     "TransformBorderMode": TransformBorderMode,
     "ViewportFitMode": ViewportFitMode,
     "ViewerBackground": ViewerBackground,
+    "InputColorSpace": InputColorSpace,
 }
 
 

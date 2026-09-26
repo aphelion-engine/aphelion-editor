@@ -80,9 +80,11 @@ class AudioDecoder:
     def is_open(self) -> bool:
         return self._path is not None and self._audio_info is not None
 
-    def open(self, path: str) -> AudioInfo | None:
-        """Open a video file and extract audio info."""
-        if self._path == path and self.is_open:
+    def open(self, path: str, *, decode_samples: bool = True) -> AudioInfo | None:
+        """Open a video file, optionally deferring full audio decoding."""
+        if self._path == path and self.is_open and (
+            not decode_samples or self._decoded_samples is not None
+        ):
             return self._audio_info
 
         self._close()
@@ -130,6 +132,17 @@ class AudioDecoder:
             else:
                 _LOG.info("No ffprobe binary found next to bundled ffmpeg; using decode-only audio detection")
 
+            has_audio = bool(probe_data.get("streams")) if ffprobe_exe is not None and probe_result.returncode == 0 else True
+            self._path = path
+            self._audio_info = AudioInfo(
+                sample_rate=sample_rate,
+                num_channels=num_channels,
+                duration_sec=duration,
+                has_audio=has_audio,
+            )
+            if not decode_samples:
+                return self._audio_info
+
             decode_cmd = [
                 ffmpeg_exe,
                 "-v", "error",
@@ -148,7 +161,6 @@ class AudioDecoder:
                 timeout=120,
             )
             if decode_result.returncode != 0 or not decode_result.stdout:
-                self._path = path
                 self._audio_info = AudioInfo(
                     sample_rate=sample_rate,
                     num_channels=num_channels,
@@ -166,7 +178,6 @@ class AudioDecoder:
             if duration <= 0.0 and sample_rate > 0:
                 duration = float(self._decoded_samples.shape[0]) / float(sample_rate)
 
-            self._path = path
             self._audio_info = AudioInfo(
                 sample_rate=sample_rate,
                 num_channels=num_channels,
@@ -219,6 +230,7 @@ class AudioDecoder:
 
     def sample_at_times(self, times: np.ndarray) -> AudioData:
         """Read fractional source positions; out-of-media samples are silent."""
+        self._ensure_samples()
         rate = self._audio_info.sample_rate if self._audio_info else 48000
         channels = self._audio_info.num_channels if self._audio_info else 2
         result = np.zeros((len(times), channels), np.float32)
@@ -238,6 +250,7 @@ class AudioDecoder:
         duration_sec: float,
     ) -> AudioData:
         """Extract audio samples for an arbitrary time range from the decoded buffer."""
+        self._ensure_samples()
         if (
             not self.is_open
             or self._audio_info is None
@@ -270,6 +283,14 @@ class AudioDecoder:
             samples=np.ascontiguousarray(sliced.astype(np.float32, copy=False)),
             sample_rate=sample_rate,
         )
+
+    def _ensure_samples(self) -> None:
+        """Decode PCM only when a caller actually requests audio samples."""
+        if self._decoded_samples is not None or not self._path:
+            return
+        if self._audio_info is not None and not self._audio_info.has_audio:
+            return
+        self.open(self._path, decode_samples=True)
 
     def extract_audio_for_frame(
         self,

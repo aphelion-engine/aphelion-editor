@@ -325,8 +325,10 @@ class TimelineTrackView(QWidget):
 
         frames = self._timeline.duration_frames() if self._timeline else 300
         step = max(1, int(round(30 / self._pixels_per_frame)))
-        font = QFont(painter.font())
-        font.setPointSizeF(7.5)
+        # Some platform styles expose the painter font with only a pixel size
+        # and an unset point size (-1). Copying it and changing the point size
+        # makes Qt emit a warning, so start from a concrete UI font instead.
+        font = QFont("Segoe UI", 8)
         painter.setFont(font)
         for f in range(0, frames + step, step):
             x = _LEFT_GUTTER + f * self._pixels_per_frame

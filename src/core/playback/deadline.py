@@ -198,13 +198,20 @@ class DeadlineQueue:
         with self._lock:
             return self._heap[0][2] if self._heap else None
 
-    def discard_expired(self, now: float, grace_ms: float = 0.0) -> int:
-        """Drop every request that is already too late; returns the count."""
+    def discard_expired(
+        self,
+        now: float,
+        grace_ms: float = 0.0,
+        *,
+        preserve_latest: bool = False,
+    ) -> int:
+        """Drop late requests, optionally retaining the newest request."""
         removed = 0
         with self._lock:
             keep: list[tuple[float, int, FrameDeadline]] = []
+            latest = max(self._heap, key=lambda entry: entry[0]) if preserve_latest and self._heap else None
             for entry in self._heap:
-                if entry[2].is_expired(now, grace_ms):
+                if entry is not latest and entry[2].is_expired(now, grace_ms):
                     self._frames.discard(entry[2].frame)
                     removed += 1
                 else:

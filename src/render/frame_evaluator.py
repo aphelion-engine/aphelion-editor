@@ -343,7 +343,11 @@ class FrameEvaluationWorker(QThread):
                 generation=generation,
                 predicted_cost_ms=self._cost.graph_cost_ms,
             ),
-            collapse=False,
+            # During playback, obsolete queued frames are more harmful than
+            # dropped frames: they keep the renderer permanently behind the
+            # playhead. The in-flight frame still finishes, then the worker
+            # takes the newest request.
+            collapse=playing and not scrubbing,
         )
 
         # Keep the single-slot fast path in sync for callers that read it.
@@ -528,15 +532,30 @@ class FrameEvaluationWorker(QThread):
             # for exactly that frame, and dropping it would leave the
             # viewport stale for no benefit.
             if self._playing or self._scrubbing:
-                grace_ms = self._clock.frame_budget_ms * _LATE_GRACE_FRACTION
+                # Never expire the sole latest request. A heavy source may
+                # miss its nominal deadline, but dropping that last request
+                # leaves the worker with nothing to render and the viewport
+                # appears permanently frozen. Older work is still discarded
+                # as soon as a newer request is queued.
+                grace_ms = (
+                    self._clock.frame_budget_ms * _LATE_GRACE_FRACTION
+                    if self._queue.depth > 1
+                    else float("inf")
+                )
             else:
                 grace_ms = float("inf")
 
-            dropped = self._queue.discard_expired(now, grace_ms)
+            dropped = self._queue.discard_expired(
+                now,
+                grace_ms,
+                preserve_latest=self._playing or self._scrubbing,
+            )
             if dropped:
                 self._late_discarded += dropped
                 trace.note_dropped(dropped)
 
+            if (self._playing or self._scrubbing) and self._queue.depth <= 1:
+                grace_ms = float("inf")
             deadline = self._queue.poll(now, grace_ms)
 
             if deadline is None:
@@ -822,6 +841,13 @@ class FrameEvaluationWorker(QThread):
         if self._adaptive_prefetch and self._scrubbing:
             return False
         if not self._playing or not self._running or self.isInterruptionRequested():
+            return False
+        # Prefetch shares this worker and the project's evaluation lock with
+        # the visible frame. Once rendering approaches the frame budget,
+        # speculative work becomes visible stutter instead of useful overlap.
+        if self.last_render_seconds > self._clock.frame_budget_ms / 1000.0 * 0.75:
+            return False
+        if self._has_pending():
             return False
         return True
 

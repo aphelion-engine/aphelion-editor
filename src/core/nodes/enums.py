@@ -10,6 +10,14 @@ class NoiseType(Enum):
     SIMPLEX = "simplex"
     FBM = "fbm"
 
+
+class InputColorSpace(Enum):
+    """Transfer function expected at a media input."""
+
+    SRGB = "sRGB"
+    LINEAR = "Linear RGB"
+    LOG_C = "ARRI LogC3"
+
 class VolumeSliceAxis(IntEnum):
     XY = auto()
     XZ = auto()

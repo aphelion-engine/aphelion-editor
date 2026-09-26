@@ -622,7 +622,9 @@ class VideoDecoder:
             # decoder otherwise launches FFmpeg and materializes the entire
             # track before the first video frame can be rendered.
             self._audio_info = (
-                self._audio_decoder.open(path) if self._audio_enabled else None
+                self._audio_decoder.open(path, decode_samples=False)
+                if self._audio_enabled
+                else None
             )
 
             return self.info()

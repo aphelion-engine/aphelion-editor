@@ -208,7 +208,7 @@ class PerformanceSettings:
     auto_proxy_enabled: bool = True
     min_preview_scale_percent: int = DEFAULT_MIN_PREVIEW_SCALE
     max_preview_scale_percent: int = DEFAULT_MAX_PREVIEW_SCALE
-    playback_proxy_override_enabled: bool = False
+    playback_proxy_override_enabled: bool = True
     playback_proxy_width: int = DEFAULT_PLAYBACK_PROXY_WIDTH
     high_quality_when_paused: bool = True
 
@@ -508,7 +508,7 @@ class PerformanceSettings:
             min_preview_scale_percent=min_scale,
             max_preview_scale_percent=max_scale,
             playback_proxy_override_enabled=bool(
-                data.get("playback_proxy_override_enabled", False)
+                data.get("playback_proxy_override_enabled", True)
             ),
             playback_proxy_width=_clamp(
                 int(data.get("playback_proxy_width", DEFAULT_PLAYBACK_PROXY_WIDTH)),

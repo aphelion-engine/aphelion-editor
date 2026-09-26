@@ -13,11 +13,12 @@ import os
 import cv2
 import numpy as np
 
-from core.nodes.base import NodeSocketType, NodeValue
-from core.nodes.enums import ImageFitMode
+from core.nodes.base import NodeProperty, NodePropertyInputType, NodeSocketType, NodeValue
+from core.nodes.enums import ImageFitMode, InputColorSpace
 from core.nodes.frame_base import FrameNode
 from core.nodes.property_factory import choice_property, image_file_property, number_property
 from effects.image_placement import place_image
+from effects.input_color import apply_input_color, load_cube
 
 
 class ImageInputNode(FrameNode):
@@ -31,6 +32,8 @@ class ImageInputNode(FrameNode):
     def __init__(self, name: str | None = None) -> None:
         self._cached_path: str | None = None
         self._cached_rgba: np.ndarray | None = None
+        self._cached_lut_path: str | None = None
+        self._cached_lut = None
         super().__init__(name)
 
     def _setup_sockets(self) -> None:
@@ -58,6 +61,40 @@ class ImageInputNode(FrameNode):
                     "Fit: contain, transparent padding. Fill: crop to fill. "
                     "Stretch: fill exactly, aspect ignored. Native: no scaling."
                 ),
+            ),
+        )
+        self.set_property(
+            "color_space",
+            choice_property(
+                InputColorSpace.SRGB,
+                priority=5,
+                group="Color Management",
+                label="Input Color Space",
+                description="Transfer function expected in the image file.",
+            ),
+        )
+        self.set_property(
+            "lut_file",
+            NodeProperty(
+                input_type=NodePropertyInputType.File,
+                value="",
+                priority=6,
+                group="Color Management",
+                label="Input LUT",
+                description="Optional .cube LUT applied before placement.",
+            ),
+        )
+        self.set_property(
+            "lut_strength",
+            number_property(
+                100.0,
+                0.0,
+                100.0,
+                priority=7,
+                group="Color Management",
+                label="LUT Strength",
+                description="Blend between the original image and LUT result.",
+                suffix="%",
             ),
         )
         self.set_property(
@@ -139,6 +176,22 @@ class ImageInputNode(FrameNode):
         if rgba is None:
             blank = self.blank_frame()
             return {"frame": blank, "mask": blank.copy()}
+
+        color_space = self.enum_value(
+            "color_space", InputColorSpace, InputColorSpace.SRGB
+        )
+        lut_path = self.string_value("lut_file", "")
+        if color_space != InputColorSpace.SRGB or lut_path:
+            if lut_path != self._cached_lut_path:
+                self._cached_lut_path = lut_path
+                self._cached_lut = load_cube(lut_path)
+            rgb = apply_input_color(
+                rgba[..., :3],
+                color_space.value,
+                self._cached_lut,
+                self.float_value("lut_strength", 100.0) / 100.0,
+            )
+            rgba = np.concatenate((rgb, rgba[..., 3:4]), axis=-1)
 
         fit_mode = self.enum_value("fit_mode", ImageFitMode, ImageFitMode.Fit)
         canvas_width, canvas_height = self.evaluation_frame_size()
