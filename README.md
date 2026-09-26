@@ -1,75 +1,207 @@
 # Aphelion Editor
 
-**A node-based video compositor.** Build a graph, preview in real time, export from any Viewer.
+Aphelion Editor is a desktop, node-based video compositor for building,
+previewing, and exporting procedural video projects. It combines a node graph,
+timeline, media pool, viewport, property inspector, audio playback, tracking
+tools, and an extensible plugin system in one application.
 
-Aphelion is a desktop suite: node graph, viewport, timeline, media pool, and property inspector. The pipeline is float32 RGB. Export and tracking run off the UI thread. Third-party nodes use the sibling [Plugin SDK](../aphelion-sdk/README.md).
+**Current version:** `0.1.2`
+**Runtime:** Python `3.11+`
+**Status:** Active development
 
-Version **0.1.0**. Python **3.11+**.
+## Highlights
 
-## Features
+- Node-based video compositing with generators, filters, transforms, color,
+  keying, roto, tracking, timing, distortion, stylization, logic, and math
+  nodes.
+- Real-time preview with decode-time scaling, frame caching, adaptive quality,
+  frame dropping, background prefetch, and editing proxies.
+- Timeline editing with playback, scrubbing, in/out points, clip timing, and
+  keyframed properties.
+- Video, image, and audio inputs with Viewer output and audio-aware graph
+  evaluation.
+- Point tracking, planar tracking, corner pinning, roto tools, chroma keying,
+  depth workflows, and VFX utilities.
+- MP4 and PNG-sequence export from the active Viewer.
+- `.aph` project files with recent-project launch and autosave support.
+- Plugin support through the sibling [`aphelion-sdk`](../aphelion-sdk/README.md)
+  package.
 
-- **77 built-in nodes** — input/output, generators, color, filters, compositing, transform, keying, roto, tracking, timing, distort, stylize, math
-- **Real-time preview** — decode-time proxy (default 960px), optional 640px playback proxy, frame cache and prefetch
-- **Compositing** — chroma key, matte edge, spill suppress, bezier roto, point and planar tracking, corner pin, merge/dissolve
-- **Color** — grading, exposure, hue/saturation, white balance, levels, vibrance, shadows/highlights, creative looks
-- **Timeline** — playback, in/out, keyframed properties (default 1920×1080 @ 30 fps, 10 s)
-- **Projects** — `.aph` JSON with autosave once a path exists
-- **Export** — MP4 or PNG sequence from the active Viewer
-- **Plugins** — `aphelion_sdk` drop-ins, wheels, and **Preferences → Plugins** (enable, disable, reload)
+## Requirements
 
-## Quick start
+- Python `3.11` or newer
+- A C compiler and Python development headers for the required native backend
+- Windows, macOS, or Linux
+- FFmpeg supplied through `imageio-ffmpeg` for media I/O
+
+Runtime dependencies include PyQt6, NumPy, OpenCV, imageio, imageio-ffmpeg,
+sounddevice, and cryptography. The editable development install also resolves
+the sibling `aphelion-sdk` and `aphelion-styling` packages.
+
+## Installation
+
+From the repository root:
 
 ```bash
 cd aphelion-editor
 python -m venv .venv
-# Windows: .\.venv\Scripts\Activate.ps1
-# macOS / Linux: source .venv/bin/activate
-pip install -e ".[dev,freeze]"
-python main.py
 ```
 
-The launcher creates a project, opens a `.aph`, or restores a recent file. `aphelion --version` prints the app version.
+Activate the environment:
 
-Full install notes: [docs/getting-started.md](docs/getting-started.md).
+```powershell
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
+```
 
-## Documentation
+```bash
+# macOS or Linux
+source .venv/bin/activate
+```
 
-| Guide | Contents |
-|---|---|
-| [Getting started](docs/getting-started.md) | Environment, install, launch |
-| [User guide](docs/user-guide.md) | Workspace, graph, playback, export, shortcuts |
-| [Plugins](docs/plugins.md) | Folders, preferences, reload |
-| [Architecture](docs/architecture.md) | Packages, boot, frame pipeline |
-| [Packaging](docs/packaging.md) | Wheels, freeze, Windows MSI |
-| [Development](docs/development.md) | Tests, typing, logging |
-| [Plugin SDK](../aphelion-sdk/README.md) | Writing and shipping plugins |
+Install the editor with development and packaging tools:
 
-## CLI
+```bash
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev,freeze]"
+```
+
+For a runtime-only environment, use:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+The editable install is recommended because it also installs the sibling SDK
+and styling packages required by the source tree.
+
+## Launching
 
 ```bash
 python main.py
-python main.py --build
-python main.py --build-installer          # Windows MSI → dist/AphelionEditorSetup-0.1.0-win64.msi
-python main.py --build-dir path/to/output
+```
+
+The source launcher builds or verifies the native backend before starting the
+application. The launch screen can create a project, open an `.aph` project,
+or restore a recent project.
+
+The default new project is 1920x1080 at 30 FPS with a 10-second timeline.
+
+If the package is installed, the console entry point is also available:
+
+```bash
+aphelion
 aphelion --version
 ```
 
-`--build-installer` includes a freeze. Details: [docs/packaging.md](docs/packaging.md).
+## High-Resolution Media
 
-## Layout
+Large HEVC, 10-bit, HDR, and high-frame-rate sources may not decode in real
+time directly from the original file. Aphelion prepares editing proxies and
+keyframe indexes in the background when media is added. Playback uses the
+proxy when it is ready; exports continue to use the original source.
 
+For difficult media, open **Preferences > Performance** and use the low-lag
+settings. Lower preview and proxy resolutions reduce decode and graph cost
+without changing export resolution. The performance overlay reports displayed
+FPS, preview dimensions, cache usage, and render timing.
+
+You can benchmark a source without opening the UI:
+
+```bash
+python main.py --benchmark-playback path/to/video.mov
+python main.py --benchmark-playback path/to/video.mov --benchmark-frames 120
 ```
+
+## Command-Line Operations
+
+```bash
+# Launch the editor
+python main.py
+
+# Build a standalone frozen application
+python main.py --build
+
+# Build a Windows MSI installer
+python main.py --build-installer
+
+# Choose an output directory for a build
+python main.py --build-dir path/to/output --build
+
+# Print the installed version
+aphelion --version
+```
+
+Packaging details are documented in [docs/packaging.md](docs/packaging.md).
+
+## Development
+
+Run the test suite from `aphelion-editor/`:
+
+```bash
+python -m pip install -e ".[dev]"
+pytest
+```
+
+Run type checking when the development toolchain is installed:
+
+```bash
+mypy
+```
+
+Useful development diagnostics:
+
+- Application logs: `logs/aphelion.log`
+- In-app log dock: `Ctrl+Shift+L`
+- Playback benchmark: `python main.py --benchmark-playback <media>`
+- Native backend check: `python native/build.py --check`
+
+The project keeps UI code in `src/ui/` and Qt-free application logic in
+`src/core/`. Media decoding and rendering live primarily in `src/render/`.
+Public plugins should use `aphelion_sdk` rather than importing internal editor
+modules.
+
+## Native Backend
+
+The native backend is required for normal source-tree launches and is built
+from `native/`:
+
+```bash
+python native/build.py --check
+python native/build.py
+python native/build.py --clean
+```
+
+See [native/README.md](native/README.md) for compiler requirements and the
+native correctness contract.
+
+## Documentation
+
+| Guide | Description |
+|---|---|
+| [Getting started](docs/getting-started.md) | Installation and first launch |
+| [User guide](docs/user-guide.md) | Workspace, graph, timeline, and export |
+| [Playback performance](docs/playback-performance.md) | Proxies, adaptive preview, and diagnostics |
+| [VFX tools](docs/vfx-tools.md) | Tracking, roto, and compositing workflows |
+| [Plugins](docs/plugins.md) | Plugin locations, loading, and reloads |
+| [Architecture](docs/architecture.md) | Packages, boot process, and frame pipeline |
+| [Development](docs/development.md) | Tests, typing, and logging |
+| [Packaging](docs/packaging.md) | Standalone builds and Windows MSI packaging |
+| [Plugin SDK](../aphelion-sdk/README.md) | Public plugin development |
+
+## Repository Layout
+
+```text
 aphelion-editor/
-  src/           Application packages (ui, core, render, …)
-  plugins/       Bundled drop-in plugin modules
-  tests/         pytest
-  main.py        Source-tree launcher
-aphelion-sdk/    Public plugin SDK (sibling package)
+  src/       Application packages: core, render, UI, plugins, and utilities
+  native/    Required C acceleration backend
+  plugins/   Bundled plugin modules
+  tests/     Automated tests
+  docs/      User, developer, and packaging documentation
+  main.py    Source-tree launcher
 ```
-
-UI stays in `ui/`. Core logic is Qt-free. Frames are `float32` RGB in `[0, 1]`.
 
 ## License
 
-[LICENSE](/LICENSE)
-
+Aphelion Editor is proprietary software. See the repository distribution
+terms before redistributing the application or its bundled components.
