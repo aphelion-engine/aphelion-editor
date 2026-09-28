@@ -62,6 +62,7 @@ class TrackingOptions:
     max_search_multiplier: float = 4.0
     ambiguity_margin: float = 0.08
     max_jump: float = 0.10
+    predict_through_gaps: bool = False
 
     def __post_init__(self):
         if not 0 <= self.track_threshold < self.reacquire_threshold <= 1:

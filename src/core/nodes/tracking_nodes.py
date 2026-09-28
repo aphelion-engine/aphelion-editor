@@ -147,7 +147,8 @@ class TrackerNode(FrameNode, Tracker):
             confirmation_frames=self.int_value("confirmation_frames",2),
             max_search_multiplier=self.float_value("max_search_multiplier",4),
             ambiguity_margin=self.float_value("ambiguity_margin",0.08),
-            max_jump=self.float_value("max_jump",10)/100)
+            max_jump=self.float_value("max_jump",10)/100,
+            predict_through_gaps=True)
 
     def input_required(self, slot: str) -> bool:
         # Source images are sampled explicitly by the tracking worker, not playback.

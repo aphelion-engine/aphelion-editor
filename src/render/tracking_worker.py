@@ -14,6 +14,7 @@ from core.tracking import track_planar_range, track_point_range
 from core.tracking.planar_tracker import (
     PlanarTrackingOptions,
     planar_results_to_corners,
+    repair_planar_gaps,
     track_planar_homography_range,
 )
 
@@ -173,6 +174,7 @@ class PlanarTrackingWorker(QThread):
             )
             return
 
+        results = repair_planar_gaps(results)
         corners = planar_results_to_corners(results)
         if not any(corners.values()):
             self.failed.emit(

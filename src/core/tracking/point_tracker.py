@@ -173,8 +173,17 @@ def _track_point_samples(
                 if state != TrackingState.LOST:
                     log.debug("Reacquisition expired at frame %s",number)
                 state = TrackingState.LOST
-            yield TrackingSample(number,None,None,confidence,False,
-                state=state,predicted_x=float(predicted[0]),predicted_y=float(predicted[1]),reason=reason)
+            if options.predict_through_gaps:
+                # Prediction is a real track sample, not a clamped placeholder.
+                # It may intentionally be outside 0..1 until the target returns.
+                prediction_confidence = max(0.0, 0.25 * np.exp(-lost / max(1, options.max_lost_frames)))
+                prediction_state = TrackingState.PREDICTING if all(0 <= v <= 1 for v in predicted) else TrackingState.OFFSCREEN
+                yield TrackingSample(number, float(predicted[0]), float(predicted[1]),
+                    prediction_confidence, True, predicted=True, state=prediction_state,
+                    predicted_x=float(predicted[0]), predicted_y=float(predicted[1]), reason=reason)
+            else:
+                yield TrackingSample(number,None,None,confidence,False,
+                    state=state,predicted_x=float(predicted[0]),predicted_y=float(predicted[1]),reason=reason)
         if on_progress:
             on_progress(index+1,len(frame_numbers))
     return
