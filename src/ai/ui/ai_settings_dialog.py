@@ -55,8 +55,8 @@ class AISettingsDialog(QDialog):
 
     def accept(self) -> None:
         """Persist the edited settings before closing."""
-        self.page.commit()
-        super().accept()
+        if self.page.commit():
+            super().accept()
 
 
 __all__ = ["AISettingsDialog"]

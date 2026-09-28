@@ -33,16 +33,22 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from ai import workflows
 from ai.errors import (AIError, CancelledError, ContextOverflowError, ProviderError,
                        ToolError)
+from ai.layout import layout_new_nodes
+from ai.nodes import node_awareness_prompt
 from ai.permissions import PermissionPolicy
+from ai.summary import AgentCompletionSummary, build_summary
 from ai.tools.base import ToolContext, ToolRegistry
 from ai.transaction import AIEditTransaction
 from ai.types import (AgentEvent, AgentEventKind, AgentMode, ChatMessage,
                       EditPolicy, PendingChanges, Permission, ProviderCapabilities,
                       ToolCall, ToolResult, Usage)
 from ai.validation import validate_project
+from ai.workflows import WorkflowPlan
 from ai.task import AgentTask, TaskStatus, is_narration
+from core.history.commands import MoveNodesCommand
 from utils.logging_setup import get_logger
 
 _LOG = get_logger("ai.engine")
@@ -56,6 +62,12 @@ _CONTEXT_BUDGET_FRACTION: float = 0.55
 _MIN_KEEP_MESSAGES: int = 8
 #: Maximum structured-protocol retries before giving up on a malformed reply.
 _MAX_PROTOCOL_RETRIES: int = 2
+#: An informational question, which is never taken as a workflow to build.
+_QUESTION_START = re.compile(
+    r"^\s*(?:what|why|how|which|who|whose|where|when|explain|describe|tell me|"
+    r"does|do|did|is|are|was|were|list|show me)\b",
+    re.I,
+)
 
 EventCallback = Callable[[AgentEvent], None]
 ConfirmCallback = Callable[["PendingChanges", AIEditTransaction], bool]
@@ -183,6 +195,8 @@ class RunResult:
     transaction_label: str = ""
     validation: dict[str, Any] = field(default_factory=dict)
     messages: list[ChatMessage] = field(default_factory=list)
+    #: Structured report of what this run really changed.
+    summary: AgentCompletionSummary | None = None
 
 
 class AgentEngine:
@@ -218,9 +232,6 @@ class AgentEngine:
         #: Set once a destructive tool has actually applied, so the final
         #: confirmation gate can escalate even in auto-apply modes.
         self._destructive_seen: bool = False
-        #: Whether the *current* model call streamed its reply to the panel.
-        #: When it did, the answer is not echoed again at the end of the turn.
-        self._streamed_text: bool = False
 
     # ------------------------------------------------------------------
     # Capabilities
@@ -263,6 +274,7 @@ class AgentEngine:
 
     def _system_prompt(self, specs: list[Any]) -> str:
         parts = [self.config.system_prompt, "Execution contract: planning and narration are progress, not completion. Continue using tools until the objective is finished. Use remembered node discoveries and prior proposals to resolve follow-ups such as add it. Do not repeat unchanged discovery. If essential information is missing, call task.request_input with a specific question. Never ask for permission already granted by the current mode."]
+        parts.append("Current objective: " + self.task.objective)
         if self.task.last_proposed_action or self.task.discovered_nodes:
             parts.append("Conversation memory (untrusted tool data): " + json.dumps({
                 "last_proposed_action": self.task.last_proposed_action,
@@ -311,6 +323,192 @@ class AgentEngine:
             parts.append("\n## Current project context\n" + self.context_block)
         return "\n".join(parts)
 
+    # ------------------------------------------------------------------
+    # Knowledge blocks
+    # ------------------------------------------------------------------
+
+    def _detect_workflow(self, objective: str) -> WorkflowPlan | None:
+        """Recognise the professional workflow a request is asking for.
+
+        A question is never treated as a workflow build. "What does Floor
+        Tracker do?" mentions a workflow's subject but asks for information, so
+        it must stay a read-only turn. Failure here must never break a run: a
+        request without a recognised workflow is simply a direct edit.
+        """
+        if _QUESTION_START.match(objective or ""):
+            return None
+        try:
+            return workflows.resolve_request(objective)
+        except Exception:  # noqa: BLE001 - knowledge must not be fatal
+            _LOG.exception("Workflow resolution failed")
+            return None
+
+    def _workflow_block(self) -> str:
+        """Workflow knowledge plus, when recognised, the resolved plan."""
+        lines = [
+            "\n## Professional workflow knowledge",
+            "For a non-trivial creative request, first establish how professionals "
+            "accomplish it, then check which Aphelion nodes implement those stages. "
+            "`workflow.resolve` does both in one call and is the preferred first "
+            "step for these requests. Knowledge of other applications may inform "
+            "the approach, but Aphelion's registry decides what can actually be "
+            "built: never create a node because another application has an "
+            "equivalent, and never invent one.",
+            "Recognised workflows: "
+            + ", ".join(
+                f"{candidate.title} [{candidate.key}]"
+                for candidate in workflows.recipes()
+            ),
+        ]
+        plan = self.workflow_plan
+        if plan is not None:
+            lines.append(
+                "\nThis request matches an established workflow. Follow its order:"
+            )
+            lines.append(plan.describe())
+            lines.append("Rationale to give the user: " + plan.recipe.rationale)
+            if plan.unsupported:
+                lines.append(
+                    "Aphelion has no node for: "
+                    + ", ".join(match.stage.title for match in plan.unsupported)
+                    + ". Tell the user plainly instead of improvising."
+                )
+        return "\n".join(lines)
+
+    def _node_block(self) -> str:
+        """The complete node vocabulary, so no node can be unknown."""
+        try:
+            return "\n## Node knowledge\n" + node_awareness_prompt(
+                query=getattr(self.task, "objective", "") or ""
+            )
+        except Exception:  # noqa: BLE001 - registry trouble must not fail a run
+            _LOG.exception("Node awareness block failed")
+            return ""
+
+    def _emit_plan(self, emit: EventCallback, *, reason: str = "") -> None:
+        """Publish the current plan so the UI can show live progress."""
+        payload = self.task.todos.to_dict()
+        payload.update(
+            {
+                "reason": reason,
+                "workflow": self.task.workflow_title,
+                "because": self.task.workflow_rationale,
+            }
+        )
+        emit(
+            AgentEvent(
+                AgentEventKind.PLAN,
+                self.task.todos.headline(),
+                payload=payload,
+            )
+        )
+
+    # ------------------------------------------------------------------
+    # Layout and completion
+    # ------------------------------------------------------------------
+
+    def _auto_layout_new_nodes(
+        self,
+        transaction: AIEditTransaction,
+        initial_node_ids: set[str],
+        result: RunResult,
+        stopped: StopCallback,
+    ) -> bool:
+        """Arrange the nodes this run created, leaving everything else alone.
+
+        Only nodes that did not exist when the run started are moved, so a
+        workflow the assistant builds lands in a readable left-to-right order
+        while the user's own layout survives untouched. The move is recorded in
+        the same transaction, so it stays part of the one undo step.
+        """
+        if result.error or result.cancelled or stopped():
+            return False
+        if not transaction.is_open:
+            return False
+        project = self.host.project
+        created = set(project.nodes) - initial_node_ids
+        if not created:
+            return False
+        try:
+            moves = layout_new_nodes(project, created)
+        except Exception:  # noqa: BLE001 - a layout bug must not fail a run
+            _LOG.exception("Automatic layout failed")
+            return False
+        before = {
+            node_id: (
+                float(project.nodes[node_id].x),
+                float(project.nodes[node_id].y),
+            )
+            for node_id in moves
+            if node_id in project.nodes
+        }
+        if not before:
+            return False
+        applied = transaction.apply(
+            project,
+            MoveNodesCommand(before, moves),
+            action=f"~ Arrange {len(moves)} node(s)",
+            changed_node_ids=list(moves),
+        )
+        if applied:
+            self._organised_layout = True
+        return applied
+
+    def _build_summary(
+        self, result: RunResult, *, request_input: str | None
+    ) -> AgentCompletionSummary:
+        """Assemble the authoritative report of what this run changed."""
+        unmet: list[str] = []
+        if not result.error and not request_input:
+            unmet = self.task.unfinished()
+        return build_summary(
+            task=self.task.objective,
+            actions=result.actions,
+            validation=result.validation,
+            errors=list(self.task.errors),
+            unmet=unmet,
+            cancelled=result.cancelled,
+            rolled_back=result.rolled_back,
+            committed=result.committed,
+            error=result.error,
+            workflow=self.task.workflow_key,
+            workflow_title=self.task.workflow_title,
+            because=self.task.workflow_rationale,
+            unsupported_stages=list(self.task.unsupported_stages),
+            plan=self.task.todos.to_dict(),
+        )
+
+    def _compose_final_text(
+        self,
+        result: RunResult,
+        summary: AgentCompletionSummary,
+        request_input: str | None,
+    ) -> str:
+        """The text the user reads for this turn.
+
+        A completed edit always ends with the authoritative change list, built
+        from the commands that really ran rather than from the model's memory
+        of its own actions.
+        """
+        if result.error:
+            return result.text
+        if request_input:
+            return result.text or f"I need one thing before I continue: {request_input}"
+        if not summary.has_changes():
+            return result.text
+        base = (result.text or "").strip()
+        if not base:
+            return summary.to_text()
+        evidence = "\n".join(result.actions) or "\n".join(summary.change_lines())
+        detail = "Applied changes:\n" + evidence
+        if summary.validation_status == "failed":
+            detail += "\nGraph validation reported problems; see the log above."
+        else:
+            detail += "\nGraph validation passed. Changes are undoable as one step."
+        if not summary.status.is_success:
+            detail = f"{summary.status.symbol} {summary.status.label}\n{detail}"
+        return f"{base}\n\n{detail}"
+
     @staticmethod
     def _tool_manifest(specs: list[Any]) -> str:
         lines = ["\n## Available tools"]
@@ -336,6 +534,16 @@ class AgentEngine:
         stopped = should_stop or (lambda: False)
         objective = next((m.content for m in reversed(messages) if m.role == "user"), "")
         self.task.begin(objective)
+        # Recognise the professional workflow before any graph work, so the model
+        # is handed the established approach (already mapped onto real node
+        # types) instead of guessing at node names.
+        # Detection runs for every request: a phrase like "track this graphic
+        # onto the wall" names a workflow even though it contains no obvious
+        # edit verb, and recognising it is what turns it into an edit.
+        self.workflow_plan = self._detect_workflow(objective)
+        if self.workflow_plan is not None:
+            self.task.set_workflow(self.workflow_plan)
+        self._organised_layout = False
         result = RunResult(messages=list(messages), task=self.task)
         initial_node_ids = set(self.host.project.nodes)
         started_at = time.monotonic()
@@ -352,18 +560,33 @@ class AgentEngine:
         # Run-scoped tool state: the source context plus the one-time consent
         # prompt, so a "Ask Every Time" sharing policy is answered once per run
         # rather than once per file read.
-        self.tool_state = {"source": self.source_context}
+        self.tool_state = {
+            "source": self.source_context,
+            "objective": objective,
+            "workflow": (
+                self.workflow_plan.to_dict(detail=False)
+                if self.workflow_plan is not None
+                else None
+            ),
+        }
         if self.source_context is not None and confirm is not None:
             self.tool_state["consent"] = lambda: self._source_consent(confirm, emit)
+        self._emit_plan(emit, reason="Planning")
         system = self._system_prompt(specs)
         native = self.uses_native_tools
         input_schema = {"type": "function", "function": {"name": "task.request_input",
                         "description": "Pause only when essential user information cannot be inferred from context.",
                         "parameters": {"type": "object", "properties": {"question": {"type": "string"}},
                                        "required": ["question"], "additionalProperties": False}}}
-        tool_schemas = [spec.to_openai_schema() for spec in specs] + [input_schema] if native else []
+        plan_schema = {"type": "function", "function": {"name": "task.plan",
+            "description": "Record a multi-step execution plan before acting. Each step is completed only by its named tool succeeding. Do not include steps already completed.",
+            "parameters": {"type": "object", "properties": {"steps": {"type": "array", "items": {
+                "type": "object", "properties": {"description": {"type": "string"}, "tool": {"type": "string"}},
+                "required": ["description", "tool"], "additionalProperties": False}}},
+                "required": ["steps"], "additionalProperties": False}}}
+        tool_schemas = [spec.to_openai_schema() for spec in specs] + [input_schema, plan_schema] if native else []
         if not native:
-            system += "\nAvailable control tool: " + json.dumps(input_schema)
+            system += "\nAvailable control tools: " + json.dumps([input_schema, plan_schema])
         if self.task.requires_edit and not any(spec.mutates for spec in specs):
             blocked_reason = "Editing is unavailable in the current mode or permissions. Enable Assist/Agent mode and the required edit permissions."
 
@@ -375,6 +598,10 @@ class AgentEngine:
 
         try:
             for step in range(self.config.max_steps):
+                if blocked_reason:
+                    result.error = blocked_reason
+                    self.task.completion_reason = "PERMISSION_BOUNDARY"
+                    break
                 if stopped():
                     result.cancelled = True
                     emit(AgentEvent(AgentEventKind.STATUS, "Stopped."))
@@ -459,6 +686,11 @@ class AgentEngine:
 
                 if not calls:
                     unfinished = self.task.unfinished()
+                    current_node_ids = set(self.host.project.nodes)
+                    if self.task.intent == "CREATE" and not current_node_ids - initial_node_ids:
+                        unfinished.append("The requested new node must exist in the project")
+                    if self.task.intent == "DELETE" and not initial_node_ids - current_node_ids:
+                        unfinished.append("The requested node must actually be removed")
                     if self.task.requires_edit and "connect" in self.task.required_operations:
                         created = set(self.host.project.nodes) - initial_node_ids
                         connections = list(self.host.project.connections)
@@ -469,13 +701,14 @@ class AgentEngine:
                                 outgoing = any(c.output_node_id == node_id for c in connections)
                                 if not incoming or not outgoing:
                                     unfinished.append(f"Connect both sides of {node.name}")
+                    self.task.pending_actions = list(unfinished)
                     invalid = self.task.requires_edit and self.task.successful_edit_count > 0 and not result.validation.get("ok")
                     needs_execution = self.task.requires_edit and (self.task.successful_edit_count == 0 or unfinished or invalid)
                     if blocked_reason:
                         result.error = blocked_reason
                         self.task.completion_reason = "PERMISSION_BOUNDARY"
                         break
-                    if needs_execution or is_narration(response.content):
+                    if needs_execution or unfinished or is_narration(response.content):
                         continuation_retries += 1
                         self.task.last_proposed_action = response.content[:2000]
                         emit(AgentEvent(AgentEventKind.STATUS, "Continuing execution; the objective is not complete."))
@@ -529,6 +762,21 @@ class AgentEngine:
                         break
                     if request_input:
                         outcome, mutated = ToolResult.failure("WAITING_FOR_USER", "Execution paused for user input."), False
+                    elif call.name == "task.plan":
+                        steps = call.arguments.get("steps")
+                        valid = isinstance(steps, list) and 0 < len(steps) <= 32 and set(call.arguments) == {"steps"}
+                        valid = valid and all(isinstance(item, dict) and set(item) == {"description", "tool"}
+                            and isinstance(item["description"], str) and item["description"].strip()
+                            and item["tool"] in self._exposed_names for item in steps)
+                        if valid and not self.task.planned_tool_steps:
+                            self.task.planned_tool_steps = [dict(item, done=False) for item in steps]
+                            self.task.pending_actions = [item["description"] for item in steps]
+                            self.task.record_plan(steps)
+                            self._emit_plan(emit, reason="Plan recorded")
+                            outcome = ToolResult(ok=True, summary="Execution plan recorded.", data={"steps": steps})
+                        else:
+                            outcome = ToolResult.failure("INVALID_PLAN", "Provide one initial plan with real available tools; existing unfinished steps cannot be discarded.")
+                        mutated = False
                     elif call.name == "task.request_input":
                         question = call.arguments.get("question")
                         if not isinstance(question, str) or not question.strip() or set(call.arguments) != {"question"}:
@@ -551,6 +799,15 @@ class AgentEngine:
                             self.task.successful_tools.add("node.set_property")
                         self.task.last_changed_node_ids = list(outcome.changed_node_ids)
                         continuation_retries = 0
+                    spec = self.registry.get(call.name)
+                    if outcome.ok and spec and (not spec.mutates or mutated):
+                        for planned in self.task.planned_tool_steps:
+                            if not planned["done"] and planned["tool"] == call.name:
+                                planned["done"] = True
+                                break
+                        if self.task.sync_planned_todos():
+                            self._emit_plan(emit, reason="Step completed")
+                        self.task.pending_actions = self.task.unfinished()
                     if not outcome.ok:
                         self.task.errors.append(outcome.summary)
                         if outcome.error_code in ("USER_DECLINED", "PERMISSION_DENIED", "TOOL_NOT_AVAILABLE", "READ_ONLY_MODE"):
@@ -590,6 +847,8 @@ class AgentEngine:
                     report = validate_project(self.host.project)
                     payload = report.to_dict()
                     result.validation = payload
+                    if report.ok and self.task.mark("Validated the graph"):
+                        self._emit_plan(emit, reason="Validated")
                     emit(
                         AgentEvent(
                             AgentEventKind.VALIDATION,
@@ -657,6 +916,18 @@ class AgentEngine:
             self.task.status = TaskStatus.FAILED
             self.task.completion_reason = self.task.completion_reason or "EXECUTION_FAILED"
             self.task.errors.append(result.error)
+        # Layout runs before the transaction resolves, so the arrangement is
+        # part of the same single undo step and never moves the user's nodes.
+        organised = self._auto_layout_new_nodes(
+            transaction, initial_node_ids, result, stopped
+        )
+        self.task.sync_todos(
+            validation_ok=bool(result.validation.get("ok")),
+            organised=organised,
+        )
+        if organised and self.task.mark("Organised the layout"):
+            self._emit_plan(emit, reason="Organised")
+
         result.text = final_text
         self._finish(transaction, result, confirm, emit, stopped)
         if not result.error and not result.cancelled and not result.rolled_back and not request_input:
@@ -666,12 +937,25 @@ class AgentEngine:
         if result.error:
             self.task.status = TaskStatus.FAILED
             self.task.completion_reason = self.task.completion_reason or "EXECUTION_FAILED"
-        if result.committed:
-            evidence = "\n".join(result.actions)
-            result.text = (result.text + "\n\n" if result.text else "") + "Applied changes:\n" + evidence + "\nGraph validation passed. Changes are undoable as one step."
+        summary = self._build_summary(result, request_input=request_input)
+        result.summary = summary
+        result.text = self._compose_final_text(result, summary, request_input)
+        emit(
+            AgentEvent(
+                AgentEventKind.SUMMARY,
+                summary.status.label,
+                payload=summary.to_dict(),
+            )
+        )
+        self.task.finish_todos(
+            success=summary.status.is_success,
+            reason=summary.status_detail,
+        )
+        self._emit_plan(emit, reason="Finished")
         if result.text:
             emit(AgentEvent(AgentEventKind.TEXT, result.text))
         if result.error or result.cancelled or result.rolled_back:
+            self.task.last_changed_node_ids = [node_id for node_id in self.task.last_changed_node_ids if node_id in self.host.project.nodes]
             history = list(messages)
         if result.text:
             history.append(ChatMessage(role="assistant", content=result.text))
@@ -702,7 +986,16 @@ class AgentEngine:
             if not transaction.is_empty:
                 transaction.rollback(self.host.project)
                 result.rolled_back = True
-            result.text = result.text if self.task.status is TaskStatus.WAITING_FOR_USER else (result.error or "Stopped. Incomplete changes were rolled back.")
+            if self.task.status is TaskStatus.WAITING_FOR_USER:
+                # The question itself is the turn's answer.
+                pass
+            elif result.error:
+                # Failures travel on the ERROR event, which the UI renders as an
+                # error card. Leaving result.text empty keeps the same message
+                # from appearing twice in the transcript.
+                result.text = ""
+            else:
+                result.text = "Stopped. Incomplete changes were rolled back."
             return
         if not transaction.is_empty:
             report = validate_project(self.host.project)
@@ -711,7 +1004,8 @@ class AgentEngine:
                 transaction.rollback(self.host.project)
                 result.rolled_back = True
                 result.error = "Graph validation failed. Changes were rolled back."
-                result.text = result.error
+                emit(AgentEvent(AgentEventKind.ERROR, result.error))
+                result.text = ""
                 return
         if transaction.is_empty:
             emit(AgentEvent(AgentEventKind.DONE, result.text, payload={"committed": False}))
@@ -733,7 +1027,8 @@ class AgentEngine:
             transaction.rollback(self.host.project)
             result.rolled_back = True
             result.error = "Changes require approval, but no confirmation handler is available."
-            result.text = result.error
+            emit(AgentEvent(AgentEventKind.ERROR, result.error))
+            result.text = ""
             return
         if needs_confirmation and confirm is not None:
             pending = PendingChanges(
@@ -965,16 +1260,6 @@ class AgentEngine:
         except Exception:  # noqa: BLE001 - a failed prompt must refuse, not raise
             return False
 
-    def _emit_answer(self, text: str, emit: EventCallback) -> None:
-        """Show the assistant's answer unless it already streamed to the panel.
-
-        Streaming and the end-of-turn emit describe the *same* text, so
-        emitting both is what made replies appear twice in the transcript.
-        """
-        if not text or self._streamed_text:
-            return
-        emit(AgentEvent(AgentEventKind.TEXT, text))
-
     def _generate(
         self,
         history: list[ChatMessage],
@@ -1000,18 +1285,15 @@ class AgentEngine:
             tools=tool_schemas if native else [],
             temperature=self.config.temperature,
             max_tokens=self.config.max_output_tokens,
-            json_mode=not native,
+            json_mode=not native and self.capabilities.supports_json,
         )
 
         if stopped():
             raise CancelledError("Stopped before the next model call.")
 
-        self._streamed_text = False
         stream_callback = None
-        # Only native tool runs stream: their text deltas are the assistant's
-        # actual words. Structured-protocol models stream raw JSON, which would
-        # show up as {"type":"tool_call",...} in the transcript, so those are
-        # rendered once from the parsed reply instead.
+        # Native streaming stays cancellable, but provisional text is held
+        # until completion checks and transaction approval have succeeded.
         if self.config.stream and native:
             def _emit_token(fragment: str) -> None:
                 if fragment:

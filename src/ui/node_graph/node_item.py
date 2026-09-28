@@ -485,9 +485,15 @@ class NodeItem(QGraphicsRectItem):
         super().hoverMoveEvent(event)
 
     def hoverLeaveEvent(self, event: QGraphicsSceneHoverEvent | None) -> None:
+        # Exactly one definition on purpose. A second ``hoverLeaveEvent``
+        # further down the class would silently replace this one, leaving the
+        # port tooltip timer running and the text on screen after the pointer
+        # left the node.
         self._tooltip_timer.stop()
         self._tooltip_port = None
         QToolTip.hideText()
+        self.is_hovered = False
+        self.update()
         if event is not None:
             super().hoverLeaveEvent(event)
 
@@ -560,11 +566,6 @@ class NodeItem(QGraphicsRectItem):
         self.is_hovered = True
         self.update()
         super().hoverEnterEvent(event)
-
-    def hoverLeaveEvent(self, event: QGraphicsSceneHoverEvent | None) -> None:
-        self.is_hovered = False
-        self.update()
-        super().hoverLeaveEvent(event)
 
     def _capture_drag_origins(self) -> None:
         selected = self._selected_node_items()

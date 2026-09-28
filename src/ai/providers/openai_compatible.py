@@ -215,6 +215,9 @@ class OpenAICompatibleProvider(AIProvider):
 
 
     def build_payload(self, request: ChatRequest, *, stream: bool) -> dict[str, Any]:
+        from ai.providers.wire import tool_names
+        from copy import deepcopy
+        self._wire_tools = tool_names(request)
         payload: dict[str, Any] = {
             "model": request.model,
             "messages": self._messages(request),
@@ -222,8 +225,13 @@ class OpenAICompatibleProvider(AIProvider):
             "max_tokens": request.max_tokens,
             "stream": stream,
         }
+        for message in payload["messages"]:
+            for call in message.get("tool_calls", []):
+                call["function"]["name"] = call["function"]["name"].replace(".", "__")
         if request.tools:
-            payload["tools"] = request.tools
+            payload["tools"] = deepcopy(request.tools)
+            for tool in payload["tools"]:
+                tool["function"]["name"] = tool["function"]["name"].replace(".", "__")
             payload["tool_choice"] = request.tool_choice
         if request.json_mode:
             payload["response_format"] = {"type": "json_object"}
@@ -276,6 +284,8 @@ class OpenAICompatibleProvider(AIProvider):
         message = choice.get("message") if isinstance(choice.get("message"), dict) else {}
         content = _as_text(message.get("content"))
         tool_calls = self._parse_tool_calls(message.get("tool_calls"))
+        for call in tool_calls:
+            call.name = getattr(self, "_wire_tools", {}).get(call.name, call.name)
         return ChatResponse(
             content=content,
             tool_calls=tool_calls,
@@ -341,9 +351,12 @@ class OpenAICompatibleProvider(AIProvider):
 
         if not completed:
             raise ProviderResponseError("Provider stream ended before completion.")
+        calls = _finalise_tool_calls(tool_fragments)
+        for call in calls:
+            call.name = getattr(self, "_wire_tools", {}).get(call.name, call.name)
         return ChatResponse(
             content="".join(content_parts),
-            tool_calls=_finalise_tool_calls(tool_fragments),
+            tool_calls=calls,
             finish_reason=finish_reason,
             usage=usage,
         )

@@ -81,6 +81,7 @@ class Transport:
         self.stream_idle_timeout = 60.0
         self.user_agent = user_agent
         self.should_stop = None
+        self.debug_logging = False
         self.allow_insecure_http = False
         self.opener = urllib.request.build_opener(_NoRedirect())
 
@@ -92,6 +93,12 @@ class Transport:
         merged = {"Content-Type": "application/json", "Accept": "application/json",
                   "User-Agent": self.user_agent}
         merged.update(headers)
+        if self.debug_logging:
+            from utils.logging_setup import get_logger
+            get_logger("ai.http").debug("%s %s headers=%s stream=%s messages=%d",
+                "POST" if payload is not None else "GET", url,
+                {name: "[REDACTED]" for name in headers},
+                (payload or {}).get("stream", False), len((payload or {}).get("messages", [])))
         return urllib.request.Request(url, data=json.dumps(payload).encode() if payload is not None else None,
                                       headers=merged, method="POST" if payload is not None else "GET")
 
@@ -100,9 +107,12 @@ class Transport:
         import threading
         import time
         from ai.errors import CancelledError
+        if self.should_stop and self.should_stop():
+            raise CancelledError("Request cancelled before sending.")
         request = self._request(url, payload, headers)
         events = queue.Queue(maxsize=64)
         abandoned = threading.Event()
+        active_socket = []
         def emit(item):
             while not abandoned.is_set():
                 try:
@@ -115,7 +125,8 @@ class Transport:
                 with self.opener.open(request, timeout=min(self.connect_timeout, self.timeout)) as response:
                     # urllib uses a socket timeout; the consumer also enforces total and idle deadlines.
                     try:
-                        response.fp.raw._sock.settimeout(self.stream_idle_timeout if streaming else self.timeout)
+                        active_socket.append(response.fp.raw._sock)
+                        active_socket[-1].settimeout(self.stream_idle_timeout if streaming else self.timeout)
                     except AttributeError:
                         pass
                     if streaming:
@@ -152,6 +163,11 @@ class Transport:
                 yield value
         finally:
             abandoned.set()
+            for connection in active_socket:
+                try:
+                    connection.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
 
     def post_json(self, url, payload, headers=None):
         return self._json(url, payload, headers or {})
@@ -179,13 +195,14 @@ class Transport:
     def _http_error(exc, headers=None):
         detail = ""
         try:
-            detail = _extract_message(json.loads(exc.read(8192)))[:400]
+            detail = _extract_message(json.loads(exc.read(8192)))
         except Exception:
             pass
         for value in (headers or {}).values():
             for secret in (value, value.removeprefix("Bearer ")):
                 if secret:
                     detail = detail.replace(secret, "[REDACTED]")
+        detail = detail[:400]
         status = exc.code
         message = f"Provider returned HTTP {status}." + (f" {detail}" if detail else "")
         if status in (401, 403):
@@ -265,7 +282,7 @@ class AIProvider:
 
     @property
     def is_local(self) -> bool:
-        return bool(self.config.is_local and is_loopback(self.config.base_url))
+        return self.config.scope == "LOCAL"
 
     @property
     def scope(self) -> str:

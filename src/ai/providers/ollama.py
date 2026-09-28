@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from urllib.parse import urlsplit
 
 from ai.providers.auth import BearerAuth
 from ai.errors import ProviderResponseError, ProviderUnavailableError
@@ -24,8 +25,6 @@ class OllamaProvider(AIProvider):
 
     def capabilities(self, model: str | None = None) -> ProviderCapabilities:
         declared = self.config.capabilities()
-        if self.config.supports_tools is not None:
-            return declared
         name = (model or self.config.model or "").lower()
         # Native tool support varies by model/template. Unknown models use the
         # validated structured protocol unless the user explicitly enables tools.
@@ -34,10 +33,12 @@ class OllamaProvider(AIProvider):
             marker in name for marker in ("llava", "vision", "vl", "minicpm-v", "moondream")
         )
         return ProviderCapabilities(
-            supports_tools=tools,
-            supports_vision=vision,
-            supports_json=True,
-            context_window=8192,
+            supports_tools=self.config.supports_tools if self.config.supports_tools is not None else tools,
+            supports_vision=self.config.supports_vision if self.config.supports_vision is not None else vision,
+            supports_json=(self.config.connection_mode != "cloud"
+                           and urlsplit(self.config.base_url).hostname != "ollama.com"
+                           and not name.endswith(":cloud")),
+            context_window=self.config.context_length or 8192,
         )
 
     def list_models(self) -> tuple[ModelInfo, ...]:
@@ -134,7 +135,7 @@ class OllamaProvider(AIProvider):
                 "num_predict": request.max_tokens,
             },
         }
-        if request.json_mode:
+        if request.json_mode and self.capabilities(request.model).supports_json:
             payload["format"] = "json"
         if request.tools:
             payload["tools"] = [_to_ollama_tool(schema) for schema in request.tools]

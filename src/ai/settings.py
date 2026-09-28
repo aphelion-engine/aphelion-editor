@@ -74,7 +74,8 @@ class ProviderConfig:
     def scope(self) -> str:
         """``LOCAL`` or ``CLOUD`` for the UI badge."""
         from ai.providers.urls import is_loopback
-        return "LOCAL" if self.is_local and is_loopback(self.base_url) and self.connection_mode != "cloud" else "CLOUD"
+        cloud_model = self.kind == KIND_OLLAMA and self.model.lower().endswith(":cloud")
+        return "LOCAL" if self.is_local and is_loopback(self.base_url) and self.connection_mode != "cloud" and not cloud_model else "CLOUD"
 
     @property
     def credential_key(self) -> str:
@@ -101,7 +102,23 @@ class ProviderConfig:
     # Serialization
     # ------------------------------------------------------------------
 
+    def validate(self) -> None:
+        import re
+        from ai.providers.urls import validate_url
+        validate_url(self.base_url)
+        if not self.model.strip():
+            raise ValueError(f"{self.label}: enter a model name (discovery is optional).")
+        if self.connection_mode not in ("local", "cloud", "custom"):
+            raise ValueError("Unknown provider connection mode.")
+        if self.auth_header and not re.fullmatch(r"[A-Za-z0-9-]+", self.auth_header):
+            raise ValueError("Authentication header must be a valid HTTP header name.")
+        if self.credential_env and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", self.credential_env):
+            raise ValueError("Enter an environment variable name, not its value.")
+
     def to_dict(self) -> dict[str, Any]:
+        import re
+        if any(re.search(r"authorization|api.?key|token|secret|cookie", key, re.I) for key in self.extra_headers):
+            raise ValueError("Store credentials in the secure API key field, not extra headers. Use the authentication header name option for custom headers.")
         return {
             "provider_id": self.provider_id,
             "label": self.label,
@@ -265,7 +282,7 @@ class AISettings:
     permissions: PermissionPolicy = field(default_factory=PermissionPolicy)
     providers: list[ProviderConfig] = field(default_factory=default_providers)
     default_provider_id: str = ""
-    max_agent_steps: int = 32
+    max_agent_steps: int = 48
     request_timeout_seconds: float = 120.0
     stream: bool = True
     temperature: float = 0.2
@@ -392,7 +409,7 @@ class AISettings:
             providers=providers,
             default_provider_id=str(data.get("default_provider_id", "")),
             max_agent_steps=max(
-                1, min(64, int(data.get("max_agent_steps", 32) or 32))
+                1, min(64, int(data.get("max_agent_steps", 48) or 48))
             ),
             request_timeout_seconds=max(
                 5.0,
@@ -484,6 +501,8 @@ class AISettingsStore:
         """
         path = self._path
         ensure_directory(path.parent)
+        for provider in self.settings.enabled_providers():
+            provider.validate()
         payload = self.settings.to_dict()
         text = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
         handle, temporary_name = tempfile.mkstemp(

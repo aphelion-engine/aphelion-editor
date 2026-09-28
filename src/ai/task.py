@@ -3,6 +3,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 import re
 
+from ai.plan import StepStatus, TodoList, plan_titles
+
 
 class TaskStatus(str, Enum):
     PLANNING = "PLANNING"
@@ -56,12 +58,23 @@ class AgentTask:
     registry_signature: tuple = field(default_factory=tuple, repr=False)
     required_operations: set[str] = field(default_factory=set)
     successful_tools: set[str] = field(default_factory=set)
+    planned_tool_steps: list[dict] = field(default_factory=list)
+    #: The visible plan: an explicit, status-carrying todo list the UI renders.
+    todos: TodoList = field(default_factory=TodoList)
+    #: The professional workflow this request was recognised as, if any.
+    workflow_key: str = ""
+    workflow_title: str = ""
+    workflow_rationale: str = ""
+    workflow_stages: list[str] = field(default_factory=list)
+    unsupported_stages: list[str] = field(default_factory=list)
 
     @property
     def requires_edit(self):
         return self.intent not in ("QUESTION", "INSPECT")
 
     def begin(self, objective):
+        if self.status is TaskStatus.WAITING_FOR_USER and self.requires_edit and classify_intent(objective) in ("QUESTION", "INSPECT"):
+            objective = self.objective + "\nUser clarification: " + objective
         self.objective = objective
         self.intent = classify_intent(objective)
         self.status = TaskStatus.PLANNING
@@ -69,7 +82,26 @@ class AgentTask:
         self.completed_actions = []
         self.errors = []
         self.successful_tools = set()
+        self.planned_tool_steps = []
+        self.workflow_key = ""
+        self.workflow_title = ""
+        self.workflow_rationale = ""
+        self.workflow_stages = []
+        self.unsupported_stages = []
+        self.todos.replace(
+            plan_titles(needs_edit=self.requires_edit, workflow=False)
+        )
         self.completion_reason = ""
+        self._infer_operations(objective)
+        self.plan = ["Inspect relevant context", "Execute requested changes", "Validate result"] if self.requires_edit else ["Inspect and answer"]
+        self.pending_actions = list(self.plan)
+
+    def _infer_operations(self, objective):
+        """Work out which classes of edit this objective implies.
+
+        These are the operations the run must actually perform before it may
+        call itself complete; the model's own word is not enough.
+        """
         self.required_operations = set()
         if self.intent == "CREATE":
             self.required_operations.add("create")
@@ -79,17 +111,115 @@ class AgentTask:
             self.required_operations.add("connect")
         if self.requires_edit and re.search(r"\b(cinematic|contrast|exposure|saturation|accurate|accuracy|stronger|property|properties|configure)\b", objective, re.I):
             self.required_operations.add("configure")
-        self.plan = ["Inspect relevant context", "Execute requested changes", "Validate result"] if self.requires_edit else ["Inspect and answer"]
+
+    def set_workflow(self, plan):
+        """Record the recognised professional workflow and re-plan around it.
+
+        The first two steps are completed here because resolving the workflow
+        *is* that work: the engine identified how professionals do it, then
+        mapped every stage onto real registered node types.
+        """
+        if not self.requires_edit:
+            # Naming an established workflow *is* a request to build it, even
+            # when the wording contains no obvious edit verb ("track this
+            # graphic onto the wall"). Promote the intent so the run is treated
+            # as the edit it really is.
+            self.intent = "EDIT"
+        self.workflow_key = plan.recipe.key
+        self.workflow_title = plan.recipe.title
+        self.workflow_rationale = plan.recipe.rationale
+        self.workflow_stages = [match.stage.title for match in plan.matches]
+        self.unsupported_stages = [match.stage.title for match in plan.unsupported]
+        self._infer_operations(self.objective)
+        # A recognised workflow always means the run must actually create the
+        # nodes for its stages, whatever the wording of the request suggested.
+        self.required_operations.add("create")
+        self.plan = list(plan_titles(needs_edit=True, workflow=True))
+        self.todos.replace(self.plan)
         self.pending_actions = list(self.plan)
+        self.todos.complete(self.plan[0])
+        self.todos.complete(self.plan[1])
+        self.todos.activate_first()
+
+    def record_plan(self, steps):
+        """Adopt a plan the model recorded through the ``task.plan`` tool.
+
+        When a professional workflow is already established its understanding
+        stages are kept at the head of the list, because the engine really did
+        perform them before the model proposed its own steps.
+        """
+        titles = [str(step["description"]) for step in steps]
+        if self.workflow_key:
+            understanding = list(plan_titles(needs_edit=True, workflow=True))[:2]
+            titles = [title for title in understanding if title not in titles] + titles
+        self.todos.replace(titles)
+        if self.workflow_key:
+            for title in plan_titles(needs_edit=True, workflow=True)[:2]:
+                self.todos.complete(title)
+        self.todos.activate_first()
+        self.plan = list(titles)
+
+    def mark(self, title, *, status: StepStatus = StepStatus.DONE) -> bool:
+        """Set the status of one todo step by title.
+
+        Returns:
+            Whether a step changed, so the caller only republishes the plan
+            when something actually moved.
+        """
+        step = self.todos.get(title)
+        if step is None or step.status is status:
+            return False
+        step.status = status
+        if status is StepStatus.DONE:
+            self.todos.activate_first()
+        return True
+
+    def sync_planned_todos(self) -> int:
+        """Mirror completed ``task.plan`` steps into the visible todo list."""
+        changed = 0
+        for planned in self.planned_tool_steps:
+            if planned.get("done") and self.mark(str(planned["description"])):
+                changed += 1
+        return changed
+
+    def sync_todos(self, *, validation_ok: bool = False, organised: bool = False) -> None:
+        """Advance the visible plan from operations that actually succeeded."""
+        tools = self.successful_tools
+        if tools & {"node.create", "node.duplicate", "graph.import"}:
+            self.mark("Built the nodes")
+        if tools & {
+            "node.set_property",
+            "node.set_properties",
+            "tracking.configure",
+            "project.update_settings",
+        }:
+            self.mark("Configured their properties")
+        if tools & {"connection.connect", "graph.connect", "connection.create"}:
+            self.mark("Connected the chain")
+        if validation_ok:
+            self.mark("Validated the graph")
+        if organised:
+            self.mark("Organised the layout")
+
+    def finish_todos(self, *, success: bool, reason: str = "") -> None:
+        """Close out the plan once the run has resolved."""
+        if success:
+            for step in self.todos.unfinished():
+                step.status = StepStatus.DONE
+        else:
+            self.todos.fail_remaining(reason or "The task did not finish.")
 
     def unfinished(self):
         categories = {"create": {"node.create", "graph.import"},
                       "delete": {"node.delete", "node.remove"},
                       "connect": {"connection.connect", "connection.create", "graph.connect"},
                       "configure": {"node.set_property", "node.set_properties", "tracking.configure"}}
-        return sorted(name for name in self.required_operations if not self.successful_tools.intersection(categories[name]))
+        missing = sorted(name for name in self.required_operations if not self.successful_tools.intersection(categories[name]))
+        missing.extend(step["description"] for step in self.planned_tool_steps if not step["done"])
+        return missing
 
     def diagnostics(self):
         return {"turn_type": self.intent, "status": self.status.value,
                 "agent_steps": self.current_step, "successful_edits": self.successful_edit_count,
-                "completion_reason": self.completion_reason, "pending_actions": list(self.pending_actions)}
+                "completion_reason": self.completion_reason, "pending_actions": list(self.pending_actions),
+                "todos": self.todos.to_dict(), "workflow": self.workflow_key}

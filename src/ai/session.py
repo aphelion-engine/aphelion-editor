@@ -120,11 +120,13 @@ class AssistantSession:
             raise ProviderError(
                 "No AI provider is enabled. Enable one in Preferences → AI."
             )
-        return create_provider(
+        provider = create_provider(
             config,
             credentials=self.credentials,
             timeout=self.settings.request_timeout_seconds,
         )
+        provider.transport.debug_logging = self.settings.verbose_logging
+        return provider
 
     def capabilities(self) -> Any:
         from ai.types import ProviderCapabilities
@@ -333,6 +335,7 @@ class AssistantSession:
         """Run one turn. Never raises; failures arrive as events."""
         emit = on_event or (lambda _event: None)
         expanded, mentioned = self.expand_input(text)
+        self._retry_messages = list(self.messages)
         self.turns.append(StoredMessage(role="user", content=text, timestamp=time.time()))
 
         if not self.settings.enabled:

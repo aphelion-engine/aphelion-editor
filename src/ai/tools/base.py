@@ -411,7 +411,8 @@ def build_default_registry() -> ToolRegistry:
     """Build the full tool set from the individual tool modules."""
     from ai.tools import (connection_tools, graph_tools, node_tools,
                           project_tools, selection_tools, source_tools,
-                          timeline_tools, tracking_tools, vision_tools)
+                          timeline_tools, tracking_tools, vision_tools,
+                          workflow_tools)
 
     registry = ToolRegistry()
     for module in (
@@ -424,6 +425,7 @@ def build_default_registry() -> ToolRegistry:
         timeline_tools,
         vision_tools,
         source_tools,
+        workflow_tools,
     ):
         module.register_tools(registry)
     return registry

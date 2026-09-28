@@ -33,6 +33,8 @@ class AnthropicProvider(AIProvider):
             return super().list_models()
 
     def build_payload(self, request, *, stream):
+        from ai.providers.wire import tool_names
+        self._wire_tools = tool_names(request)
         messages = []
         for msg in request.messages:
             blocks = []
@@ -49,7 +51,7 @@ class AnthropicProvider(AIProvider):
                         source = {"type": "url", "url": image}
                     blocks.append({"type": "image", "source": source})
                 for call in msg.tool_calls:
-                    blocks.append({"type": "tool_use", "id": call.call_id, "name": call.name, "input": call.arguments})
+                    blocks.append({"type": "tool_use", "id": call.call_id, "name": call.name.replace(".", "__"), "input": call.arguments})
             role = "assistant" if msg.role == "assistant" else "user"
             if blocks:
                 if messages and messages[-1]["role"] == role:
@@ -63,7 +65,7 @@ class AnthropicProvider(AIProvider):
         if request.system:
             payload["system"] = request.system
         if request.tools:
-            payload["tools"] = [{"name": t["function"]["name"],
+            payload["tools"] = [{"name": t["function"]["name"].replace(".", "__"),
                                  "description": t["function"].get("description", ""),
                                  "input_schema": t["function"].get("parameters", {})} for t in request.tools]
         return payload
@@ -71,7 +73,7 @@ class AnthropicProvider(AIProvider):
     def _parse(self, data):
         if data.get("type") == "error" or not isinstance(data.get("content"), list):
             raise ProviderResponseError("Anthropic returned an invalid message or API error.")
-        calls = [ToolCall(name=b["name"], arguments=b["input"], call_id=b["id"])
+        calls = [ToolCall(name=getattr(self, "_wire_tools", {}).get(b["name"], b["name"]), arguments=b["input"], call_id=b["id"])
                  for b in data["content"] if b.get("type") == "tool_use"]
         usage = data.get("usage", {})
         prompt, output = usage.get("input_tokens", 0), usage.get("output_tokens", 0)

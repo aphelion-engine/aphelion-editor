@@ -19,6 +19,7 @@ from typing import Any
 from ai.settings import AISettingsStore
 from ai.credentials import CredentialStore
 from ai.session import AssistantSession, SLASH_COMMANDS
+from ai.summary import AgentCompletionSummary
 from ai.types import AgentEvent, AgentEventKind, AgentMode, PendingChanges
 from ai.ui.action_view import ActionLogView
 from ai.ui.changes_dialog import ChangesPreviewDialog, describe_region_proposal
@@ -34,6 +35,24 @@ from PyQt6.QtWidgets import (QComboBox, QCompleter, QFrame, QHBoxLayout,
 _DRAIN_INTERVAL_MS: int = 55
 #: Seconds the worker waits for a user decision before declining.
 _CONFIRM_TIMEOUT_S: float = 600.0
+
+#: Completion-card colours per completion state: (background, accent).
+_STATUS_COLORS: dict[str, tuple[str, str]] = {
+    "completed": ("#1d3124", "#8fe0a8"),
+    "completed_with_warnings": ("#332c1c", "#f0d894"),
+    "partially_completed": ("#332c1c", "#f0d894"),
+    "failed": ("#3a2424", "#f0b0b0"),
+    "cancelled": ("#282b33", "#c8ccd4"),
+}
+
+#: Plan-step glyphs, mirroring :class:`ai.plan.StepStatus`.
+_STEP_SYMBOLS: dict[str, str] = {
+    "pending": "○",
+    "active": "●",
+    "done": "✓",
+    "failed": "✕",
+    "skipped": "–",
+}
 
 
 class PromptEdit(QPlainTextEdit):
@@ -150,6 +169,8 @@ class AIPanel(QWidget):
         self._stream_buffer: list[str] = []
         self._streaming_block = False
         self._pending_call: dict[str, Any] = {}
+        #: Latest plan published by the engine, rendered into the completion card.
+        self._plan_payload: dict[str, Any] = {}
         self._confirm_event: threading.Event | None = None
         self._confirm_result: bool = False
         self._action_times: dict[str, float] = {}
@@ -300,6 +321,12 @@ class AIPanel(QWidget):
         self._set_activity_summary()
         return section
 
+    def _begin_turn(self) -> None:
+        """Reset per-turn state so the next turn starts clean."""
+        self._plan_payload = {}
+        self._reset_activity()
+        self._refresh_undo_action()
+
     def _on_activity_toggled(self, expanded: bool) -> None:
         self.activity.setVisible(expanded)
         self._activity_toggle.setArrowType(
@@ -348,6 +375,12 @@ class AIPanel(QWidget):
         self._retry_action = menu.addAction("Retry last request")
         self._retry_action.setEnabled(False)
         self._retry_action.triggered.connect(lambda: self.retry())
+        self._undo_action = menu.addAction("Undo AI changes")
+        self._undo_action.setEnabled(False)
+        self._undo_action.setToolTip(
+            "Undo the assistant's most recent change as a single step."
+        )
+        self._undo_action.triggered.connect(self.undo_ai_changes)
         menu.addSeparator()
         self._context_action = menu.addAction("Show AI context…")
         self._context_action.setToolTip(
@@ -634,6 +667,7 @@ class AIPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _start_worker(self, worker: AgentWorker) -> None:
+        self._begin_turn()
         self._worker = worker
         worker.start()
 
@@ -682,6 +716,7 @@ class AIPanel(QWidget):
     def _on_run_finished(self, result: Any) -> None:
         self._worker = None
         self._flush_stream()
+        self._refresh_undo_action()
         if getattr(result, "error", ""):
             self._append_system_note(f"Error: {result.error}")
             self._status.setText("Failed — see the note above")
@@ -716,6 +751,9 @@ class AIPanel(QWidget):
         if kind is AgentEventKind.STATUS:
             self._flush_stream()
             self._status.setText(event.text or "Working…")
+            self.activity.add_status(event.text)
+            if event.payload and self.settings_store.settings.verbose_logging:
+                self.activity.add_status(str(event.payload))
             return
         if kind is AgentEventKind.TOOL_START and event.tool_call is not None:
             self._flush_stream()
@@ -762,6 +800,18 @@ class AIPanel(QWidget):
             return
         if kind is AgentEventKind.PENDING_CHANGES:
             self._flush_stream()
+            return
+        if kind is AgentEventKind.PLAN:
+            # Live progress belongs in the status line and the collapsed
+            # activity section, not as a new message per step.
+            self._flush_stream()
+            self._plan_payload = dict(event.payload or {})
+            if event.text:
+                self._status.setText(f"{event.text}")
+            return
+        if kind is AgentEventKind.SUMMARY:
+            self._flush_stream()
+            self._append_summary_card(dict(event.payload or {}))
             return
         if kind is AgentEventKind.ERROR:
             self._flush_stream()
@@ -838,6 +888,126 @@ class AIPanel(QWidget):
             f'color:#f0c0c0;">{html.escape(text)}</div>'
         )
         self._scroll_to_end()
+
+    # ------------------------------------------------------------------
+    # Completion card
+    # ------------------------------------------------------------------
+
+    def _append_summary_card(self, payload: dict[str, Any]) -> None:
+        """Render the completion report for a finished turn.
+
+        The card is built from the engine's structured summary, so it states
+        what really changed and distinguishes finished, finished-with-warnings,
+        partial, failed, and cancelled runs instead of always claiming success.
+        """
+        if not payload:
+            return
+        try:
+            summary = AgentCompletionSummary.from_dict(payload)
+        except Exception:  # noqa: BLE001 - a card must never break the panel
+            return
+
+        background, accent = _STATUS_COLORS.get(
+            summary.status.value, ("#22262e", "#e8ecf1")
+        )
+        heading = f"{summary.status.symbol} {html.escape(summary.status.label)}"
+        subject = summary.workflow_title or summary.task
+        if subject:
+            heading += f" — {html.escape(subject)}"
+        rows: list[str] = [
+            f'<div style="font-weight:600;color:{accent};">{heading}</div>'
+        ]
+        if summary.because:
+            rows.append(
+                '<div style="margin-top:4px;color:#c8ccd4;">'
+                f"{html.escape(summary.because)}</div>"
+            )
+        lines = summary.change_lines(limit=12)
+        if lines:
+            rows.append(
+                '<div style="margin-top:6px;">'
+                + "<br>".join(f"• {html.escape(line)}" for line in lines)
+                + "</div>"
+            )
+        if summary.warnings:
+            rows.append(
+                '<div style="margin-top:6px;color:#f0d894;">'
+                + "<br>".join(f"! {html.escape(item)}" for item in summary.warnings)
+                + "</div>"
+            )
+        if summary.unmet:
+            rows.append(
+                '<div style="margin-top:6px;color:#f0d894;">'
+                + "<br>".join(f"○ {html.escape(item)}" for item in summary.unmet)
+                + "</div>"
+            )
+        checklist = self._plan_checklist()
+        if checklist:
+            rows.append(
+                '<div style="margin-top:8px;color:#9aa2ae;">Plan</div>'
+                f"<div>{checklist}</div>"
+            )
+        footer = self._summary_footer(summary)
+        if footer:
+            rows.append(f'<div style="margin-top:8px;color:#9aa2ae;">{footer}</div>')
+
+        self._append_html(
+            '<div style="margin:10px 0;padding:8px 10px;'
+            f'background:{background};border-radius:6px;">'
+            + "".join(rows)
+            + "</div>"
+        )
+        self._scroll_to_end()
+        self._refresh_undo_action()
+
+    def _plan_checklist(self) -> str:
+        """The turn's plan as a checklist, or an empty string."""
+        steps = (self._plan_payload or {}).get("steps") or []
+        rows = [
+            f"{_STEP_SYMBOLS.get(str(step.get('status', '')), '○')} "
+            f"{html.escape(str(step.get('title', '')))}"
+            for step in steps
+            if isinstance(step, dict)
+        ]
+        return "<br>".join(rows)
+
+    def _summary_footer(self, summary: AgentCompletionSummary) -> str:
+        parts: list[str] = []
+        if summary.validation_status == "passed":
+            parts.append("Validation passed")
+        elif summary.validation_status == "failed":
+            parts.append("Validation failed")
+        if summary.rolled_back:
+            parts.append("Rolled back — the project is unchanged")
+        if summary.committed:
+            parts.append("Undo with Ctrl+Z or ⋯ → Undo AI changes")
+        return " · ".join(parts)
+
+    def _refresh_undo_action(self) -> None:
+        """Enable Undo AI changes only when an assistant step is on top."""
+        enabled = False
+        history = getattr(self.session.host, "history", None)
+        if history is not None:
+            try:
+                label = history.undo_text or ""
+                enabled = bool(history.can_undo) and label.startswith("AI:")
+            except Exception:  # noqa: BLE001 - history may be mid-change
+                enabled = False
+        self._undo_action.setEnabled(enabled)
+
+    def undo_ai_changes(self) -> None:
+        """Undo the most recent assistant transaction via the editor's history."""
+        history = getattr(self.session.host, "history", None)
+        if history is None:
+            return
+        try:
+            if not (history.can_undo and (history.undo_text or "").startswith("AI:")):
+                return
+            history.undo()
+        except Exception:  # noqa: BLE001 - undo must never crash the panel
+            return
+        self._append_system_note("Undid the assistant's last changes.")
+        self._refresh_undo_action()
 
     def _scroll_to_end(self) -> None:
         bar = self._transcript.verticalScrollBar()

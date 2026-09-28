@@ -349,6 +349,9 @@ class AgentEventKind(str, Enum):
     PLAN = "plan"
     VALIDATION = "validation"
     PENDING_CHANGES = "pending_changes"
+    #: Structured completion report for the turn (what really changed and how
+    #: completely the task finished). Rendered as the completion card.
+    SUMMARY = "summary"
     ERROR = "error"
     DONE = "done"
 

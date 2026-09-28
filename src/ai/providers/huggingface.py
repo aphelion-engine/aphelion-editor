@@ -43,17 +43,11 @@ class HuggingFaceProvider(OpenAICompatibleProvider):
                            "qwen2-vl", "qwen2.5-vl", "internvl", "florence",
                            "moondream", "smolvlm")
         )
-        tools = any(
-            marker in name
-            for marker in ("hermes", "functionary", "mistral-nemo", "qwen",
-                           "llama-3.1", "llama-3.2", "llama-3.3", "llama-4",
-                           "deepseek", "command-r", "granite", "hammer",
-                           "glm-4", "phi-4", "firefunction")
-        )
+        tools = False  # Inference route and model template must both support tools.
         return ProviderCapabilities(
             supports_tools=tools,
             supports_vision=vision,
-            supports_json=True,
+            supports_json=False,
             context_window=16384,
         )
 

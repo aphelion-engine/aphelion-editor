@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from ai.credentials import CredentialStore, mask_secret
+from ai.errors import ProviderError
 from ai.providers.registry import KIND_LABELS, supported_kinds
 from ai.settings import AISettings, AISettingsStore, ProviderConfig
 from ai.types import (ALL_PERMISSIONS, PERMISSION_LABELS, AgentMode,
@@ -215,6 +216,18 @@ class AISettingsWidget(QWidget):
         self._p_env.setPlaceholderText("Optional fallback, e.g. OLLAMA_API_KEY")
         self._p_env.editingFinished.connect(self._on_provider_field_changed)
         form.addRow("API key environment variable", self._p_env)
+        self._p_auth_header = QLineEdit()
+        self._p_auth_header.setPlaceholderText("Compatible APIs only; empty uses Bearer")
+        self._p_auth_header.editingFinished.connect(self._on_provider_field_changed)
+        form.addRow("Custom authentication header", self._p_auth_header)
+        self._p_connect_timeout = QSpinBox()
+        self._p_connect_timeout.setRange(1, 300)
+        self._p_connect_timeout.valueChanged.connect(self._on_provider_field_changed)
+        form.addRow("Connect timeout (seconds)", self._p_connect_timeout)
+        self._p_idle_timeout = QSpinBox()
+        self._p_idle_timeout.setRange(1, 900)
+        self._p_idle_timeout.valueChanged.connect(self._on_provider_field_changed)
+        form.addRow("Stream idle timeout (seconds)", self._p_idle_timeout)
         self._p_http = QCheckBox("Allow credentials over remote HTTP (unencrypted)")
         self._p_http.toggled.connect(self._on_provider_field_changed)
         form.addRow(self._p_http)
@@ -672,6 +685,9 @@ class AISettingsWidget(QWidget):
         self._p_mode.setCurrentIndex(max(0, self._p_mode.findData(config.connection_mode)))
         self._p_mode.setEnabled(config.kind == "ollama")
         self._p_env.setText(config.credential_env)
+        self._p_auth_header.setText(config.auth_header)
+        self._p_connect_timeout.setValue(int(config.connect_timeout))
+        self._p_idle_timeout.setValue(int(config.stream_idle_timeout))
         self._p_http.setChecked(config.allow_insecure_http)
         self._p_model.setText(config.model)
         self._p_context.setValue(int(config.context_length))
@@ -708,6 +724,11 @@ class AISettingsWidget(QWidget):
             self._p_tools,
             self._p_vision,
             self._p_local,
+            self._p_env,
+            self._p_http,
+            self._p_auth_header,
+            self._p_connect_timeout,
+            self._p_idle_timeout,
             self._p_enabled,
         ):
             widget.setEnabled(enabled)
@@ -721,6 +742,9 @@ class AISettingsWidget(QWidget):
         config.base_url = self._p_base.text().strip()
         config.connection_mode = str(self._p_mode.currentData())
         config.credential_env = self._p_env.text().strip()
+        config.auth_header = self._p_auth_header.text().strip()
+        config.connect_timeout = self._p_connect_timeout.value()
+        config.stream_idle_timeout = self._p_idle_timeout.value()
         config.allow_insecure_http = self._p_http.isChecked()
         self._p_mode.setEnabled(config.kind == "ollama")
         config.model = self._p_model.text().strip()
@@ -830,17 +854,19 @@ class AISettingsWidget(QWidget):
     # Commit
     # ------------------------------------------------------------------
 
-    def commit(self, *, save: bool = True) -> None:
+    def commit(self, *, save: bool = True) -> bool:
         """Push the in-memory settings into the store (and optionally to disk)."""
         self._store.settings = self._settings
         if save:
             try:
                 self._store.save()
-            except OSError as exc:  # pragma: no cover - filesystem dependent
+            except (OSError, ValueError, ProviderError) as exc:
                 QMessageBox.warning(
                     self, "AI Settings", f"Could not save AI settings: {exc}"
                 )
+                return False
         self.settings_changed.emit()
+        return True
 
     def settings(self) -> AISettings:
         return self._settings

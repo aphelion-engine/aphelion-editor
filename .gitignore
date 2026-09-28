@@ -29,6 +29,9 @@ logs/
 tests/*
 !tests/test_editor_sdk_extensions.py
 !tests/test_audio_pipeline.py
+!tests/test_ai_execution.py
+!tests/test_ai_providers.py
+!tests/test_ai_ui.py
 .vscode/
 AphelionEditor/
 .pytest_cache/
