@@ -193,6 +193,82 @@ def register_tools(registry: ToolRegistry) -> None:
         )
     )
 
+    registry.register(
+        ToolSpec(
+            name="graph.trace_upstream",
+            description=(
+                "Walk the graph backwards from a node and return everything that "
+                "feeds it, layer by layer, with the port each link uses. Use this "
+                "to understand a chain before changing it, or to find where an "
+                "effect belongs."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "node": {"type": "string", "description": "Node id, name, or 'selected'."},
+                    "depth": {"type": "integer", "description": "How many layers to walk (default 8)."},
+                },
+                "required": ["node"],
+                "additionalProperties": False,
+            },
+            permission=Permission.READ_PROJECT,
+            handler=_trace_upstream,
+            mutates=False,
+            category="Graph",
+        )
+    )
+
+    registry.register(
+        ToolSpec(
+            name="graph.trace_downstream",
+            description=(
+                "Walk the graph forwards from a node and return everything it "
+                "feeds, layer by layer. Use this to check what a change would "
+                "affect."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "node": {"type": "string", "description": "Node id, name, or 'selected'."},
+                    "depth": {"type": "integer", "description": "How many layers to walk (default 8)."},
+                },
+                "required": ["node"],
+                "additionalProperties": False,
+            },
+            permission=Permission.READ_PROJECT,
+            handler=_trace_downstream,
+            mutates=False,
+            category="Graph",
+        )
+    )
+
+    registry.register(
+        ToolSpec(
+            name="graph.find_output_path",
+            description=(
+                "Work out which branch actually reaches the output. Returns the "
+                "active viewer (or Viewer nodes), the nodes that feed it, and any "
+                "nodes that reach no output at all. Check this before editing so "
+                "you change the nodes that matter instead of unused ones; with a "
+                "node argument it also reports that node's path to the output."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "node": {
+                        "type": "string",
+                        "description": "Optional node to trace to the output.",
+                    }
+                },
+                "additionalProperties": False,
+            },
+            permission=Permission.READ_PROJECT,
+            handler=_find_output_path,
+            mutates=False,
+            category="Graph",
+        )
+    )
+
 
 # ======================================================================
 # Handlers
@@ -485,6 +561,182 @@ def _section_positions(
             height = float(getattr(node, "height", 100) or 100)
             y += max(SECTION_ROW_GAP_PX, height + 40.0)
     return positions
+
+
+# ======================================================================
+# Tracing
+# ======================================================================
+
+
+def _adjacency(project: Any) -> tuple[dict[str, list[Any]], dict[str, list[Any]]]:
+    """Return ``(incoming, outgoing)`` connection lists per node."""
+    incoming: dict[str, list[Any]] = {}
+    outgoing: dict[str, list[Any]] = {}
+    for connection in project.connections:
+        incoming.setdefault(connection.input_node_id, []).append(connection)
+        outgoing.setdefault(connection.output_node_id, []).append(connection)
+    return incoming, outgoing
+
+
+def _label(project: Any, node_id: str) -> str:
+    node = project.nodes.get(node_id)
+    return node.name if node is not None else node_id
+
+
+def _walk(
+    project: Any,
+    start: str,
+    *,
+    depth: int,
+    upstream: bool,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Breadth-first walk returning per-link rows and a flow-ordered id list."""
+    incoming, outgoing = _adjacency(project)
+    seen = {start}
+    frontier = [start]
+    rows: list[dict[str, Any]] = []
+    discovered: list[str] = []
+
+    for level in range(1, max(1, depth) + 1):
+        next_frontier: list[str] = []
+        for current in frontier:
+            links = incoming.get(current, []) if upstream else outgoing.get(current, [])
+            for connection in links:
+                other = (
+                    connection.output_node_id if upstream else connection.input_node_id
+                )
+                if other in seen:
+                    continue
+                seen.add(other)
+                next_frontier.append(other)
+                discovered.append(other)
+                node = project.nodes.get(other)
+                rows.append(
+                    {
+                        "level": level,
+                        "node_id": other,
+                        "node": node.name if node is not None else other,
+                        "type": getattr(node, "node_type", ""),
+                        "connected_to": _label(project, current),
+                        "from_port": connection.output_slot if upstream else connection.input_slot,
+                        "to_port": connection.input_slot if upstream else connection.output_slot,
+                    }
+                )
+        if not next_frontier:
+            break
+        frontier = next_frontier
+
+    return rows, discovered
+
+
+def _trace_upstream(ctx: ToolContext) -> ToolResult:
+    node_id, node = resolve_node(ctx, str(ctx.args["node"]))
+    depth = int(ctx.args.get("depth", 8) or 8)
+    rows, discovered = _walk(ctx.project, node_id, depth=depth, upstream=True)
+    # Present sources in build order (furthest first) — the order a person
+    # would read the chain in.
+    chain = list(reversed(discovered)) + [node_id]
+    return ToolResult(
+        ok=True,
+        summary=(
+            f"{len(rows)} node(s) feed {node.name}."
+            if rows
+            else f"Nothing feeds {node.name}; it is a source node."
+        ),
+        data={
+            "node_id": node_id,
+            "node": node.name,
+            "sources": rows,
+            "chain": [_label(ctx.project, nid) for nid in chain],
+        },
+    )
+
+
+def _trace_downstream(ctx: ToolContext) -> ToolResult:
+    node_id, node = resolve_node(ctx, str(ctx.args["node"]))
+    depth = int(ctx.args.get("depth", 8) or 8)
+    rows, discovered = _walk(ctx.project, node_id, depth=depth, upstream=False)
+    return ToolResult(
+        ok=True,
+        summary=(
+            f"{node.name} feeds {len(rows)} downstream node(s)."
+            if rows
+            else f"Nothing consumes {node.name}; its output is unused."
+        ),
+        data={
+            "node_id": node_id,
+            "node": node.name,
+            "consumers": rows,
+            "chain": [_label(ctx.project, nid) for nid in [node_id, *discovered]],
+        },
+    )
+
+
+def _output_node_ids(project: Any) -> list[str]:
+    """The nodes that produce the picture the user is actually watching."""
+    active = getattr(project, "active_viewer", None)
+    if active and active in project.nodes:
+        return [active]
+    return sorted(
+        node_id
+        for node_id, node in project.nodes.items()
+        if getattr(node, "node_type", "") == "Viewer"
+    )
+
+
+def _find_output_path(ctx: ToolContext) -> ToolResult:
+    project = ctx.project
+    outputs = _output_node_ids(project)
+    reaching: set[str] = set(outputs)
+    for output in outputs:
+        _rows, discovered = _walk(project, output, depth=10_000, upstream=True)
+        reaching.update(discovered)
+
+    unused = sorted(
+        _label(project, node_id)
+        for node_id in project.nodes
+        if node_id not in reaching
+    )
+
+    payload: dict[str, Any] = {
+        "outputs": [
+            {"node_id": output, "node": _label(project, output)} for output in outputs
+        ],
+        "reaches_output": sorted(_label(project, node_id) for node_id in reaching),
+        "unused_nodes": unused,
+        "note": (
+            "Nodes in 'unused_nodes' do not feed the output, so changing them has "
+            "no visible effect."
+        ),
+    }
+
+    reference = ctx.args.get("node")
+    if reference:
+        node_id, node = resolve_node(ctx, str(reference))
+        _rows, discovered = _walk(project, node_id, depth=10_000, upstream=False)
+        path_outputs = [nid for nid in [node_id, *discovered] if nid in set(outputs)]
+        payload["traced"] = {
+            "node_id": node_id,
+            "node": node.name,
+            "reaches_output": bool(path_outputs),
+            "output": _label(project, path_outputs[0]) if path_outputs else None,
+        }
+        summary = (
+            f"{node.name} reaches {payload['traced']['output']}."
+            if path_outputs
+            else f"{node.name} does not reach the output; changing it has no visible effect."
+        )
+        return ToolResult(ok=True, summary=summary, data=payload)
+
+    return ToolResult(
+        ok=True,
+        summary=(
+            f"{len(outputs)} output node(s); "
+            f"{len(reaching) - len(outputs)} node(s) feed them, "
+            f"{len(unused)} unused."
+        ),
+        data=payload,
+    )
 
 
 def _find_section(sections: list[dict[str, Any]], name: str) -> dict[str, Any] | None:

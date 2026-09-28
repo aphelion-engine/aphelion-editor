@@ -57,7 +57,7 @@ class ActionLogView(QWidget):
         self._tree = QTreeWidget()
         self._tree.setObjectName("AIActivityTree")
         self._tree.setHeaderHidden(True)
-        self._tree.itemDoubleClicked.connect(self._focus_action)
+        self._tree.itemClicked.connect(self._focus_action)
         self._tree.setRootIsDecorated(True)
         self._tree.setIndentation(14)
         self._tree.setUniformRowHeights(True)

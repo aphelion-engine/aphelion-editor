@@ -274,6 +274,31 @@ class Node(ABC):
     def _setup_sockets(self) -> None:
         return
 
+    def documentation(self) -> str:
+        description = self.node_description.strip()
+        if description:
+            return description
+        class_doc = (type(self).__doc__ or "").strip()
+        if class_doc:
+            return next((line.strip() for line in class_doc.splitlines() if line.strip()), "")
+        return f"{self.node_type} node for processing connected media or values."
+
+    def tooltip_text(self) -> str:
+        return f"{self.node_type}\n\n{self.documentation()}"
+
+    def _port_documentation(self, name: str, socket_type: NodeSocketType,
+                            *, input_port: bool) -> str:
+        direction = "supplied to" if input_port else "produced by"
+        context = self.documentation().rstrip(" .")
+        label = name.replace("_", " ")
+        if socket_type == NodeSocketType.Frame:
+            subject = "Video frames"
+        elif socket_type == NodeSocketType.Audio:
+            subject = "Audio data"
+        else:
+            subject = f"{NodeSocket(name, socket_type).type_label} value for {label}"
+        return f"{subject} {direction} {context}."
+
     def evaluate_output(self, frame_num: int, output_slot: str) -> NodeValue:
         """Optional output-specific evaluation; existing plugins use evaluate unchanged."""
         return self.evaluate(frame_num)
@@ -286,12 +311,14 @@ class Node(ABC):
         """Allow Any to accept ANY output type."""
         if socket_type == NodeSocketType.Node:
             socket_type = NodeSocketType.Any
-        self.inputs[name] = NodeSocket(name, socket_type, is_input=True, description=doc,
+        description = doc.strip() or self._port_documentation(name, socket_type, input_port=True)
+        self.inputs[name] = NodeSocket(name, socket_type, is_input=True, description=description,
                                        default=default, units=units, coordinate_space=coordinate_space)
 
     def add_output(self, name: str, socket_type: NodeSocketType, *, doc: str = "",
                    default: Any = None, units: str = "", coordinate_space: str = "") -> None:
-        self.outputs[name] = NodeSocket(name, socket_type, is_input=False, description=doc,
+        description = doc.strip() or self._port_documentation(name, socket_type, input_port=False)
+        self.outputs[name] = NodeSocket(name, socket_type, is_input=False, description=description,
                                         default=default, units=units, coordinate_space=coordinate_space)
 
     def set_port_documentation(self, name: str, *, input_port: bool, doc: str,

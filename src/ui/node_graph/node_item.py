@@ -54,6 +54,7 @@ class NodeItem(QGraphicsRectItem):
 
         self.node = node
         self.node_id = node_id
+        self.setToolTip(node.tooltip_text())
         self.graph_view: NodeGraphView | None = None
         self.is_hovered: bool = False
         #: Set while the assistant is showing the user which nodes it touched.

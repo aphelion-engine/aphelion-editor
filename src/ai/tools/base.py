@@ -409,7 +409,8 @@ def _as_number(field_name: str, value: Any, *, integer: bool) -> float | int:
 
 def build_default_registry() -> ToolRegistry:
     """Build the full tool set from the individual tool modules."""
-    from ai.tools import (connection_tools, graph_tools, node_tools,
+    from ai.tools import (animation_tools, app_tools, connection_tools,
+                          graph_tools, node_tools, playback_tools,
                           project_tools, selection_tools, source_tools,
                           timeline_tools, tracking_tools, vision_tools,
                           workflow_tools)
@@ -423,9 +424,12 @@ def build_default_registry() -> ToolRegistry:
         selection_tools,
         tracking_tools,
         timeline_tools,
+        animation_tools,
+        playback_tools,
         vision_tools,
         source_tools,
         workflow_tools,
+        app_tools,
     ):
         module.register_tools(registry)
     return registry

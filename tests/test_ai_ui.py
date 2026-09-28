@@ -1,7 +1,7 @@
 import time
 from unittest.mock import Mock
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QLabel
 from ai.credentials import CredentialStore
 from ai.settings import AISettingsStore
 from ai.types import ProviderTestResult, ToolResult
@@ -49,6 +49,33 @@ def test_action_card_focuses_affected_nodes():
     view._focus_action(view._tree.topLevelItem(0), 0)
     assert focused == [["grade-id"]]
     view.close()
+
+
+def test_selected_node_context_is_visible_and_escaped():
+    app = QApplication.instance() or QApplication([])
+    from types import SimpleNamespace
+    from ai.ui.ai_panel import AIPanel
+
+    panel = SimpleNamespace(
+        _selection_context=QLabel(),
+        host=SimpleNamespace(
+            selected_node_ids=lambda: ["node-1"],
+            project=SimpleNamespace(
+                nodes={"node-1": SimpleNamespace(name="Grade <Warm>")}
+            ),
+        ),
+    )
+    AIPanel._refresh_selection_context(panel)
+
+    assert "Context:" in panel._selection_context.text()
+    assert "Grade &lt;Warm&gt;" in panel._selection_context.text()
+    assert "Grade <Warm>" in panel._selection_context.toolTip()
+    assert not panel._selection_context.isHidden()
+
+    panel.host.selected_node_ids = lambda: []
+    AIPanel._refresh_selection_context(panel)
+    assert panel._selection_context.isHidden()
+    panel._selection_context.close()
 
 
 # ======================================================================
@@ -157,3 +184,57 @@ def test_plan_event_updates_progress_without_a_new_message():
     panel._status.setText.assert_called_with("3/8 steps")
     # Progress must not be appended to the transcript as a chat message.
     assert captured == []
+
+
+def test_undo_ai_changes_enables_only_for_assistant_steps():
+    QApplication.instance() or QApplication([])
+    from ai.ui.ai_panel import AIPanel
+    from core.history import HistoryStack
+    from core.history.command import Command
+    from core.project import Project
+
+    class _Named(Command):
+        def __init__(self, label):
+            self._label = label
+
+        def execute(self, project):
+            return True
+
+        def undo(self, project):
+            return None
+
+        def description(self):
+            return self._label
+
+    project = Project("Undo")
+    history = HistoryStack(project)
+    panel = AIPanel.__new__(AIPanel)
+    panel._append_html = lambda _markup: None
+    panel._scroll_to_end = lambda: None
+    panel._plan_payload = {}
+    panel.session = Mock()
+    panel.session.host.history = history
+    panel._undo_action = Mock()
+    panel._status = Mock()
+    panel._flush_stream = lambda: None
+
+    def enabled() -> bool:
+        return bool(panel._undo_action.setEnabled.call_args[0][0])
+
+    # Nothing on the stack.
+    panel._refresh_undo_action()
+    assert enabled() is False
+
+    # A plain editor step is not the assistant's work.
+    history.push(_Named("Moved node"))
+    panel._refresh_undo_action()
+    assert enabled() is False
+
+    # An assistant transaction becomes undoable from the panel.
+    history.push(_Named("AI: Build tracked shoe glow"))
+    panel._refresh_undo_action()
+    assert enabled() is True
+    assert "AI:" in panel._ai_undo_label()
+
+    panel.undo_ai_changes()
+    assert panel._ai_undo_label() == ""

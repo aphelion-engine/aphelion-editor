@@ -179,6 +179,11 @@ class AIPanel(QWidget):
 
         self._build_ui()
         self._connect_signals()
+        graph = getattr(editor, "node_graph", None)
+        scene = getattr(graph, "scene", None)
+        if scene is not None:
+            scene.selectionChanged.connect(self._refresh_selection_context)
+        self._refresh_selection_context()
         self._refresh_provider_selector(force=True)
         self.refresh_state()
 
@@ -215,6 +220,13 @@ class AIPanel(QWidget):
         self._activity_section = self._build_activity_section()
         root.addWidget(self._activity_section)
 
+        self._selection_context = QLabel()
+        self._selection_context.setObjectName("AISelectionContext")
+        self._selection_context.setTextFormat(Qt.TextFormat.RichText)
+        self._selection_context.setWordWrap(True)
+        self._selection_context.setVisible(False)
+        root.addWidget(self._selection_context)
+
         self._input = PromptEdit()
         root.addWidget(self._input)
         root.addLayout(self._build_footer())
@@ -236,6 +248,13 @@ class AIPanel(QWidget):
             "sends data to a remote service (CLOUD)."
         )
         header.addWidget(self._scope_label)
+
+        self._access_button = QToolButton()
+        self._access_button.setText("Access")
+        self._access_button.setAutoRaise(True)
+        self._access_button.setToolTip("Review what Aphelion AI can access.")
+        self._access_button.clicked.connect(self.open_settings)
+        header.addWidget(self._access_button)
         header.addStretch(1)
 
         gear = QToolButton()
@@ -425,6 +444,28 @@ class AIPanel(QWidget):
     # State
     # ------------------------------------------------------------------
 
+    def _refresh_selection_context(self, *_args: Any) -> None:
+        node_ids = self.host.selected_node_ids()
+        nodes = self.host.project.nodes
+        names = [
+            str(getattr(nodes[node_id], "name", node_id))
+            for node_id in node_ids
+            if node_id in nodes
+        ]
+        if not names:
+            self._selection_context.clear()
+            self._selection_context.setVisible(False)
+            return
+        chips = " ".join(
+            '<span style="background-color:#343a45;color:#dce2eb;'
+            'border-radius:4px;padding:2px 5px;">'
+            f"{html.escape(name)}</span>"
+            for name in names
+        )
+        self._selection_context.setText(f"<span>Context:</span> {chips}")
+        self._selection_context.setToolTip("Selected nodes: " + ", ".join(names))
+        self._selection_context.setVisible(True)
+
     def refresh_state(self, *, refresh_models: bool = False) -> None:
         """Sync the panel with the current settings.
 
@@ -434,6 +475,15 @@ class AIPanel(QWidget):
         """
         settings = self.settings_store.settings
         self.session.settings = settings
+        granted = [
+            label
+            for _name, label, allowed in settings.permissions.capability_rows()
+            if allowed
+        ]
+        access = ", ".join(granted) if granted else "No project capabilities"
+        self._access_button.setToolTip(
+            f"Agent has access to: {access}. Click to manage permissions."
+        )
 
         index = self._mode_combo.findData(settings.agent_mode.value)
         if index >= 0:
@@ -983,26 +1033,38 @@ class AIPanel(QWidget):
             parts.append("Undo with Ctrl+Z or ⋯ → Undo AI changes")
         return " · ".join(parts)
 
+    def _ai_undo_label(self) -> str:
+        """The label of the top undo step, or ``""`` when it is not an AI step.
+
+        ``HistoryStack.undo_text()`` is a method returning ``"Undo <what>"``,
+        so the assistant's transactions (labelled ``AI: ...``) are detected by
+        looking for that prefix in the returned text, never by assuming the
+        value is a plain property.
+        """
+        history = getattr(self.session.host, "history", None)
+        if history is None:
+            return ""
+        try:
+            if not history.can_undo:
+                return ""
+            text = history.undo_text()
+        except Exception:  # noqa: BLE001 - history may be mid-change
+            return ""
+        return text if "AI:" in str(text) else ""
+
     def _refresh_undo_action(self) -> None:
         """Enable Undo AI changes only when an assistant step is on top."""
-        enabled = False
-        history = getattr(self.session.host, "history", None)
-        if history is not None:
-            try:
-                label = history.undo_text or ""
-                enabled = bool(history.can_undo) and label.startswith("AI:")
-            except Exception:  # noqa: BLE001 - history may be mid-change
-                enabled = False
-        self._undo_action.setEnabled(enabled)
+        label = self._ai_undo_label()
+        self._undo_action.setEnabled(bool(label))
+        if label:
+            self._undo_action.setToolTip(label)
 
     def undo_ai_changes(self) -> None:
         """Undo the most recent assistant transaction via the editor's history."""
         history = getattr(self.session.host, "history", None)
-        if history is None:
+        if history is None or not self._ai_undo_label():
             return
         try:
-            if not (history.can_undo and (history.undo_text or "").startswith("AI:")):
-                return
             history.undo()
         except Exception:  # noqa: BLE001 - undo must never crash the panel
             return
