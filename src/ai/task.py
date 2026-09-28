@@ -17,7 +17,7 @@ class TaskStatus(str, Enum):
 
 
 _EDIT = re.compile(r"\b(add|create|insert|build|make|set|change|adjust|increase|decrease|connect|wire|rewire|disconnect|delete|remove|move|rename|fix|repair|optimize|organize|apply|use|replace|improve)\b", re.I)
-_NARRATION = re.compile(r"\b(let me|i(?:'|?)?ll|i will|i need to|next i|going to)\b", re.I)
+_NARRATION = re.compile(r"\b(let me|i['\u2019]?ll|i will|i need to|next i|going to)\b", re.I)
 
 
 def classify_intent(text):

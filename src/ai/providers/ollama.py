@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from ai.providers.auth import BearerAuth
 from ai.errors import ProviderResponseError, ProviderUnavailableError
 from ai.providers.base import (AIProvider, ChatRequest, ChatResponse,
                                StopCallback, TokenCallback)
@@ -18,8 +19,7 @@ class OllamaProvider(AIProvider):
 
     def _auth_headers(self) -> dict[str, str]:
         headers = dict(self.config.extra_headers)
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
+        headers.update(BearerAuth(self.api_key).headers())
         return headers
 
     def capabilities(self, model: str | None = None) -> ProviderCapabilities:
@@ -27,15 +27,9 @@ class OllamaProvider(AIProvider):
         if self.config.supports_tools is not None:
             return declared
         name = (model or self.config.model or "").lower()
-        # Tool calling exists in most current Ollama models; the engine's
-        # structured fallback covers the ones that do not, so the cost of a
-        # wrong True here is a corrected retry rather than a broken feature.
-        tools = any(
-            marker in name
-            for marker in ("llama3", "llama-3", "qwen", "mistral", "mixtral",
-                           "deepseek", "granite", "hermes", "functionary",
-                           "command-r", "firefunction", "phi4", "gemma")
-        )
+        # Native tool support varies by model/template. Unknown models use the
+        # validated structured protocol unless the user explicitly enables tools.
+        tools = False
         vision = any(
             marker in name for marker in ("llava", "vision", "vl", "minicpm-v", "moondream")
         )
@@ -95,7 +89,7 @@ class OllamaProvider(AIProvider):
         self.transport.should_stop = should_stop
         if not request.model:
             raise ProviderResponseError(
-                "No Ollama model is selected. Pick one in Preferences â†’ AI."
+                "No Ollama model is selected. Pick one in Preferences → AI."
             )
         messages: list[dict[str, Any]] = []
         if request.system:

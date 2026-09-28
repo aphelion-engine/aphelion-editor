@@ -337,6 +337,7 @@ class AgentEngine:
         objective = next((m.content for m in reversed(messages) if m.role == "user"), "")
         self.task.begin(objective)
         result = RunResult(messages=list(messages), task=self.task)
+        initial_node_ids = set(self.host.project.nodes)
         started_at = time.monotonic()
         continuation_retries = 0
         blocked_reason = ""
@@ -458,6 +459,16 @@ class AgentEngine:
 
                 if not calls:
                     unfinished = self.task.unfinished()
+                    if self.task.requires_edit and "connect" in self.task.required_operations:
+                        created = set(self.host.project.nodes) - initial_node_ids
+                        connections = list(self.host.project.connections)
+                        for node_id in created:
+                            node = self.host.project.nodes[node_id]
+                            if node.inputs and node.outputs:
+                                incoming = any(c.input_node_id == node_id for c in connections)
+                                outgoing = any(c.output_node_id == node_id for c in connections)
+                                if not incoming or not outgoing:
+                                    unfinished.append(f"Connect both sides of {node.name}")
                     invalid = self.task.requires_edit and self.task.successful_edit_count > 0 and not result.validation.get("ok")
                     needs_execution = self.task.requires_edit and (self.task.successful_edit_count == 0 or unfinished or invalid)
                     if blocked_reason:
@@ -516,7 +527,9 @@ class AgentEngine:
                     if result.tool_calls >= self.config.max_tool_calls:
                         result.error = "Tool call limit reached before completion. Changes were rolled back."
                         break
-                    if call.name == "task.request_input":
+                    if request_input:
+                        outcome, mutated = ToolResult.failure("WAITING_FOR_USER", "Execution paused for user input."), False
+                    elif call.name == "task.request_input":
                         question = call.arguments.get("question")
                         if not isinstance(question, str) or not question.strip() or set(call.arguments) != {"question"}:
                             outcome, mutated = ToolResult.failure("INVALID_ARGUMENTS", "Provide one nonempty question."), False
@@ -534,6 +547,8 @@ class AgentEngine:
                         self.task.successful_edit_count += 1
                         self.task.completed_actions.append(outcome.summary)
                         self.task.successful_tools.add(call.name)
+                        if call.name == "node.create" and call.arguments.get("properties"):
+                            self.task.successful_tools.add("node.set_property")
                         self.task.last_changed_node_ids = list(outcome.changed_node_ids)
                         continuation_retries = 0
                     if not outcome.ok:
@@ -648,6 +663,9 @@ class AgentEngine:
             self.task.status = TaskStatus.COMPLETED
             self.task.completion_reason = "OBJECTIVE_COMPLETED"
             self.task.pending_actions = []
+        if result.error:
+            self.task.status = TaskStatus.FAILED
+            self.task.completion_reason = self.task.completion_reason or "EXECUTION_FAILED"
         if result.committed:
             evidence = "\n".join(result.actions)
             result.text = (result.text + "\n\n" if result.text else "") + "Applied changes:\n" + evidence + "\nGraph validation passed. Changes are undoable as one step."
@@ -700,10 +718,11 @@ class AgentEngine:
             return
 
         if stopped():
-            # Stop pressed mid-flight: keep what is already applied and commit
-            # that, since the user's own Stop semantics are "stop asking for
-            # more", not "throw away finished work".
             result.cancelled = True
+            transaction.rollback(self.host.project)
+            result.rolled_back = True
+            result.text = "Stopped. Incomplete changes were rolled back."
+            return
 
         needs_confirmation = (
             self.config.mode is AgentMode.ASSIST
@@ -756,6 +775,11 @@ class AgentEngine:
                 )
                 return
 
+        if stopped():
+            transaction.rollback(self.host.project)
+            result.cancelled = result.rolled_back = True
+            result.text = "Stopped. Incomplete changes were rolled back."
+            return
         if transaction.commit(self.host.history):
             result.committed = True
             emit(
@@ -866,8 +890,10 @@ class AgentEngine:
         cache_key = call.name + ":" + json.dumps(call.arguments, sort_keys=True)
         cacheable = call.name in ("node.list_types", "node.describe_type")
         # Registry identity changes invalidate discovery; graph inspection is never cached.
-        from core.nodes.base import Node
-        registry_signature = tuple(sorted((str(k), id(v)) for k, v in getattr(Node, "_registry", {}).items()))
+        from core.nodes.registry import global_node_registry
+        from core.graph_exchange import ensure_registry
+        ensure_registry()
+        registry_signature = tuple(sorted((str(k), id(v.node_class)) for k, v in global_node_registry.get_all_nodes().items()))
         if registry_signature != self.task.registry_signature:
             self.task.discovery_cache.clear()
             self.task.discovered_nodes.clear()
@@ -960,9 +986,16 @@ class AgentEngine:
     ) -> Any:
         from ai.providers.base import ChatRequest
 
+        wire_messages = list(history)
+        if not native:
+            wire_messages = [ChatMessage(
+                role="user" if m.role == "tool" else m.role,
+                content=(f"Tool result ({m.name}): " + m.content) if m.role == "tool" else
+                        (m.content or json.dumps({"tool_calls": [{"tool": c.name, "arguments": c.arguments} for c in m.tool_calls]})),
+                images=list(m.images)) for m in history]
         request = ChatRequest(
             model=self.model,
-            messages=list(history),
+            messages=wire_messages,
             system=system,
             tools=tool_schemas if native else [],
             temperature=self.config.temperature,

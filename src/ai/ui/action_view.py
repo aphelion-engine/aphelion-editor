@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QFont
 from PyQt6.QtWidgets import (QHBoxLayout, QLabel, QToolButton, QTreeWidget,
                              QTreeWidgetItem, QVBoxLayout, QWidget)
@@ -30,6 +30,8 @@ _DETAIL_COLOR = QColor(170, 176, 188)
 
 class ActionLogView(QWidget):
     """Collapsible list of everything the assistant did."""
+
+    focus_nodes = pyqtSignal(list)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -55,6 +57,7 @@ class ActionLogView(QWidget):
         self._tree = QTreeWidget()
         self._tree.setObjectName("AIActivityTree")
         self._tree.setHeaderHidden(True)
+        self._tree.itemDoubleClicked.connect(self._focus_action)
         self._tree.setRootIsDecorated(True)
         self._tree.setIndentation(14)
         self._tree.setUniformRowHeights(True)
@@ -116,12 +119,22 @@ class ActionLogView(QWidget):
         if result.warnings:
             self._add_detail(item, "Warnings", "\n".join(result.warnings))
         if result.changed_node_ids:
+            item.setData(0, Qt.ItemDataRole.UserRole, list(result.changed_node_ids))
+            item.setToolTip(0, "Double-click to focus changed nodes")
             self._add_detail(item, "Changed nodes", ", ".join(result.changed_node_ids))
         if duration_ms is not None:
             self._add_detail(item, "Duration", f"{duration_ms:.0f} ms")
 
         item.setExpanded(False)
         self._tree.scrollToItem(item)
+
+    def _focus_action(self, item, _column):
+        while item is not None:
+            ids = item.data(0, Qt.ItemDataRole.UserRole)
+            if ids:
+                self.focus_nodes.emit(ids)
+                return
+            item = item.parent()
 
     def clear(self) -> None:
         self._tree.clear()

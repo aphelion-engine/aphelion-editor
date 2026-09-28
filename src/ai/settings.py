@@ -52,6 +52,7 @@ class ProviderConfig:
     credential_ref: str = ""
     connection_mode: str = "custom"
     credential_env: str = ""
+    auth_header: str = ""
     allow_insecure_http: bool = False
     connect_timeout: float = 10.0
     stream_idle_timeout: float = 60.0
@@ -72,7 +73,8 @@ class ProviderConfig:
     @property
     def scope(self) -> str:
         """``LOCAL`` or ``CLOUD`` for the UI badge."""
-        return "LOCAL" if self.is_local else "CLOUD"
+        from ai.providers.urls import is_loopback
+        return "LOCAL" if self.is_local and is_loopback(self.base_url) and self.connection_mode != "cloud" else "CLOUD"
 
     @property
     def credential_key(self) -> str:
@@ -109,6 +111,7 @@ class ProviderConfig:
             "credential_ref": self.credential_ref,
             "connection_mode": self.connection_mode,
             "credential_env": self.credential_env,
+            "auth_header": self.auth_header,
             "allow_insecure_http": self.allow_insecure_http,
             "connect_timeout": self.connect_timeout,
             "stream_idle_timeout": self.stream_idle_timeout,
@@ -132,6 +135,7 @@ class ProviderConfig:
             credential_ref=str(data.get("credential_ref", "")),
             connection_mode=str(data.get("connection_mode", "custom")),
             credential_env=str(data.get("credential_env", "")),
+            auth_header=str(data.get("auth_header", "")),
             allow_insecure_http=bool(data.get("allow_insecure_http", False)),
             connect_timeout=float(data.get("connect_timeout", 10)),
             stream_idle_timeout=float(data.get("stream_idle_timeout", 60)),

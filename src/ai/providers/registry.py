@@ -20,7 +20,7 @@ from ai.providers.openai_compatible import OpenAICompatibleProvider
 from ai.settings import (KIND_ANTHROPIC, KIND_GOOGLE, KIND_HUGGINGFACE,
                          KIND_OLLAMA, KIND_OPENAI_COMPATIBLE, ProviderConfig)
 
-#: kind â†’ implementation.
+#: kind → implementation.
 KIND_CLASSES: dict[str, type[AIProvider]] = {
     KIND_OPENAI_COMPATIBLE: OpenAICompatibleProvider,
     KIND_HUGGINGFACE: HuggingFaceProvider,

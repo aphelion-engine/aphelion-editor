@@ -45,50 +45,6 @@ class ChatRequest:
     json_mode: bool = False
     tool_choice: str = "auto"
 
-    def to_openai_messages(self) -> list[dict[str, Any]]:
-        """Flatten to the OpenAI chat-completions message array."""
-        payload: list[dict[str, Any]] = []
-        if self.system:
-            payload.append({"role": "system", "content": self.system})
-        for message in self.messages:
-            if message.role == "assistant" and message.tool_calls:
-                payload.append(
-                    {
-                        "role": "assistant",
-                        "content": message.content or None,
-                        "tool_calls": [
-                            {
-                                "id": call.call_id or f"call_{index}",
-                                "type": "function",
-                                "function": {
-                                    "name": call.name,
-                                    "arguments": json.dumps(call.arguments),
-                                },
-                            }
-                            for index, call in enumerate(message.tool_calls)
-                        ],
-                    }
-                )
-                continue
-            if message.role == "tool":
-                payload.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": message.tool_call_id or "",
-                        "content": message.content,
-                    }
-                )
-                continue
-            if message.images:
-                parts: list[dict[str, Any]] = []
-                if message.content:
-                    parts.append({"type": "text", "text": message.content})
-                for image in message.images:
-                    parts.append({"type": "image_url", "image_url": {"url": image}})
-                payload.append({"role": message.role, "content": parts})
-                continue
-            payload.append({"role": message.role, "content": message.content})
-        return payload
 
 
 @dataclass

@@ -291,6 +291,7 @@ class AIPanel(QWidget):
         layout.addWidget(self._activity_toggle)
 
         self.activity = ActionLogView()
+        self.activity.focus_nodes.connect(lambda ids: self.session.host.select_nodes(ids, focus=True))
         self.activity.setMinimumHeight(90)
         self.activity.setVisible(False)
         layout.addWidget(self.activity)
@@ -438,7 +439,9 @@ class AIPanel(QWidget):
 
     def _refresh_provider_selector(self, *, force: bool = False) -> None:
         if force or self._model_cache is None:
-            self._model_cache = self.session.available_models()
+            # Discovery is explicit and asynchronous in settings. Building a panel
+            # must never contact every configured provider on the Qt thread.
+            self._model_cache = [p.model_info() for p in self.session.settings.enabled_providers()]
         models = self._model_cache or []
         active_config = self.session.active_provider_config()
         active_id = active_config.provider_id if active_config else ""
@@ -693,8 +696,10 @@ class AIPanel(QWidget):
                 if count
                 else "Applied — Ctrl+Z to undo"
             )
+        elif getattr(getattr(result, "task", None), "completion_reason", "") == "USER_INPUT_REQUIRED":
+            self._status.setText("Waiting for your answer")
         else:
-            self._status.setText("Ready")
+            self._status.setText("Done")
         self._set_busy(False)
         self.session.persist()
 

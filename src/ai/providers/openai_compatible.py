@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from ai.providers.auth import BearerAuth, ApiKeyHeaderAuth
 from ai.errors import ProviderResponseError
 from ai.providers.base import (AIProvider, ChatRequest, ChatResponse,
                                TokenCallback, StopCallback, Transport)
@@ -27,7 +28,9 @@ class OpenAICompatibleProvider(AIProvider):
     kind = "openai_compatible"
 
     def _auth_headers(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+        if self.config.auth_header:
+            return ApiKeyHeaderAuth(self.config.auth_header, self.api_key).headers()
+        return BearerAuth(self.api_key).headers()
 
     def _require_key(self) -> None:
         # Compatible gateways may intentionally use no authentication.
@@ -49,7 +52,7 @@ class OpenAICompatibleProvider(AIProvider):
         models: list[ModelInfo] = []
         try:
             payload = self.transport.get_json(
-                self._endpoint("models"), self._auth_headers()
+                self._endpoint("models"), self._request_headers()
             )
         except Exception:  # noqa: BLE001 - listing is optional everywhere
             payload = {}
@@ -164,10 +167,57 @@ class OpenAICompatibleProvider(AIProvider):
     # Generation
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _messages(request) -> list[dict[str, Any]]:
+        """Flatten to the OpenAI chat-completions message array."""
+        payload: list[dict[str, Any]] = []
+        if request.system:
+            payload.append({"role": "system", "content": request.system})
+        for message in request.messages:
+            if message.role == "assistant" and message.tool_calls:
+                payload.append(
+                    {
+                        "role": "assistant",
+                        "content": message.content or None,
+                        "tool_calls": [
+                            {
+                                "id": call.call_id or f"call_{index}",
+                                "type": "function",
+                                "function": {
+                                    "name": call.name,
+                                    "arguments": json.dumps(call.arguments),
+                                },
+                            }
+                            for index, call in enumerate(message.tool_calls)
+                        ],
+                    }
+                )
+                continue
+            if message.role == "tool":
+                payload.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": message.tool_call_id or "",
+                        "content": message.content,
+                    }
+                )
+                continue
+            if message.images:
+                parts: list[dict[str, Any]] = []
+                if message.content:
+                    parts.append({"type": "text", "text": message.content})
+                for image in message.images:
+                    parts.append({"type": "image_url", "image_url": {"url": image}})
+                payload.append({"role": message.role, "content": parts})
+                continue
+            payload.append({"role": message.role, "content": message.content})
+        return payload
+
+
     def build_payload(self, request: ChatRequest, *, stream: bool) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": request.model,
-            "messages": request.to_openai_messages(),
+            "messages": self._messages(request),
             "temperature": request.temperature,
             "max_tokens": request.max_tokens,
             "stream": stream,
@@ -246,6 +296,7 @@ class OpenAICompatibleProvider(AIProvider):
         tool_fragments: dict[int, dict[str, Any]] = {}
         finish_reason = ""
         usage = Usage()
+        completed = False
 
         for line in self.transport.stream_lines(url, payload, headers):
             if should_stop is not None and should_stop():
@@ -258,11 +309,14 @@ class OpenAICompatibleProvider(AIProvider):
             else:
                 continue
             if data == "[DONE]":
+                completed = True
                 break
             try:
                 event = json.loads(data)
             except json.JSONDecodeError:
-                continue
+                raise ProviderResponseError("Provider returned malformed streaming JSON.") from None
+            if not isinstance(event, dict) or event.get("error"):
+                raise ProviderResponseError("Provider stream returned an API error.")
 
             if isinstance(event.get("usage"), dict):
                 usage = _parse_usage(event.get("usage"))
@@ -272,6 +326,7 @@ class OpenAICompatibleProvider(AIProvider):
             choice = choices[0] if isinstance(choices[0], dict) else {}
             if choice.get("finish_reason"):
                 finish_reason = str(choice["finish_reason"])
+                completed = True
             delta = choice.get("delta")
             if not isinstance(delta, dict):
                 delta = choice.get("message") if isinstance(choice.get("message"), dict) else {}
@@ -284,6 +339,8 @@ class OpenAICompatibleProvider(AIProvider):
                 on_token("")  # keep the stream alive; reasoning is surfaced separately
             _accumulate_tool_fragments(tool_fragments, delta.get("tool_calls"))
 
+        if not completed:
+            raise ProviderResponseError("Provider stream ended before completion.")
         return ChatResponse(
             content="".join(content_parts),
             tool_calls=_finalise_tool_calls(tool_fragments),

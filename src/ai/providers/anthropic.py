@@ -1,5 +1,6 @@
 """Anthropic Messages protocol, including typed SSE content blocks."""
 import json
+from ai.providers.auth import ApiKeyHeaderAuth
 from ai.providers.base import AIProvider, ChatRequest, ChatResponse
 from ai.providers.urls import endpoint
 from ai.providers.openai_compatible import OpenAICompatibleProvider
@@ -13,8 +14,7 @@ class AnthropicProvider(AIProvider):
     def _auth_headers(self):
         headers = dict(self.config.extra_headers)
         headers["anthropic-version"] = "2023-06-01"
-        if self.api_key:
-            headers["x-api-key"] = self.api_key
+        headers.update(ApiKeyHeaderAuth("x-api-key", self.api_key).headers())
         return headers
 
     def _endpoint(self, suffix):
