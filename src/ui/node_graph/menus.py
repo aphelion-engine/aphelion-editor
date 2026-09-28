@@ -34,6 +34,7 @@ class GraphContextMenu(QMenu):
         on_select_all: Callable[[], None],
         on_fit_view: Callable[[], None],
         on_organize_graph: Callable[[], None],
+        on_export_graph: Callable[[], None] | None = None,
         keybinds: KeybindStore,
         on_invert_selection: Callable[[], None] | None = None,
         on_select_connected: Callable[[], None] | None = None,
@@ -104,6 +105,11 @@ class GraphContextMenu(QMenu):
         assert organize is not None
         apply_menu_hint(organize, keybinds, KeyAction.ORGANIZE_GRAPH)
         organize.triggered.connect(on_organize_graph)
+        if on_export_graph is not None:
+            self.addSeparator()
+            export = self.addAction("Export Graph as Image…")
+            assert export is not None
+            export.triggered.connect(on_export_graph)
 
 
 class NodeOperationsMenu(QMenu):
@@ -178,6 +184,10 @@ class NodeOperationsMenu(QMenu):
         assert organize is not None
         apply_menu_hint(organize, keybinds, KeyAction.ORGANIZE_GRAPH)
         organize.triggered.connect(self.view.organize_graph)
+        export = self.addAction("Export Selected Nodes as Image…")
+        assert export is not None
+        export.setEnabled(count > 0)
+        export.triggered.connect(lambda: self.view.export_graph_snapshot(selected_only=True))
 
     def _add_custom_node_menu(self, items: list[NodeItem]) -> None:
         """Add custom-node create / edit / expand entries."""

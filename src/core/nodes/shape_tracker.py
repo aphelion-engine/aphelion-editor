@@ -10,6 +10,7 @@ from core.nodes.enums import TrackerShape
 from core.nodes.property_factory import (choice_property, number_property,
                                          text_property)
 from core.nodes.tracking_nodes import TrackerNode
+from core.nodes.tracking_docs import document
 
 
 class ShapeTrackerNode(TrackerNode):
@@ -19,6 +20,9 @@ class ShapeTrackerNode(TrackerNode):
     def _setup_sockets(self):
         super()._setup_sockets()
         self.add_output("mask", NodeSocketType.Mask)
+        document(self, outputs={
+            "mask": "Perspective-aware shape mask following the tracked point/region. The mask is rendered in normalized source-frame coordinates."
+        })
         self.set_property("shape", choice_property(TrackerShape.Ellipse, priority=20,
             group="Shape", label="Shape", description="Mask outline following the tracked point. Polygon vertices can be drawn in the viewport."))
         for key, value, low, high in (("width",20,0.1,200),("height",20,0.1,200),("feather",0,0,100)):

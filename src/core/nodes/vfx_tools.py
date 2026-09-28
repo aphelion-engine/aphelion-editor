@@ -7,6 +7,7 @@ import numpy as np
 from core.nodes.base import NodeSocketType
 from core.nodes.frame_base import FrameEffectNode, FrameNode
 from core.nodes.property_factory import number_property
+from core.nodes.tracking_docs import document
 
 
 def control(node, key, default, low, high, *, suffix=""):
@@ -27,6 +28,13 @@ class TrackOffsetNode(FrameNode):
         for key in ("x", "y"):
             self.add_input(key, NodeSocketType.Number)
             self.add_output(key, NodeSocketType.Number)
+        document(self, inputs={
+            "x": "Tracked X coordinate in source-frame percent coordinates.",
+            "y": "Tracked Y coordinate in source-frame percent coordinates.",
+        }, outputs={
+            "x": "Offset/scaled X coordinate in source-frame percent coordinates.",
+            "y": "Offset/scaled Y coordinate in source-frame percent coordinates.",
+        })
         control(self, "offset_x", 0, -200, 200, suffix="%")
         control(self, "offset_y", 0, -200, 200, suffix="%")
         control(self, "scale", 1, -10, 10)
@@ -48,6 +56,17 @@ class TrackDistanceNode(FrameNode):
             self.add_input(key, NodeSocketType.Number)
         for key in ("distance", "angle", "mid_x", "mid_y"):
             self.add_output(key, NodeSocketType.Number)
+        document(self, inputs={
+            "x1": "X coordinate of the first tracked point in source-frame percent space.",
+            "y1": "Y coordinate of the first tracked point in source-frame percent space.",
+            "x2": "X coordinate of the second tracked point in source-frame percent space.",
+            "y2": "Y coordinate of the second tracked point in source-frame percent space.",
+        }, outputs={
+            "distance": "Distance between the two points in source-frame percent units.",
+            "angle": "Angle from the first point to the second point in degrees.",
+            "mid_x": "Midpoint X coordinate in source-frame percent space.",
+            "mid_y": "Midpoint Y coordinate in source-frame percent space.",
+        })
 
     def evaluate(self, frame_num):
         x1, y1, x2, y2 = (self.input_number(k) for k in ("x1", "y1", "x2", "y2"))

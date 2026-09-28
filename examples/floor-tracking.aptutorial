@@ -1,0 +1,64 @@
+{
+  "format": "aphelion-tutorial",
+  "version": 1,
+  "title": "Tracking a Floor and Pinning an Image",
+  "description": "A small, machine-readable Aphelion tutorial demonstrating a floor-plane tracking workflow.",
+  "graph": {
+    "format": "aphelion-graph",
+    "version": 1,
+    "name": "Floor Tracking",
+    "nodes": [
+      {
+        "id": "video",
+        "type": "Video Input",
+        "position": [100, 180],
+        "properties": {}
+      }
+    ],
+    "connections": [],
+    "groups": [],
+    "annotations": []
+  },
+  "steps": [
+    {
+      "title": "Add your video",
+      "text": "Start with a Video Input node. Replace its media path in the editor when using the tutorial.",
+      "graph": {
+        "format": "aphelion-graph",
+        "version": 1,
+        "name": "Floor Tracking - Video",
+        "nodes": [{"id": "video", "type": "Video Input", "position": [100, 180], "properties": {}}],
+        "connections": [], "groups": [], "annotations": []
+      }
+    },
+    {
+      "title": "Add a Floor Tracker",
+      "text": "Add a Floor Tracker and place its seed quadrilateral over the floor plane.",
+      "operations": [
+        {"op": "add_node", "node": {"id": "floor", "type": "Floor Tracker", "position": [450, 180], "properties": {}}}
+      ]
+    },
+    {
+      "title": "Connect the source",
+      "text": "Connect the video stream to the tracker's frame input, then use the tracker controls to track forward or backward.",
+      "operations": [
+        {"op": "connect", "from": ["video", "frame"], "to": ["floor", "frame"]}
+      ]
+    },
+    {
+      "title": "Prepare a corner pin",
+      "text": "Add a Corner Pin and connect the four tracked corners to its modulation inputs.",
+      "operations": [
+        {"op": "add_node", "node": {"id": "corner_pin", "type": "Corner Pin", "position": [850, 180], "properties": {}}},
+        {"op": "connect", "from": ["floor", "top_left_x"], "to": ["corner_pin", "in_top_left_x"]},
+        {"op": "connect", "from": ["floor", "top_left_y"], "to": ["corner_pin", "in_top_left_y"]},
+        {"op": "connect", "from": ["floor", "top_right_x"], "to": ["corner_pin", "in_top_right_x"]},
+        {"op": "connect", "from": ["floor", "top_right_y"], "to": ["corner_pin", "in_top_right_y"]},
+        {"op": "connect", "from": ["floor", "bottom_right_x"], "to": ["corner_pin", "in_bottom_right_x"]},
+        {"op": "connect", "from": ["floor", "bottom_right_y"], "to": ["corner_pin", "in_bottom_right_y"]},
+        {"op": "connect", "from": ["floor", "bottom_left_x"], "to": ["corner_pin", "in_bottom_left_x"]},
+        {"op": "connect", "from": ["floor", "bottom_left_y"], "to": ["corner_pin", "in_bottom_left_y"]}
+      ]
+    }
+  ]
+}

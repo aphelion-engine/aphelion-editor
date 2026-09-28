@@ -17,6 +17,7 @@ from core.nodes.base import NodeSocketType, NodeValue
 from core.nodes.frame_base import FrameNode
 from core.nodes.property_factory import number_property, choice_property
 from core.tracking.model import TrackingOptions, TrackingSample, GapPolicy, resolve_gap
+from core.nodes.tracking_docs import document_planar_tracker, document_point_tracker
 
 TRACKING_CATEGORY: str = "Tracking"
 
@@ -138,6 +139,7 @@ class TrackerNode(FrameNode, Tracker):
                 group="Tracking Recovery",label=key.replace("_"," ").title(),description=help_text))
         self.set_property("gap_policy",choice_property(GapPolicy.Hold,priority=60,
             group="Tracking Recovery",label="During Gaps",description="Interpret missing frames without changing raw samples. Connect Valid to an effect's Enabled control to disable it during gaps."))
+        document_point_tracker(self)
 
     def tracking_options(self) -> TrackingOptions:
         return TrackingOptions(
@@ -289,6 +291,7 @@ class PlanarTrackerNode(FrameNode, Tracker):
                 suffix="%",
             ),
         )
+        document_planar_tracker(self)
 
     def seed_corners(
         self,
@@ -465,6 +468,7 @@ class PlanarHomographyTrackerNode(FrameNode, Tracker):
                 suffix="%",
             ),
         )
+        document_planar_tracker(self)
 
     def seed_corners(
         self,
@@ -632,6 +636,7 @@ class SurfaceTrackerNode(FrameNode, Tracker):
                 suffix="%",
             ),
         )
+        document_planar_tracker(self)
 
     def seed_corners(
         self,

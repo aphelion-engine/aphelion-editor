@@ -37,7 +37,12 @@ from core.nodes import (
     VideoFrameErrorMethod,
     VideoInputNode,
 )
-from core.nodes.tracking_nodes import PlanarTrackerNode, TrackerNode
+from core.nodes.tracking_nodes import (
+    PlanarHomographyTrackerNode,
+    PlanarTrackerNode,
+    SurfaceTrackerNode,
+    TrackerNode,
+)
 from core.nodes.math_nodes import PropertyDriveNode, PropertyLinkNode
 from core.nodes.property_link import (
     PROPERTY_DRIVE_PROPERTY_KEY,
@@ -54,6 +59,8 @@ from render.tracking_worker import (
     PointTrackingWorker,
     TrackingRequest,
 )
+
+PLANAR_TRACKER_TYPES = (PlanarTrackerNode, PlanarHomographyTrackerNode, SurfaceTrackerNode)
 from render.video_decoder import probe_video
 from ui.widgets.property_editors import (
     CheckboxPropertyWidget,
@@ -492,7 +499,7 @@ class PropertiesPanel(QWidget):
 
     def _add_tracking_controls(self, layout: QVBoxLayout, node: Node) -> None:
         """Add Track Forward/Backward/Clear buttons for tracker nodes."""
-        if not isinstance(node, (TrackerNode, PlanarTrackerNode)):
+        if not isinstance(node, (TrackerNode, *PLANAR_TRACKER_TYPES)):
             return
         section: QLabel = QLabel("TRACK")
         section.setObjectName("PropertySectionLabel")
@@ -553,7 +560,7 @@ class PropertiesPanel(QWidget):
             search_radius=node.search_radius_normalized(),
             options=options,
         )
-        if isinstance(node, PlanarTrackerNode):
+        if isinstance(node, PLANAR_TRACKER_TYPES):
             self._run_planar_tracking(node_id, node, request, TrackingProgressDialog)
         else:
             self._run_point_tracking(node_id, node, request, TrackingProgressDialog)
@@ -591,6 +598,11 @@ class PropertiesPanel(QWidget):
                 QMessageBox.warning(self, "Tracking Failed", dialog.error)
             return
         raw = dialog.result or {}
+        diagnostics = raw.get("diagnostics", {}) if isinstance(raw, dict) else {}
+        if hasattr(node, "tracking_diagnostics"):
+            node.tracking_diagnostics = {
+                int(frame): value.to_dict() for frame, value in diagnostics.items()
+            }
         corner_curves = {
             corner: _split_xy_curves(raw.get(corner, {}))
             for corner in ("top_left", "top_right", "bottom_right", "bottom_left")
@@ -607,7 +619,7 @@ class PropertiesPanel(QWidget):
             self.history.push(
                 SetTrackCommand(node_id, AnimationCurve(), AnimationCurve())
             )
-        elif isinstance(node, PlanarTrackerNode):
+        elif isinstance(node, PLANAR_TRACKER_TYPES):
             empty_curves = {
                 corner: (AnimationCurve(), AnimationCurve())
                 for corner in ("top_left", "top_right", "bottom_right", "bottom_left")

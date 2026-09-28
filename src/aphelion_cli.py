@@ -15,7 +15,6 @@ import argparse
 from pathlib import Path
 
 from config.constants import APP_VERSION
-from ui.windows.runtime import AphelionRuntime
 
 # Strong process-lifetime reference (prevents GC of the session/windows).
 _RUNTIME: AphelionRuntime | None = None
@@ -62,6 +61,26 @@ def _build_parser() -> argparse.ArgumentParser:
         _add_benchmark_args(parser)
     except Exception:  # noqa: BLE001 - benchmark tooling must not block launch
         pass
+    commands = parser.add_subparsers(dest="command")
+    graph = commands.add_parser("graph", help="Validate, inspect, format, render, or export graph files.")
+    graph_actions = graph.add_subparsers(dest="action", required=True)
+    validate = graph_actions.add_parser("validate"); validate.add_argument("input"); validate.add_argument("--json", action="store_true")
+    render = graph_actions.add_parser("render"); render.add_argument("input"); render.add_argument("--output"); render.add_argument("--scale", type=float, default=1.0); render.add_argument("--theme", choices=("dark", "light", "transparent"), default="dark"); render.add_argument("--padding", type=int, default=48); render.add_argument("--no-watermark", action="store_true"); render.add_argument("--max-width", type=int, default=12000); render.add_argument("--max-height", type=int, default=12000)
+    fmt = graph_actions.add_parser("format"); fmt.add_argument("input"); fmt.add_argument("--output"); fmt.add_argument("--write", action="store_true")
+    inspect = graph_actions.add_parser("inspect"); inspect.add_argument("input")
+    graph_actions.add_parser("schema")
+    export = graph_actions.add_parser("export"); export.add_argument("project"); export.add_argument("--output", required=True)
+    imp = graph_actions.add_parser("import"); imp.add_argument("input"); imp.add_argument("--output", required=True)
+    nodes = commands.add_parser("nodes", help="Discover registered node types and metadata.")
+    node_actions = nodes.add_subparsers(dest="action", required=True)
+    node_actions.add_parser("list")
+    describe = node_actions.add_parser("describe"); describe.add_argument("node"); describe.add_argument("--json", action="store_true")
+    node_actions.add_parser("export-schema")
+    tutorial = commands.add_parser("tutorial", help="Validate and render AI tutorials.")
+    tutorial_actions = tutorial.add_subparsers(dest="action", required=True)
+    tut_validate = tutorial_actions.add_parser("validate"); tut_validate.add_argument("input"); tut_validate.add_argument("--json", action="store_true")
+    tut_render = tutorial_actions.add_parser("render"); tut_render.add_argument("input"); tut_render.add_argument("--output"); tut_render.add_argument("--scale", type=float, default=1.0)
+    tutorial_actions.add_parser("schema")
     return parser
 
 
@@ -125,6 +144,7 @@ def run(argv: list[str] | None = None) -> int:
         Process exit code.
     """
     global _RUNTIME
+    from ui.windows.runtime import AphelionRuntime
     logger = configure_logging()
     install_exception_hooks(logger)
     log_banner(logger, version=APP_VERSION)
@@ -139,6 +159,10 @@ def main() -> int:
         Process exit code.
     """
     args = _build_parser().parse_args()
+
+    if args.command in {"graph", "nodes", "tutorial"}:
+        from tools.graph_cli import graph_command, nodes_command, tutorial_command
+        return {"graph": graph_command, "nodes": nodes_command, "tutorial": tutorial_command}[args.command](args)
 
     # Performance test mode: measure and exit, never launch the editor.
     try:

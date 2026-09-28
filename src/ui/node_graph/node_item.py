@@ -5,12 +5,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from core.nodes import Node
-from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, Qt
+from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer
 from PyQt6.QtGui import QBrush, QColor, QFont, QLinearGradient, QPainter, QPen
 from PyQt6.QtWidgets import (QGraphicsItem, QGraphicsRectItem,
                              QGraphicsSceneHoverEvent,
                              QGraphicsSceneMouseEvent,
-                             QStyleOptionGraphicsItem, QWidget)
+                              QStyleOptionGraphicsItem, QWidget)
+from PyQt6.QtWidgets import QToolTip
 from ui.node_graph.constants import (BODY_PADDING_PX, CORNER_RADIUS_PX,
                                      HEADER_HEIGHT_PX, SHADOW_OFFSET_X_PX,
                                      SHADOW_OFFSET_Y_PX, SOCKET_EDGE_GAP_PX,
@@ -58,6 +59,12 @@ class NodeItem(QGraphicsRectItem):
         self._drag_origins: dict[int, QPointF] = {}
         self._drag_before_positions: dict[str, tuple[float, float]] = {}
         self._node_width: int = dimensions.width
+        self._tooltip_port: tuple[str, bool] | None = None
+        self._tooltip_screen_pos = QPoint()
+        self._tooltip_timer = QTimer()
+        self._tooltip_timer.setSingleShot(True)
+        self._tooltip_timer.setInterval(280)
+        self._tooltip_timer.timeout.connect(self._show_port_tooltip)
 
         r, g, b = node.node_color
         self.accent_color = QColor(r, g, b)
@@ -392,6 +399,51 @@ class NodeItem(QGraphicsRectItem):
                 best = (name, False)
                 best_distance_sq = distance_sq
         return best
+
+    def _port_at(self, local_pos: QPointF) -> tuple[str, bool] | None:
+        """Hit-test both the socket circle and its painted label."""
+        hit = self.socket_at(local_pos)
+        if hit is not None:
+            return hit
+        half = self._node_width // 2
+        for name, rect in self.input_sockets.items():
+            label = QRect(SOCKET_SIZE_PX, rect.center().y() - 9, half - 8, 18)
+            if label.contains(int(local_pos.x()), int(local_pos.y())):
+                return name, True
+        for name, rect in self.output_sockets.items():
+            label = QRect(half, rect.center().y() - 9, half - SOCKET_SIZE_PX, 18)
+            if label.contains(int(local_pos.x()), int(local_pos.y())):
+                return name, False
+        return None
+
+    def _show_port_tooltip(self) -> None:
+        if self._tooltip_port is None:
+            return
+        name, is_input = self._tooltip_port
+        text = self.node.port_tooltip(name, input_port=is_input)
+        QToolTip.showText(self._tooltip_screen_pos, text, self.scene().views()[0] if self.scene() and self.scene().views() else None)
+
+    def hoverMoveEvent(self, event: QGraphicsSceneHoverEvent | None) -> None:
+        if event is None:
+            return
+        port = self._port_at(event.pos())
+        if port != self._tooltip_port:
+            self._tooltip_timer.stop()
+            QToolTip.hideText()
+            self._tooltip_port = port
+            if port is not None:
+                self._tooltip_screen_pos = event.screenPos()
+                self._tooltip_timer.start()
+        elif port is not None:
+            self._tooltip_screen_pos = event.screenPos()
+        super().hoverMoveEvent(event)
+
+    def hoverLeaveEvent(self, event: QGraphicsSceneHoverEvent | None) -> None:
+        self._tooltip_timer.stop()
+        self._tooltip_port = None
+        QToolTip.hideText()
+        if event is not None:
+            super().hoverLeaveEvent(event)
 
     def mousePressEvent(self, event: QGraphicsSceneMouseEvent | None) -> None:
         if event is None:

@@ -24,7 +24,7 @@ from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (QBrush, QColor, QKeyEvent, QLinearGradient, QPainter,
                          QPainterPath, QPen, QRadialGradient, QWheelEvent)
 from PyQt6.QtWidgets import (QDialog, QFrame, QGraphicsScene, QGraphicsView,
-                             QMenu, QMessageBox, QProgressDialog)
+                             QFileDialog, QMenu, QMessageBox, QProgressDialog)
 from render.export_worker import ExportFormat, ExportRequest, ExportWorker
 from render.video_writer import ExportQuality
 from utils.paths import app_data_path
@@ -802,6 +802,7 @@ class NodeGraphView(QGraphicsView):
             on_select_all=self.select_all_nodes,
             on_fit_view=self.fit_all_nodes,
             on_organize_graph=self.organize_graph,
+            on_export_graph=lambda: self.export_graph_snapshot(selected_only=False),
             on_invert_selection=self.invert_selection,
             on_select_connected=self.select_connected,
             on_toggle_spotlight=self.toggle_spotlight,
@@ -812,6 +813,17 @@ class NodeGraphView(QGraphicsView):
         )
         self._context_menu.exec(self.mapToGlobal(position))
         self._context_menu = None
+
+    def export_graph_snapshot(self, *, selected_only: bool = False) -> None:
+        """Export the graph from model coordinates, independent of viewport zoom."""
+        output, _ = QFileDialog.getSaveFileName(self, "Export Graph Snapshot", "graph.png", "PNG image (*.png)")
+        if not output:
+            return
+        from core.graph_exchange import project_to_graph
+        from core.graph_renderer import GraphRenderOptions, save_graph_image
+        ids = {item.node_id for item in self.selected_nodes()} if selected_only else None
+        save_graph_image(project_to_graph(self.project, node_ids=ids), output,
+                         GraphRenderOptions(scale=2.0, selected_only=False, watermark=True))
 
     def show_node_context_menu(self, global_pos: QPoint) -> None:
         from ui.node_graph.menus import NodeOperationsMenu

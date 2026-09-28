@@ -100,23 +100,64 @@ class NodeProperty:
 
 
 class NodeSocket:
-    """Input / output socket for nodes."""
+    """Input / output socket, including optional author-facing documentation."""
 
-    def __init__(self, name: str, socket_type: NodeSocketType, is_input: bool = False) -> None:
+    def __init__(self, name: str, socket_type: NodeSocketType, is_input: bool = False,
+                 *, description: str = "", default: Any = None, units: str = "",
+                 coordinate_space: str = "") -> None:
         self.name = name
         self.socket_type = socket_type
         self.is_input = is_input
+        self.description = description.strip() or (
+            f"{'Input' if is_input else 'Output'} port '{name}'. Connect a compatible value."
+        )
+        self.default = default
+        self.units = units
+        self.coordinate_space = coordinate_space
 
     def is_node_reference_socket(self) -> bool:
         """Node and Any both behave as node-reference sockets."""
         return self.socket_type in (NodeSocketType.Node, NodeSocketType.Any)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data = {
             "name": self.name,
             "type": self.socket_type.name,
             "is_input": self.is_input,
         }
+        if self.description:
+            data["description"] = self.description
+        if self.default is not None:
+            data["default"] = self.default
+        if self.units:
+            data["units"] = self.units
+        if self.coordinate_space:
+            data["coordinate_space"] = self.coordinate_space
+        return data
+
+    @property
+    def type_label(self) -> str:
+        return {
+            NodeSocketType.Frame: "FrameWithAudio",
+            NodeSocketType.Mask: "Mask",
+            NodeSocketType.Number: "Float",
+            NodeSocketType.Color: "Color",
+            NodeSocketType.Node: "Node",
+            NodeSocketType.Any: "Any",
+            NodeSocketType.Audio: "Audio",
+        }.get(self.socket_type, self.socket_type.name)
+
+    def tooltip_text(self) -> str:
+        """Return concise fallback-rich documentation for UI tooltips."""
+        text = self.description or f"{self.name} port."
+        lines = [f"{self.name}  |  {self.type_label}", "", text]
+        if self.units:
+            lines.append(f"Units: {self.units}")
+        if self.coordinate_space:
+            lines.append(f"Coordinate space: {self.coordinate_space}")
+        if self.default is not None:
+            lines.append(f"Default: {self.default}")
+        return "\n".join(lines)
 
 
 class PreviewCost(IntEnum):
@@ -240,14 +281,36 @@ class Node(ABC):
     def input_required_for_output(self, input_slot: str, output_slot: str) -> bool:
         return self.input_required(input_slot)
 
-    def add_input(self, name: str, socket_type: NodeSocketType) -> None:
+    def add_input(self, name: str, socket_type: NodeSocketType, *, doc: str = "",
+                  default: Any = None, units: str = "", coordinate_space: str = "") -> None:
         """Allow Any to accept ANY output type."""
         if socket_type == NodeSocketType.Node:
             socket_type = NodeSocketType.Any
-        self.inputs[name] = NodeSocket(name, socket_type, is_input=True)
+        self.inputs[name] = NodeSocket(name, socket_type, is_input=True, description=doc,
+                                       default=default, units=units, coordinate_space=coordinate_space)
 
-    def add_output(self, name: str, socket_type: NodeSocketType) -> None:
-        self.outputs[name] = NodeSocket(name, socket_type, is_input=False)
+    def add_output(self, name: str, socket_type: NodeSocketType, *, doc: str = "",
+                   default: Any = None, units: str = "", coordinate_space: str = "") -> None:
+        self.outputs[name] = NodeSocket(name, socket_type, is_input=False, description=doc,
+                                        default=default, units=units, coordinate_space=coordinate_space)
+
+    def set_port_documentation(self, name: str, *, input_port: bool, doc: str,
+                               default: Any = None, units: str = "",
+                               coordinate_space: str = "") -> None:
+        """Attach documentation after dynamic/legacy port creation."""
+        ports = self.inputs if input_port else self.outputs
+        port = ports.get(name)
+        if port is None:
+            raise KeyError(f"Unknown {'input' if input_port else 'output'} port: {name}")
+        port.description = doc.strip()
+        port.default = default
+        port.units = units
+        port.coordinate_space = coordinate_space
+
+    def port_tooltip(self, name: str, *, input_port: bool) -> str:
+        ports = self.inputs if input_port else self.outputs
+        port = ports.get(name)
+        return port.tooltip_text() if port is not None else name
 
     def set_property(self, key: str, value: Any | NodeProperty, input_type: NodePropertyInputType | None = None) -> None:
         if isinstance(value, NodeProperty):

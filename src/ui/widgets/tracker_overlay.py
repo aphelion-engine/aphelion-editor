@@ -29,14 +29,24 @@ from core.history import (
 )
 from core.nodes.shape_tracker import ShapeTrackerNode
 from core.nodes.enums import TrackerShape
-from core.nodes.tracking_nodes import PlanarTrackerNode, TrackerNode
+from core.nodes.tracking_nodes import (
+    PlanarHomographyTrackerNode,
+    PlanarTrackerNode,
+    SurfaceTrackerNode,
+    TrackerNode,
+)
 from ui.widgets.tracking_actions import CORNER_NAMES, clear_tracking, run_tracking
 
 if TYPE_CHECKING:
     from core.history import HistoryStack
     from core.project import Project
 
-TrackerLike = TrackerNode | PlanarTrackerNode
+PlanarNodeTypes = (PlanarTrackerNode, PlanarHomographyTrackerNode, SurfaceTrackerNode)
+TrackerLike = TrackerNode | PlanarTrackerNode | PlanarHomographyTrackerNode | SurfaceTrackerNode
+
+
+def _is_planar(node: object) -> bool:
+    return isinstance(node, PlanarNodeTypes)
 
 # Visual sizing, in overlay-widget pixels.
 _POINT_RADIUS: float = 5.0
@@ -53,21 +63,21 @@ def _clone_curve(curve: AnimationCurve) -> AnimationCurve:
 
 def _point_keys(node: TrackerLike) -> tuple[str, ...]:
     """Return the point keys this tracker exposes ("point", or corner names)."""
-    if isinstance(node, PlanarTrackerNode):
+    if _is_planar(node):
         return CORNER_NAMES
     return ("point",)
 
 
 def _seed_property_names(node: TrackerLike, key: str) -> tuple[str, str]:
     """Return the ``(x_property, y_property)`` names backing ``key``'s seed."""
-    if isinstance(node, PlanarTrackerNode):
+    if _is_planar(node):
         return f"{key}_seed_x", f"{key}_seed_y"
     return "center_x", "center_y"
 
 
 def _seed_position(node: TrackerLike, key: str) -> tuple[float, float]:
     """Return ``key``'s normalized seed position."""
-    if isinstance(node, PlanarTrackerNode):
+    if _is_planar(node):
         return node.seed_corners()[CORNER_NAMES.index(key)]
     return node.seed_position()
 
@@ -81,7 +91,7 @@ def _set_seed_position(node: TrackerLike, key: str, x: float, y: float) -> None:
 
 def _curve_pair(node: TrackerLike, key: str) -> tuple[AnimationCurve, AnimationCurve]:
     """Return ``key``'s ``(x_curve, y_curve)``."""
-    if isinstance(node, PlanarTrackerNode):
+    if _is_planar(node):
         return node.corner_curves[key]
     return node.track_x, node.track_y
 
@@ -90,7 +100,7 @@ def _set_curve_pair(
     node: TrackerLike, key: str, curve_x: AnimationCurve, curve_y: AnimationCurve
 ) -> None:
     """Assign ``key``'s ``(x_curve, y_curve)`` directly on the node."""
-    if isinstance(node, PlanarTrackerNode):
+    if _is_planar(node):
         node.corner_curves[key] = (curve_x, curve_y)
     else:
         node.track_x = curve_x
@@ -225,7 +235,7 @@ class TrackerOverlayWidget(QWidget):
     def set_edit_target(self, node_id: str | None) -> None:
         """Arm (``node_id`` set to a tracker) or disarm interactive editing."""
         node = self.project.nodes.get(node_id) if node_id is not None else None
-        self._node_id = node_id if isinstance(node, (TrackerNode, PlanarTrackerNode)) else None
+        self._node_id = node_id if isinstance(node, (TrackerNode, *PlanarNodeTypes)) else None
         self._cancel_drag()
         self._toolbar.draw_button.setChecked(False)
         for button in (self._toolbar.draw_button,self._toolbar.remove_vertex_button,self._toolbar.clear_shape_button):
@@ -244,7 +254,7 @@ class TrackerOverlayWidget(QWidget):
         if self._node_id is None:
             return None
         node = self.project.nodes.get(self._node_id)
-        return node if isinstance(node, (TrackerNode, PlanarTrackerNode)) else None
+        return node if isinstance(node, (TrackerNode, *PlanarNodeTypes)) else None
 
     def _to_widget_pos(self, x: float, y: float) -> QPointF:
         rect = self._image_rect_provider()
@@ -294,7 +304,7 @@ class TrackerOverlayWidget(QWidget):
             # clicking anywhere jumps it there directly, so placing a fresh
             # tracker is a single click rather than hunt-then-drag. A Planar
             # Tracker's four corners stay drag-only to avoid guessing intent.
-            if isinstance(node, PlanarTrackerNode):
+            if _is_planar(node):
                 return
             key = "point"
         self._begin_drag(key)
@@ -359,7 +369,7 @@ class TrackerOverlayWidget(QWidget):
         if self._drag_was_tracked and self._drag_old_curves is not None:
             old_x, old_y = self._drag_old_curves
             new_x, new_y = _curve_pair(node, key)
-            if isinstance(node, PlanarTrackerNode):
+            if _is_planar(node):
                 old_curves = dict(node.corner_curves)
                 old_curves[key] = (old_x, old_y)
                 new_curves = dict(node.corner_curves)
@@ -454,7 +464,7 @@ class TrackerOverlayWidget(QWidget):
         rect = self._image_rect_provider()
         region_w, region_h = node.region_size_normalized()
         search_radius = node.search_radius_normalized()
-        is_planar = isinstance(node, PlanarTrackerNode)
+        is_planar = _is_planar(node)
 
         centers: list[QPointF] = []
         for key in _point_keys(node):
