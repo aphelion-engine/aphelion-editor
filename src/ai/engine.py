@@ -79,6 +79,31 @@ from ai.summary import AgentCompletionSummary, build_summary
 from ai.task import AgentTask, TaskStatus, is_narration
 from ai.task import plan_titles as _plan_titles
 from ai.task import StepStatus
+
+
+def _compact(history: list[ChatMessage]) -> list[ChatMessage]:
+    """Drop the oldest messages until the context fits.
+
+    The engine keeps the system prompt and the most recent ``_MIN_KEEP_MESSAGES``
+    turns.  Keeping the conversation compact is a UI concern, not a model
+    one: nothing below is a QObject, so this function is guaranteed to run on
+    the worker thread.
+    """
+    if len(history) <= _MIN_KEEP_MESSAGES + 1:
+        return history
+    # Keep the system payload and the last few turns; drop the middle.
+    return history[:2] + history[-(_MIN_KEEP_MESSAGES + 1):]
+
+
+def _maybe_compact(
+    history: list[ChatMessage],
+    context_window: int,
+) -> list[ChatMessage]:
+    """Compact the history when it exceeds the model's context window."""
+    needed = int(context_window * _CONTEXT_BUDGET_FRACTION)
+    if len(history) * 80 > needed:
+        return _compact(history)
+    return history
 from ai.task import TodoList, plan_titles
 from ai.tasks import effort as _effort
 from ai.tasks import AgentEffort, effort_from_string
@@ -354,6 +379,86 @@ Rules:
 # ---------------------------------------------------------------------------
 # Run result
 # ---------------------------------------------------------------------------
+
+def _detect_workflow(self, objective: str) -> WorkflowPlan | None:
+    """Recognise the professional workflow a request is asking for.
+
+    A question is never treated as a workflow build. "What does Floor
+    Tracker do?" mentions a workflow's subject but asks for information, so it
+    must stay a read-only turn. Failure here must never break a run: a request
+    without a recognised workflow is simply a direct edit.
+    """
+    if _QUESTION_START.match(objective or ""):
+        return None
+    try:
+        return workflows.resolve_request(objective)
+    except Exception:  # noqa: BLE001
+        _LOG.exception("Workflow resolution failed")
+        return None
+
+
+def _workflow_block(self) -> str:
+    """Workflow knowledge plus, when recognised, the resolved plan."""
+    lines = [
+        "\n## Professional workflow knowledge",
+        "For a non-trivial creative request, first establish how professionals "
+        "accomplish it, then check which Aphelion nodes implement those stages. "
+        "`workflow.resolve` does both in one call and is the preferred first "
+        "step for these requests. Knowledge of other applications may inform "
+        "the approach, but Aphelion's registry decides what can actually be "
+        "built: never create a node because another application has an "
+        "equivalent, and never invent one.",
+        "Recognised workflows: "
+        + ", ".join(
+            f"{candidate.title} [{candidate.key}]"
+            for candidate in workflows.recipes()
+        ),
+    ]
+    plan = self.workflow_plan
+    if plan is not None:
+        lines.append(
+            "\nThis request matches an established workflow. Follow its order:"
+        )
+        lines.append(plan.describe())
+        lines.append("Rationale to give the user: " + plan.recipe.rationale)
+        if plan.unsupported:
+            lines.append(
+                "Aphelion has no node for: "
+                + ", ".join(match.stage.title for match in plan.unsupported)
+                + ". Tell the user plainly instead of improvising."
+            )
+    return "\n".join(lines)
+
+
+def _node_block(self) -> str:
+    """The complete node vocabulary, so no node can be unknown."""
+    try:
+        return "\n## Node knowledge\n" + node_awareness_prompt(
+            query=getattr(self.task, "objective", "") or ""
+        )
+    except Exception:  # noqa: BLE001
+        _LOG.exception("Node awareness block failed")
+        return ""
+
+
+def _publish_plan(self) -> None:
+    """Publish the current plan so the UI can show live progress."""
+    if not self.config.emit_progress:
+        return
+    steps = self.task.todos.steps
+    finished = sum(1 for s in steps if s.status is StepStatus.DONE or s.status is StepStatus.SKIPPED)
+    payload = PlanPayload(
+        steps=[s.to_dict() for s in steps],
+        finished=finished,
+        total=len(steps),
+        complete=self.task.todos.is_complete(),
+        headline=self.task.todos.headline(),
+    )
+    self._publish(AgentEvent(
+        AgentEventKind.PLAN_READY,
+        payload,
+    ))
+
 
 @dataclass
 class RunResult:
