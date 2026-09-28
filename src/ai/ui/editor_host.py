@@ -13,11 +13,25 @@ This is the concrete form of the architecture rule: the model never reaches a
 from __future__ import annotations
 
 import queue
+import threading
+from concurrent.futures import CancelledError, Future
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ui.windows.editor import Editor
+
+
+class ProjectContextInvalidated(RuntimeError):
+    """Raised when a queued AI operation outlives its editor document."""
+
+
+@dataclass
+class _ProjectCall:
+    callback: Callable[[], Any]
+    future: Future[Any]
+    project: Any
 
 
 class EditorAgentHost:
@@ -28,8 +42,16 @@ class EditorAgentHost:
 
     def __init__(self, editor: Editor) -> None:
         self.editor = editor
-        self._queue: queue.Queue[Callable[[], None]] = queue.Queue()
+        self._owner_thread_id = threading.get_ident()
+        self._queue: queue.Queue[Callable[[], None] | _ProjectCall] = queue.Queue()
         self._pending_proposal: dict[str, Any] | None = None
+        self._project_ref = editor.project
+        self._task_project: Any | None = None
+        self._task_active = False
+        self._task_invalidated = False
+        self._closed = False
+        self._state_lock = threading.RLock()
+        self._active_transaction: Any | None = None
 
     # ------------------------------------------------------------------
     # Document
@@ -37,13 +59,104 @@ class EditorAgentHost:
 
     @property
     def project(self) -> Any:
+        self._assert_owner_thread()
         return self.editor.project
 
     @property
     def history(self) -> Any:
+        self._assert_owner_thread()
         return self.editor.history
 
+    def _assert_owner_thread(self) -> None:
+        if threading.get_ident() != self._owner_thread_id:
+            raise RuntimeError("AI project access must run on the editor's owning thread.")
+
+    def begin_task(self) -> None:
+        self._assert_owner_thread()
+        with self._state_lock:
+            if self._closed:
+                raise ProjectContextInvalidated("The editor is closing.")
+            if self._task_active:
+                raise RuntimeError("An AI task is already active for this editor.")
+            self._project_ref = self.editor.project
+            self._task_project = self._project_ref
+            self._task_active = True
+            self._task_invalidated = False
+
+    def end_task(self) -> None:
+        self._assert_owner_thread()
+        with self._state_lock:
+            self._task_active = False
+            self._task_invalidated = False
+            self._task_project = None
+            self._active_transaction = None
+            self._project_ref = self.editor.project
+
+    def register_transaction(self, transaction: Any) -> None:
+        with self._state_lock:
+            if self._closed or self._task_invalidated:
+                raise ProjectContextInvalidated("The editor document is no longer available.")
+            self._active_transaction = transaction
+
+    def clear_transaction(self, transaction: Any) -> None:
+        with self._state_lock:
+            if self._active_transaction is transaction:
+                self._active_transaction = None
+
+    def invoke_project(self, callback: Callable[[], Any]) -> Any:
+        """Execute a project operation on the editor thread and return its result."""
+        self._assert_context_available()
+        if threading.get_ident() == self._owner_thread_id:
+            return callback()
+
+        with self._state_lock:
+            project = self._task_project if self._task_active else self._project_ref
+            if project is None:
+                raise ProjectContextInvalidated("The editor document has been closed.")
+            future: Future[Any] = Future()
+            request = _ProjectCall(callback=callback, future=future, project=project)
+            self._queue.put(request)
+        return future.result()
+
+    def invalidate_task(self, reason: str = "The editor document changed.", *, close: bool = False) -> None:
+        """Cancel queued work and roll back the open transaction on the owner thread."""
+        self._assert_owner_thread()
+        with self._state_lock:
+            self._task_invalidated = True
+            self._closed = self._closed or close
+            project = self._task_project or self._project_ref
+            transaction = self._active_transaction
+            self._active_transaction = None
+
+        if transaction is not None and project is not None and transaction.is_open:
+            transaction.rollback(project)
+
+        pending: list[_ProjectCall] = []
+        while True:
+            try:
+                item = self._queue.get_nowait()
+            except queue.Empty:
+                break
+            if isinstance(item, _ProjectCall):
+                pending.append(item)
+        for item in pending:
+            if not item.future.done():
+                item.future.set_exception(ProjectContextInvalidated(reason))
+
+    def _assert_context_available(self) -> None:
+        with self._state_lock:
+            if self._closed:
+                raise ProjectContextInvalidated("The editor is closing.")
+            if self._task_active and self._task_invalidated:
+                raise ProjectContextInvalidated("The editor document changed during this AI task.")
+
+    def retarget_project(self, project: Any) -> None:
+        self._assert_owner_thread()
+        with self._state_lock:
+            self._project_ref = project
+
     def save_project(self) -> bool:
+        self._assert_owner_thread()
         try:
             return bool(self.editor.save_project())
         except Exception:  # noqa: BLE001 - saving must not break a tool call
@@ -226,13 +339,30 @@ class EditorAgentHost:
         self._queue.put(action)
 
     def drain(self) -> int:
-        """Run queued UI actions on the main thread. Returns how many ran."""
+        """Run queued project calls and visual updates on the owner thread."""
+        self._assert_owner_thread()
         ran = 0
         while True:
             try:
                 action = self._queue.get_nowait()
             except queue.Empty:
                 break
+            if isinstance(action, _ProjectCall):
+                if action.future.done():
+                    continue
+                try:
+                    self._assert_context_available()
+                    with self._state_lock:
+                        expected_project = self._task_project if self._task_active else self._project_ref
+                        if action.project is not expected_project or action.project is not self.editor.project:
+                            raise ProjectContextInvalidated("The editor document changed before the AI operation ran.")
+                    if action.future.set_running_or_notify_cancel():
+                        action.future.set_result(action.callback())
+                    ran += 1
+                except BaseException as exc:
+                    if not action.future.done():
+                        action.future.set_exception(exc)
+                continue
             try:
                 action()
             except Exception:  # noqa: BLE001 - a UI hiccup must not kill the panel

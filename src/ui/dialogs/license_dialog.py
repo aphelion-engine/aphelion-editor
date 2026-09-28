@@ -92,6 +92,18 @@ class LicenseDialog(QDialog):
     def _update_countdown(self) -> None:
         self._status.setText(f"Close available in {self._seconds_left} seconds.")
 
+    def accept(self) -> None:
+        if not self._close_locked:
+            super().accept()
+
+    def reject(self) -> None:
+        if not self._close_locked:
+            super().reject()
+
+    def done(self, result: int) -> None:
+        if not self._close_locked:
+            super().done(result)
+
     def closeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         if self._close_locked:
             event.ignore()

@@ -477,8 +477,11 @@ class AgentEngine:
         self._organised_layout = False
 
         transaction = AIEditTransaction(label=label or "AI: Edit project")
+        register_transaction = getattr(self.host, "register_transaction", None)
+        if callable(register_transaction):
+            register_transaction(transaction)
         result = RunResult(messages=list(messages), task=self.task)
-        initial_node_ids = set(self.host.project.nodes)
+        initial_node_ids = self.host.invoke_project(lambda: set(self.host.project.nodes))
         started_at = time.monotonic()
         continuation_retries = 0
         blocked_reason = ""
@@ -699,21 +702,29 @@ class AgentEngine:
 
                 if not calls:
                     unfinished = self.task.unfinished()
-                    current_node_ids = set(self.host.project.nodes)
+
+                    def inspect_completion() -> tuple[set[str], list[str]]:
+                        project = self.host.project
+                        current_ids = set(project.nodes)
+                        missing_connections: list[str] = []
+                        if self.task.requires_edit and "connect" in self.task.required_operations:
+                            created_ids = current_ids - initial_node_ids
+                            connections = list(project.connections)
+                            for node_id in created_ids:
+                                node = project.nodes[node_id]
+                                if node.inputs and node.outputs:
+                                    incoming = any(c.input_node_id == node_id for c in connections)
+                                    outgoing = any(c.output_node_id == node_id for c in connections)
+                                    if not incoming or not outgoing:
+                                        missing_connections.append(node.name)
+                        return current_ids, missing_connections
+
+                    current_node_ids, missing_connections = self.host.invoke_project(inspect_completion)
                     if self.task.intent == "CREATE" and not current_node_ids - initial_node_ids:
                         unfinished.append("The requested new node must exist in the project")
                     if self.task.intent == "DELETE" and not initial_node_ids - current_node_ids:
                         unfinished.append("The requested node must actually be removed")
-                    if self.task.requires_edit and "connect" in self.task.required_operations:
-                        created = set(self.host.project.nodes) - initial_node_ids
-                        connections = list(self.host.project.connections)
-                        for node_id in created:
-                            node = self.host.project.nodes[node_id]
-                            if node.inputs and node.outputs:
-                                incoming = any(c.input_node_id == node_id for c in connections)
-                                outgoing = any(c.output_node_id == node_id for c in connections)
-                                if not incoming or not outgoing:
-                                    unfinished.append(f"Connect both sides of {node.name}")
+                    unfinished.extend(f"Connect both sides of {name}" for name in missing_connections)
                     self.task.pending_actions = list(unfinished)
                     invalid = self.task.requires_edit and self.task.successful_edit_count > 0 and not result.validation.get("ok")
                     needs_execution = self.task.requires_edit and (self.task.successful_edit_count == 0 or unfinished or invalid)
@@ -861,7 +872,7 @@ class AgentEngine:
                     self.task.status = TaskStatus.VALIDATING
                     if self.config.emit_progress:
                         self._publish(AgentEvent(AgentEventKind.STATUS, "Validating graph..."))
-                    report = validate_project(self.host.project)
+                    report = self.host.invoke_project(lambda: validate_project(self.host.project))
                     payload = report.to_dict()
                     result.validation = payload
                     if report.ok and self.task.mark("Validated the graph"):

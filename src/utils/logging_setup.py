@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import logging
 import os
+import queue
 import sys
 import threading
 from logging.handlers import RotatingFileHandler
@@ -145,7 +146,7 @@ def configure_logging(*, level: str | None = None) -> logging.Logger:
         _queue_handler = logging.handlers.QueueHandler(_record_queue)
         root.addHandler(_queue_handler)
 
-        _listener = logging.QueueListener(
+        _listener = logging.handlers.QueueListener(
             _record_queue,
             console,
             file_handler,

@@ -42,6 +42,10 @@ class ToolSpec:
     #: rejection cannot strand half of a larger batch.
     standalone: bool = False
 
+    @property
+    def thread_affinity(self) -> str:
+        return "worker" if self.category == "Source" else "project"
+
     def to_openai_schema(self) -> dict[str, Any]:
         return {
             "type": "function",
@@ -191,7 +195,11 @@ class ToolRegistry:
 
         context.args = validated
         try:
-            result = spec.handler(context)
+            invoke_project = getattr(context.host, "invoke_project", None)
+            if callable(invoke_project) and spec.thread_affinity == "project":
+                result = invoke_project(lambda: spec.handler(context))
+            else:
+                result = spec.handler(context)
         except PermissionDeniedError as exc:
             return ToolResult.failure(
                 exc.code,

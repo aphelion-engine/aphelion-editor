@@ -224,7 +224,8 @@ class AssistantSession:
     def stored_conversations(self) -> list[Conversation]:
         if not self.settings.save_conversations:
             return []
-        return self.conversations.load(project_key(self.host.project))
+        key = self.host.invoke_project(lambda: project_key(self.host.project))
+        return self.conversations.load(key)
 
     def persist(self) -> None:
         """Write this conversation when the user opted into persistence."""
@@ -238,7 +239,7 @@ class AssistantSession:
                 "",
             )
             self.conversation.title = (first[:60] or "Conversation").strip()
-        key = project_key(self.host.project)
+        key = self.host.invoke_project(lambda: project_key(self.host.project))
         existing = [
             stored
             for stored in self.conversations.load(key)
@@ -281,10 +282,12 @@ class AssistantSession:
         if directive:
             parts.append(directive)
         if mentioned:
-            labels = []
-            for node_id in mentioned:
-                node = self.host.project.nodes.get(node_id)
-                labels.append(f"{node.name} ({node_id})" if node else node_id)
+            labels = self.host.invoke_project(
+                lambda: [
+                    f"{node.name} ({node_id})" if (node := self.host.project.nodes.get(node_id)) else node_id
+                    for node_id in mentioned
+                ]
+            )
             parts.append("The user referred to these nodes: " + ", ".join(labels) + ".")
         if stripped:
             parts.append(stripped)
@@ -293,14 +296,22 @@ class AssistantSession:
     def mention_candidates(self, prefix: str) -> list[tuple[str, str]]:
         """Return ``(node_id, name)`` pairs matching an in-progress mention."""
         needle = prefix.strip().lower()
-        rows: list[tuple[str, str]] = []
-        for node_id, node in self.host.project.nodes.items():
-            if not needle or needle in node.name.lower() or needle in node.node_type.lower():
-                rows.append((node_id, node.name))
-        rows.sort(key=lambda item: item[1].lower())
-        return rows[:20]
+
+        def collect() -> list[tuple[str, str]]:
+            rows = [
+                (node_id, node.name)
+                for node_id, node in self.host.project.nodes.items()
+                if not needle or needle in node.name.lower() or needle in node.node_type.lower()
+            ]
+            rows.sort(key=lambda item: item[1].lower())
+            return rows[:20]
+
+        return self.host.invoke_project(collect)
 
     def _resolve_mention(self, name: str) -> str | None:
+        return self.host.invoke_project(lambda: self._resolve_mention_on_project(name))
+
+    def _resolve_mention_on_project(self, name: str) -> str | None:
         project = self.host.project
         if name in project.nodes:
             return name

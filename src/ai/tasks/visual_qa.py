@@ -26,6 +26,19 @@ from ai.tasks import AgentEffort
 
 _LOG = logging.getLogger("aphelion.tasks.visual_qa")
 
+#: One quality level a frame can be inspected at, from coarsest to finest.
+
+class VisualQAOption(str, Enum):
+    """A structured option the user can pick for visual QA or frame inspection.
+
+    Unlike the effort levels these live with the UI, but they are exposed here
+    so the engine and the panel can agree on exactly what a user chose.
+    """
+
+    BRIEF = "brief"          # one low-res frame
+    NORMAL = "normal"        # a few frames, key aspects only
+    THOROUGH = "thorough"    # representative frames across the clip
+    MAXIMUM = "maximum"      # every QA aspect, several passes
 
 class VisualQAAspect(Enum):
     """One thing that can be checked when grading a shot."""

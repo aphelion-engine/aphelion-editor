@@ -128,6 +128,11 @@ def _default_license_path() -> Path:
 def _parse_timestamp(value: object) -> datetime | None:
     if not isinstance(value, str):
         return None
+    try:
+        parsed = datetime.fromisoformat(value)
+        return parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
 
 
 def _verify_entitlement(token: str) -> bool:
@@ -148,8 +153,3 @@ def _verify_entitlement(token: str) -> bool:
         return claims.get("productId") == PRODUCT_ID
     except Exception:  # noqa: BLE001 - invalid local state is unlicensed
         return False
-    try:
-        parsed = datetime.fromisoformat(value)
-        return parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-    except ValueError:
-        return None

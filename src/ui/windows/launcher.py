@@ -48,7 +48,7 @@ class ProjectLauncher(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, False)
         self.setStyleSheet(LAUNCHER_STYLE)
-        self.setFixedSize(560, 480)
+        self.setFixedSize(660, 560)
         self._recent: RecentProjectsStore = recent or RecentProjectsStore()
         self._handoff: bool = False
         self._shown_once: bool = False
@@ -72,40 +72,48 @@ class ProjectLauncher(QWidget):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(32, 28, 32, 28)
-        root.setSpacing(10)
+        root.setContentsMargins(38, 34, 38, 34)
+        root.setSpacing(16)
 
         brand = QLabel("APHELION")
         brand.setObjectName("LauncherBrand")
         root.addWidget(brand)
 
-        subtitle = QLabel("Open a project or start a new editing session.")
+        subtitle = QLabel("A focused workspace for editing, compositing, and finishing.")
         subtitle.setObjectName("LauncherSubtitle")
         root.addWidget(subtitle)
 
         actions = QHBoxLayout()
-        actions.setSpacing(10)
+        actions.setSpacing(12)
         new_btn = QPushButton("New Project")
         new_btn.setObjectName("LauncherPrimaryButton")
+        new_btn.setMinimumHeight(54)
         new_btn.clicked.connect(self._on_new_project)
         actions.addWidget(new_btn)
 
         open_btn = QPushButton("Open Project…")
         open_btn.setObjectName("LauncherSecondaryButton")
+        open_btn.setMinimumHeight(54)
         open_btn.clicked.connect(self._on_browse_project)
         actions.addWidget(open_btn)
         root.addLayout(actions)
 
+        recent_heading = QHBoxLayout()
         recent_header = QLabel("RECENT PROJECTS")
         recent_header.setObjectName("LauncherRecentHeader")
-        root.addWidget(recent_header)
+        recent_heading.addWidget(recent_header)
+        recent_hint = QLabel("Double-click to open")
+        recent_hint.setObjectName("LauncherRecentHint")
+        recent_heading.addStretch(1)
+        recent_heading.addWidget(recent_hint)
+        root.addLayout(recent_heading)
 
         self._recent_list = QListWidget()
         self._recent_list.setObjectName("LauncherRecentList")
         self._recent_list.itemActivated.connect(self._on_recent_activated)
         root.addWidget(self._recent_list, 1)
 
-        self._empty_label = QLabel("No recent projects yet.")
+        self._empty_label = QLabel("Your recent projects will appear here.")
         self._empty_label.setObjectName("LauncherEmptyRecent")
         self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         root.addWidget(self._empty_label)

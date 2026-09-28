@@ -4,6 +4,9 @@ from enum import Enum
 import re
 
 from ai.plan import StepStatus, TodoList, plan_titles
+from ai.tasks import AgentEffort
+from ai.tasks.effort import effort_from_string
+from ai.tasks.plan import compute_parent_plan
 
 
 class TaskStatus(str, Enum):

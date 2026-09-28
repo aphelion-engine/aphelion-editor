@@ -48,6 +48,12 @@ class ProjectContextProvider:
     def build(self, request: ContextRequest | None = None) -> str:
         """Return a formatted context block for the system prompt."""
         request = request or ContextRequest()
+        invoke = getattr(self.host, "invoke_project", None)
+        if callable(invoke):
+            return invoke(lambda: self._build_on_owner_thread(request))
+        return self._build_on_owner_thread(request)
+
+    def _build_on_owner_thread(self, request: ContextRequest) -> str:
         payload: dict[str, Any] = {}
         project = self.host.project
 

@@ -38,6 +38,9 @@ class HeadlessAgentHost:
         self._region_proposal: dict[str, Any] | None = None
         self.messages: list[tuple[str, int]] = []
 
+    def invoke_project(self, callback):
+        return callback()
+
     # ------------------------------------------------------------------
     # Selection
     # ------------------------------------------------------------------

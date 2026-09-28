@@ -556,10 +556,16 @@ class Editor(QMainWindow):
             Closes the previous project's media handles and clears undo history.
         """
         previous = self.project
+        ai_panel = getattr(self, "_ai_panel", None)
+        ai_host = getattr(ai_panel, "host", None)
+        if ai_host is not None:
+            ai_host.invalidate_task("The project changed while the assistant was working.")
         self._suspend_dirty = True
         self.history.unsubscribe(self._on_history_changed)
         self.project.unsubscribe(self._on_project_dirty_event)
         self.project = project
+        if ai_host is not None:
+            ai_host.retarget_project(project)
         self.history = HistoryStack(project)
         self.viewport.set_project(project)
         self.timeline.set_project(project)
