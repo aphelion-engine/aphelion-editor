@@ -82,8 +82,9 @@ from core.nodes.timing_nodes import (FilmFlickerNode, FrameHoldNode,
                                      PulseExposureNode, StrobeNode,
                                      TimeRemapNode)
 from core.nodes.tracking_nodes import (PlanarHomographyTrackerNode,
-                                       PlanarTrackerNode, SurfaceTrackerNode,
-                                       TrackerNode)
+                                        PlanarTrackerNode, SurfaceTrackerNode,
+                                        TrackerNode)
+from core.nodes.professional_tracking_nodes import PROFESSIONAL_TRACKING_NODE_TYPES
 from core.nodes.transform_nodes import (CornerPinMaskNode, CornerPinNode,
                                         CropNode, PerspectiveNode,
                                         PolarWarpNode, ShearNode,
@@ -264,8 +265,9 @@ BUILTIN_NODE_TYPES: tuple[type[Node], ...] = (
     # Tracking
     TrackerNode,
     PlanarTrackerNode,
-    # SurfaceTrackerNode,
-    # PlanarHomographyTrackerNode,
+    PlanarHomographyTrackerNode,
+    SurfaceTrackerNode,
+    *PROFESSIONAL_TRACKING_NODE_TYPES,
 
     # Math / values
     ValueNode,

@@ -40,6 +40,12 @@ dev = [
     "mypy>=1.8.0",
     "build>=1.2.0",
 ]
+deep-tracking = [
+    "onnxruntime>=1.17.0",
+]
+deep-tracking-gpu = [
+    "onnxruntime-gpu>=1.17.0",
+]
 
 [project.scripts]
 aphelion = "aphelion_cli:main"

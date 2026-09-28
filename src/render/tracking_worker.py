@@ -15,8 +15,8 @@ from core.tracking.planar_tracker import (
     PlanarTrackingOptions,
     planar_results_to_corners,
     repair_planar_gaps,
-    track_planar_homography_range,
 )
+from core.tracking.engine import TrackingEngine
 
 if TYPE_CHECKING:
     from core.project import Project
@@ -157,7 +157,7 @@ class PlanarTrackingWorker(QThread):
             return
 
         try:
-            results = track_planar_homography_range(
+            results = TrackingEngine().track_planar(
                 sampler,
                 self._request.frame_numbers,
                 initial_corners=self._initial_corners,
