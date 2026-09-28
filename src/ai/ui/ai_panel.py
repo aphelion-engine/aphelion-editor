@@ -80,6 +80,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ai.credentials import CredentialStore
 from ai.platform.event_bus import (
     AgentEvent,
     AgentEventBus,
@@ -87,18 +88,16 @@ from ai.platform.event_bus import (
     QuestionPayload,
     ThinkingPayload,
 )
-from ai.session import AssistantSession
+from ai.session import SLASH_COMMANDS, AssistantSession
 from ai.settings import AISettingsStore
-from ai.credentials import CredentialStore
 from ai.summary import AgentCompletionSummary
 from ai.task import StepStatus, TodoList
 from ai.tasks import AgentEffort
-from ai.worker import AgentWorker
 from ai.types import AgentMode, PendingChanges
 from ai.ui.action_view import ActionLogView
 from ai.ui.changes_dialog import ChangesPreviewDialog, describe_region_proposal
 from ai.ui.editor_host import EditorAgentHost
-from ai.session import SLASH_COMMANDS
+from ai.worker import AgentWorker
 
 #: How often queued UI effects and streamed text are flushed.
 
@@ -164,11 +163,8 @@ class EffortPicker(QComboBox):
         )
 
         self.addItems([_EFFORT_LABELS[e] for e in AgentEffort])
-
         self.setMinimumWidth(96)
-
         self.setStyleSheet("""
-
             QComboBox {
 
                 background: #22262e;
@@ -540,9 +536,7 @@ class AIPanel(QWidget):
             )
         else:
             self._activity_toggle.setText("Activity")
-            self._activity_toggle.setToolTip(
-                "Show every tool call the assistant made"
-            )
+            self._activity_toggle.setToolTip("Show every tool call the assistant made")
 
     def _on_activity_toggled(self, expanded: bool) -> None:
 
@@ -919,6 +913,26 @@ class AIPanel(QWidget):
     def _can_retry(self) -> bool:
 
         return any(turn.role == "user" for turn in self.session.turns)
+
+    def _begin_turn(self) -> None:
+        """Reset per-turn state before starting a new agent run."""
+        self._activity_count = 0
+        self._stream_buffer.clear()
+        self._streaming_block = False
+        self._pending_call.clear()
+        self._action_times.clear()
+        self._append_user(self._input.toPlainText().strip())
+
+    def _end_turn(self) -> None:
+        """Finalize a turn after the agent run completes."""
+        self._flush_stream()
+        self._set_busy(False)
+
+    def _reset_activity(self) -> None:
+        """Clear the activity log for a new run."""
+        self._activity_count = 0
+        self.activity.clear()
+        self._set_activity_summary()
 
     # -- actions -----------------------------------------------------------
 

@@ -9,6 +9,10 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+import threading
+
+from PyQt6.QtCore import QThread, pyqtSignal
+
 from ai.engine import AgentEngine, RunResult
 from ai.platform.event_bus import (
     AgentEvent,
@@ -18,12 +22,20 @@ from ai.platform.event_bus import (
 from ai.settings import AISettings
 from ai.session import AssistantSession, SessionState
 from ai.task import AgentTask, TaskStatus
-from ai.types import ChatMessage, AgentMode, EditPolicy
+from ai.tasks import AgentEffort
+from ai.types import ChatMessage, AgentMode, EditPolicy, SourceAccess
 from ai.types import PendingChanges
 
+#: Seconds the worker waits for a user decision before declining.
+_CONFIRM_TIMEOUT_S: float = 600.0
 
-class AgentWorker:
+
+class AgentWorker(QThread):
     """Runs one assistant turn on a background thread.
+
+    Emits structured :class:`AgentEvent` instances through a dedicated
+    :class:`AgentEventBus` with queued connections, so every widget update
+    happens on the GUI thread. No worker ever touches a Qt widget directly.
 
     Attributes
     ----------
@@ -32,15 +44,21 @@ class AgentWorker:
     engine : AgentEngine
         The engine that executes the turn.
     on_event : Callable[[AgentEvent], None] | None
-        Called (on whichever thread the worker runs on) with structured events
-        as they are produced. The receiver must post these onto the GUI thread.
+        Called on the GUI thread with structured events as they are produced.
     on_finished : Callable[[RunResult], None] | None
-        Called when the run completes, with the :class:`RunResult`.
+        Called on the GUI thread when the run completes.
     confirm : Callable[[PendingChanges, Any], bool] | None
-        Called when the user must confirm a destructive edit.
+        Called on the GUI thread when the user must confirm a destructive edit.
     mode : AgentMode
         The agent mode to use for this run.
     """
+
+    #: Emitted on the GUI thread with structured events.
+    event_received = pyqtSignal(AgentEvent)
+    #: Emitted on the GUI thread when the run finishes.
+    finished = pyqtSignal(RunResult)
+    #: Emitted on the GUI thread when user confirmation is requested.
+    confirm_requested = pyqtSignal(PendingChanges)
 
     def __init__(
         self,
@@ -53,6 +71,7 @@ class AgentWorker:
         mode: AgentMode = AgentMode.ASSIST,
         retry: bool = False,
     ) -> None:
+        super().__init__()
         self.session = session
         self.initial_text = initial_text
         self.on_event = on_event
@@ -61,69 +80,81 @@ class AgentWorker:
         self.mode = mode
         self.retry = retry
 
+        settings = session.settings
+        task = session.task
         self.engine = AgentEngine(
             host=session.host,
             registry=session.registry,
-            provider=session.active_provider(),
-            config=self._build_config(),
-            permissions=session.settings.permissions,
-            model=session.settings.default_provider_id,
-            context_block=self.session.context_block(),
-            source_context=self.session.source_context(),
-            task=self.session.task,
+            provider=session.active_provider_config(),
+            config=self._build_config(settings, task),
+            permissions=settings.permissions,
+            model=session.active_model(),
+            context_block=session.context_block(),
+            source_context=session.source_context(),
+            task=task,
             event_bus=None,
         )
-        self.engine.workflow_plan = self.session.workflow_plan
-        self.engine.task = session.task
+        self.engine.workflow_plan = session.workflow_plan
+        self.engine.task = task
 
         self._result: RunResult | None = None
         self._error: BaseException | None = None
         self._finished = False
+        self._confirm_event: threading.Event | None = None
+        self._confirm_result: bool = False
+        self._confirm_event_id: int | None = None
 
     # -- configuration ----------------------------------------------------
 
-    def _build_config(self) -> AISettings:
-        settings = self.session.settings
-        task = self.session.task
+    def _build_config(self, settings: AISettings, task: AgentTask | None) -> AISettings:
+        """Build the engine config from the session settings."""
         return AISettings(
             enabled=settings.enabled,
             agent_mode=self.mode,
             edit_policy=EditPolicy.FULL_AGENT
             if self.mode is AgentMode.AGENT
             else EditPolicy.ASK_BEFORE_CHANGES,
-            max_steps=settings.max_steps,
-            max_tool_calls=settings.max_tool_calls,
-            task_timeout=settings.task_timeout,
+            max_agent_steps=settings.max_agent_steps,
+            max_tool_calls=settings.max_agent_steps * 4,
+            task_timeout=settings.request_timeout_seconds * 2,
             stream=settings.stream,
-            request_timeout=settings.request_timeout,
+            request_timeout=settings.request_timeout_seconds,
             verbose_logging=settings.verbose_logging,
             system_prompt=settings.system_prompt,
-            effort=settings.agent_effort,
-            enable_visual_qa=settings.enable_visual_qa,
-            enable_workspace_research=settings.enable_workspace_research,
-            emit_progress=settings.emit_progress,
-            emit_summary=settings.emit_summary,
-            plan_titles=task.todos.steps if task.todos else [],
+            effort=AgentEffort.AUTO,
+            enable_visual_qa=settings.source_access != SourceAccess.OFF,
+            enable_workspace_research=settings.source_access == SourceAccess.FULL,
+            emit_progress=True,
+            emit_summary=True,
+            plan_titles=task.todos.steps if task and task.todos else [],
         )
 
     # -- run ---------------------------------------------------------------
 
     def run(self) -> None:
-        """Execute the turn on this thread and post structured events."""
+        """Execute the turn on this thread.
+
+        Structured events are emitted through a dedicated event bus with
+        queued connections, so the GUI thread receives them on the
+        appropriate signal/slot slots. No widget is touched here.
+        """
         try:
             from ai.platform.event_bus import AgentEventBus
 
             bus = AgentEventBus()
             self.engine.event_bus = bus
-            bus.event_received.connect(self._on_event_gui)
-            bus.run_finished.connect(self._on_finished)
+            # Queued connection: events are delivered on the GUI thread,
+            # where the panel's slots update widgets.
+            bus.event_received.connect(self.event_received.emit)
+            bus.run_finished.connect(self.finished.emit)
+            bus.confirm_requested.connect(self.confirm_requested.emit)
 
             messages = self._build_messages()
             self._result = self.engine.run(
                 messages,
                 on_event=self._emit_event,
                 should_stop=self.session.should_stop,
-                confirm=self.confirm,
+                confirm=self._confirm_from_worker,
                 label="AI: Edit project",
             )
         except Exception as exc:  # noqa: BLE001
@@ -144,17 +175,12 @@ class AgentWorker:
         return messages
 
     def _emit_event(self, event: AgentEvent) -> None:
-        if self.on_event is not None:
-            self.on_event(event)
-
-    def _on_event_gui(self, event: AgentEvent) -> None:
-        # Delivered on the GUI thread through the queued connection.
-        if self.on_event is not None:
-            self.on_event(event)
+        """Re-emit the event on the GUI thread via the bus."""
+        self.event_received.emit(event)
 
     def _on_finished(self, result: RunResult) -> None:
-        if self.on_finished is not None:
-            self.on_finished(result)
+        """Notify the panel that the run finished."""
+        self.finished.emit(result)
 
     # -- state ------------------------------------------------------------
 
@@ -177,6 +203,28 @@ class AgentWorker:
     @property
     def task_status(self) -> TaskStatus:
         return self.session.task.status
+
+    def _confirm_from_worker(self, pending: PendingChanges, _transaction: Any) -> bool:
+        """Request user confirmation for a destructive edit.
+
+        Emits a signal the panel's slot picks up on the GUI thread, where it
+        shows the confirmation dialog. Blocks the worker until the user
+        responds (within the timeout).
+        """
+        self.confirm_requested.emit(pending)
+        # Wait for the panel to respond. The panel sets _confirm_result
+        # from its slot and signals an event that unblocks this thread.
+        # This is a simple flag-based protocol; the worker does not touch
+        # any Qt widget directly.
+        import threading
+
+        # Use a local event to avoid clobbering the panel's event.
+        self._confirm_event = threading.Event()
+        self._confirm_result = False
+        self._confirm_event.wait(timeout=_CONFIRM_TIMEOUT_S)
+        approved = self._confirm_result
+        self._confirm_event = None
+        return approved
 
     def request_stop(self) -> None:
         self.session.request_stop()
