@@ -197,6 +197,8 @@ class CredentialStore:
         path = self._key_path
         ensure_directory(path.parent)
         wrapped = _dpapi(True, key)
+        if sys.platform == "win32" and wrapped is None:
+            raise OSError("Windows credential protection is unavailable")
         payload = wrapped if wrapped is not None else key
         handle, temporary_name = tempfile.mkstemp(
             prefix=path.name + ".", suffix=".tmp", dir=str(path.parent)

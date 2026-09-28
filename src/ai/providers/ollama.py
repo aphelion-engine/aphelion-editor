@@ -1,9 +1,4 @@
-"""Local Ollama provider.
-
-Talks to Ollama's native ``/api/chat`` endpoint over loopback only. Nothing
-about a conversation using this provider leaves the machine, and no API key is
-involved, so it is the clearest "fully local" option in settings.
-"""
+"""Native Ollama API for local, cloud, and custom connections."""
 
 from __future__ import annotations
 
@@ -17,13 +12,15 @@ from ai.types import ModelInfo, ProviderCapabilities, ProviderTestResult, ToolCa
 
 
 class OllamaProvider(AIProvider):
-    """Ollama on the local machine."""
+    """Ollama native chat and NDJSON streaming."""
 
     kind = "ollama"
 
-    @property
-    def is_local(self) -> bool:
-        return True
+    def _auth_headers(self) -> dict[str, str]:
+        headers = dict(self.config.extra_headers)
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
 
     def capabilities(self, model: str | None = None) -> ProviderCapabilities:
         declared = self.config.capabilities()
@@ -51,7 +48,7 @@ class OllamaProvider(AIProvider):
 
     def list_models(self) -> tuple[ModelInfo, ...]:
         try:
-            payload = self.transport.get_json(self._endpoint("api/tags"))
+            payload = self.transport.get_json(self._endpoint("api/tags"), self._auth_headers())
         except Exception:  # noqa: BLE001 - server may be down; that is not fatal
             return () if not self.config.model else (self.config.model_info(),)
         models: list[ModelInfo] = []
@@ -75,35 +72,14 @@ class OllamaProvider(AIProvider):
         return tuple(models)
 
     def test_connection(self) -> ProviderTestResult:
+        from ai.types import ChatMessage
         try:
-            models = self.list_models()
-        except ProviderUnavailableError as exc:
+            self.generate(ChatRequest(model=self.config.model,
+                          messages=[ChatMessage(role="user", content="Hello!")], max_tokens=8))
+        except Exception as exc:
             return ProviderTestResult(ok=False, message=str(exc))
-        if not models:
-            return ProviderTestResult(
-                ok=False,
-                message=(
-                    "Reached the address but no models are installed. Run "
-                    "`ollama pull <model>` then try again."
-                ),
-            )
-        names = tuple(model.model_id for model in models)
-        if not self.config.model:
-            return ProviderTestResult(
-                ok=False,
-                message="Server reachable. Pick one of: " + ", ".join(names[:8]),
-                models=names,
-            )
-        capabilities = self.capabilities(self.config.model)
-        return ProviderTestResult(
-            ok=True,
-            message=(
-                f"Connected to local Ollama. {len(names)} model(s) installed. "
-                f"Tool calling {'supported' if capabilities.supports_tools else 'will use the structured protocol'}."
-            ),
-            models=names,
-            capabilities=capabilities,
-        )
+        return ProviderTestResult(ok=True, message=f"Connected to Ollama. Model: {self.config.model}",
+                                  models=(self.config.model,), capabilities=self.capabilities())
 
     # ------------------------------------------------------------------
     # Generation
@@ -116,9 +92,10 @@ class OllamaProvider(AIProvider):
         on_token: TokenCallback | None = None,
         should_stop: StopCallback | None = None,
     ) -> ChatResponse:
+        self.transport.should_stop = should_stop
         if not request.model:
             raise ProviderResponseError(
-                "No Ollama model is selected. Pick one in Preferences → AI."
+                "No Ollama model is selected. Pick one in Preferences â†’ AI."
             )
         messages: list[dict[str, Any]] = []
         if request.system:
@@ -163,16 +140,22 @@ class OllamaProvider(AIProvider):
                 "num_predict": request.max_tokens,
             },
         }
+        if request.json_mode:
+            payload["format"] = "json"
         if request.tools:
             payload["tools"] = [_to_ollama_tool(schema) for schema in request.tools]
 
         url = self._endpoint("api/chat")
         if on_token is None:
-            decoded = self.transport.post_json(url, payload, {})
+            decoded = self.transport.post_json(url, payload, self._auth_headers())
             return self._parse(decoded)
         return self._stream(url, payload, on_token, should_stop)
 
     def _parse(self, decoded: dict[str, Any]) -> ChatResponse:
+        if decoded.get("error"):
+            raise ProviderResponseError("Ollama returned an API error.")
+        if not isinstance(decoded.get("message"), dict):
+            raise ProviderResponseError("Ollama returned no message.")
         message = decoded.get("message") if isinstance(decoded.get("message"), dict) else {}
         calls: list[ToolCall] = []
         for index, entry in enumerate(message.get("tool_calls") or []):
@@ -215,36 +198,33 @@ class OllamaProvider(AIProvider):
         should_stop: StopCallback | None,
     ) -> ChatResponse:
         content_parts: list[str] = []
-        final: dict[str, Any] = {}
-        for line in self.transport.stream_lines(url, payload, {}):
+        calls: list[ToolCall] = []
+        final = ChatResponse()
+        complete = False
+        for line in self.transport.stream_lines(url, payload, self._auth_headers()):
             if should_stop is not None and should_stop():
-                break
+                from ai.errors import CancelledError
+                raise CancelledError("Request cancelled.")
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
-                continue
-            if not isinstance(event, dict):
-                continue
-            message = event.get("message")
-            if isinstance(message, dict):
-                text = message.get("content")
-                if isinstance(text, str) and text:
-                    content_parts.append(text)
-                    on_token(text)
-                if message.get("tool_calls"):
-                    final = event
+                raise ProviderResponseError("Ollama returned malformed NDJSON.") from None
+            parsed = self._parse(event)
+            if parsed.content:
+                content_parts.append(parsed.content)
+                on_token(parsed.content)
+            for call in parsed.tool_calls:
+                call.call_id = f"ollama_{len(calls)}"
+                calls.append(call)
+            final = parsed
             if event.get("done"):
-                final = event
+                complete = True
                 break
-        if final:
-            parsed = self._parse(final)
-            if not parsed.content:
-                parsed.content = "".join(content_parts)
-            elif content_parts:
-                # Streaming deltas already delivered the text; avoid doubling.
-                parsed.content = "".join(content_parts)
-            return parsed
-        return ChatResponse(content="".join(content_parts), finish_reason="stop")
+        if not complete:
+            raise ProviderResponseError("Ollama stream ended before completion.")
+        final.content = "".join(content_parts)
+        final.tool_calls = calls
+        return final
 
 
 def _to_ollama_tool(schema: dict[str, Any]) -> dict[str, Any]:

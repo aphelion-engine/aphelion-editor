@@ -8,32 +8,33 @@ tools, or the UI.
 from __future__ import annotations
 
 from typing import Any
+import os
 
 from ai.errors import ProviderError
 from ai.providers.base import AIProvider
+from ai.providers.anthropic import AnthropicProvider
+from ai.providers.google import GoogleProvider
 from ai.providers.huggingface import HuggingFaceProvider
 from ai.providers.ollama import OllamaProvider
 from ai.providers.openai_compatible import OpenAICompatibleProvider
 from ai.settings import (KIND_ANTHROPIC, KIND_GOOGLE, KIND_HUGGINGFACE,
                          KIND_OLLAMA, KIND_OPENAI_COMPATIBLE, ProviderConfig)
 
-#: kind → implementation.
+#: kind â†’ implementation.
 KIND_CLASSES: dict[str, type[AIProvider]] = {
     KIND_OPENAI_COMPATIBLE: OpenAICompatibleProvider,
     KIND_HUGGINGFACE: HuggingFaceProvider,
     KIND_OLLAMA: OllamaProvider,
-    # Anthropic and Google both expose OpenAI-compatible endpoints, so they
-    # reuse the generic implementation rather than duplicating transport code.
-    KIND_ANTHROPIC: OpenAICompatibleProvider,
-    KIND_GOOGLE: OpenAICompatibleProvider,
+    KIND_ANTHROPIC: AnthropicProvider,
+    KIND_GOOGLE: GoogleProvider,
 }
 
 #: Friendly descriptions shown in settings.
 KIND_LABELS: dict[str, str] = {
     KIND_OPENAI_COMPATIBLE: "OpenAI-compatible API",
     KIND_HUGGINGFACE: "Hugging Face inference",
-    KIND_OLLAMA: "Ollama (local)",
-    KIND_ANTHROPIC: "Anthropic (OpenAI-compatible endpoint)",
+    KIND_OLLAMA: "Ollama (local / cloud / custom)",
+    KIND_ANTHROPIC: "Anthropic Messages API",
     KIND_GOOGLE: "Google Gemini (OpenAI-compatible endpoint)",
 }
 
@@ -56,11 +57,9 @@ def create_provider(
             + ", ".join(sorted(KIND_CLASSES))
         )
 
-    api_key = ""
-    if config.credential_ref and credentials is not None:
-        api_key = credentials.get(config.credential_key) or ""
-    elif credentials is not None and not config.is_local:
-        api_key = credentials.get(config.credential_key) or ""
+    api_key = credentials.get(config.credential_key) or "" if credentials is not None else ""
+    if not api_key and config.credential_env:
+        api_key = os.environ.get(config.credential_env, "")
 
     provider = implementation(config, api_key=api_key)
     provider.transport.timeout = max(5.0, float(timeout))

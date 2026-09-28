@@ -199,6 +199,9 @@ class ToolRegistry:
                 technical={"tool": name, "permission": exc.permission},
             )
         except ToolError as exc:
+            # Includes the source subsystem's refusals (ACCESS_DENIED,
+            # SOURCE_SHARING_DISABLED, SOURCE_BUDGET_EXCEEDED), which the model
+            # must see verbatim so it can explain the limitation.
             return ToolResult.failure(exc.code, str(exc), technical={"tool": name})
         except Exception as exc:  # noqa: BLE001 - a tool bug must not crash the UI
             return ToolResult.failure(
@@ -407,8 +410,8 @@ def _as_number(field_name: str, value: Any, *, integer: bool) -> float | int:
 def build_default_registry() -> ToolRegistry:
     """Build the full tool set from the individual tool modules."""
     from ai.tools import (connection_tools, graph_tools, node_tools,
-                          project_tools, selection_tools, timeline_tools,
-                          tracking_tools, vision_tools)
+                          project_tools, selection_tools, source_tools,
+                          timeline_tools, tracking_tools, vision_tools)
 
     registry = ToolRegistry()
     for module in (
@@ -420,6 +423,7 @@ def build_default_registry() -> ToolRegistry:
         tracking_tools,
         timeline_tools,
         vision_tools,
+        source_tools,
     ):
         module.register_tools(registry)
     return registry

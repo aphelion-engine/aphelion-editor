@@ -20,7 +20,9 @@ from typing import Any
 
 from ai import AI_SETTINGS_VERSION
 from ai.permissions import PermissionPolicy
-from ai.types import (AgentMode, EditPolicy, ModelInfo, ProviderCapabilities)
+from ai.source.limits import SourceLimits
+from ai.types import (AgentMode, CloudSourceSharing, EditPolicy, ModelInfo,
+                      ProviderCapabilities, SourceAccess)
 from utils.logging_setup import get_logger
 from utils.paths import app_data_path, ensure_directory
 
@@ -48,6 +50,11 @@ class ProviderConfig:
     model: str = ""
     #: Credential reference (never the secret itself).
     credential_ref: str = ""
+    connection_mode: str = "custom"
+    credential_env: str = ""
+    allow_insecure_http: bool = False
+    connect_timeout: float = 10.0
+    stream_idle_timeout: float = 60.0
     is_local: bool = False
     enabled: bool = False
     #: ``None`` means "ask the provider"; ``True``/``False`` override detection.
@@ -100,6 +107,11 @@ class ProviderConfig:
             "base_url": self.base_url,
             "model": self.model,
             "credential_ref": self.credential_ref,
+            "connection_mode": self.connection_mode,
+            "credential_env": self.credential_env,
+            "allow_insecure_http": self.allow_insecure_http,
+            "connect_timeout": self.connect_timeout,
+            "stream_idle_timeout": self.stream_idle_timeout,
             "is_local": self.is_local,
             "enabled": self.enabled,
             "supports_tools": self.supports_tools,
@@ -118,6 +130,11 @@ class ProviderConfig:
             base_url=str(data.get("base_url", "")),
             model=str(data.get("model", "")),
             credential_ref=str(data.get("credential_ref", "")),
+            connection_mode=str(data.get("connection_mode", "custom")),
+            credential_env=str(data.get("credential_env", "")),
+            allow_insecure_http=bool(data.get("allow_insecure_http", False)),
+            connect_timeout=float(data.get("connect_timeout", 10)),
+            stream_idle_timeout=float(data.get("stream_idle_timeout", 60)),
             is_local=bool(data.get("is_local", False)),
             enabled=bool(data.get("enabled", False)),
             supports_tools=_optional_bool(data.get("supports_tools")),
@@ -146,6 +163,9 @@ def default_providers() -> list[ProviderConfig]:
     vLLM, and any third-party API).
     """
     return [
+        ProviderConfig(provider_id="ollama-cloud", label="Ollama Cloud", kind=KIND_OLLAMA,
+                       base_url="https://ollama.com", connection_mode="cloud",
+                       credential_env="OLLAMA_API_KEY", model="gemma4:31b"),
         ProviderConfig(
             provider_id="huggingface",
             label="Hugging Face",
@@ -165,7 +185,8 @@ def default_providers() -> list[ProviderConfig]:
             provider_id="ollama",
             label="Ollama (local)",
             kind=KIND_OLLAMA,
-            base_url="http://127.0.0.1:11434",
+            base_url="http://localhost:11434",
+            connection_mode="local",
             model="",
             credential_ref="",
             is_local=True,
@@ -240,7 +261,7 @@ class AISettings:
     permissions: PermissionPolicy = field(default_factory=PermissionPolicy)
     providers: list[ProviderConfig] = field(default_factory=default_providers)
     default_provider_id: str = ""
-    max_agent_steps: int = 14
+    max_agent_steps: int = 32
     request_timeout_seconds: float = 120.0
     stream: bool = True
     temperature: float = 0.2
@@ -251,6 +272,17 @@ class AISettings:
     verbose_logging: bool = False
     #: Show the AI-created highlight animation on changed nodes.
     highlight_changes: bool = True
+
+    # -- read-only source intelligence (opt-in, off by default) ---------
+
+    #: How much of the Aphelion source tree the assistant may read.
+    source_access: SourceAccess = SourceAccess.OFF
+    #: Whether retrieved source may be sent to a remote provider.
+    cloud_source_sharing: CloudSourceSharing = CloudSourceSharing.NEVER
+    #: Optional explicit checkout to index. Empty means "detect automatically".
+    source_root: str = ""
+    #: Retrieval budgets that bound how much source one run may pull in.
+    source_limits: SourceLimits = field(default_factory=SourceLimits)
 
     # ------------------------------------------------------------------
     # Provider helpers
@@ -320,6 +352,10 @@ class AISettings:
             "save_conversations": self.save_conversations,
             "verbose_logging": self.verbose_logging,
             "highlight_changes": self.highlight_changes,
+            "source_access": self.source_access.value,
+            "cloud_source_sharing": self.cloud_source_sharing.value,
+            "source_root": self.source_root,
+            "source_limits": self.source_limits.to_dict(),
         }
 
     @classmethod
@@ -352,7 +388,7 @@ class AISettings:
             providers=providers,
             default_provider_id=str(data.get("default_provider_id", "")),
             max_agent_steps=max(
-                1, min(64, int(data.get("max_agent_steps", 14) or 14))
+                1, min(64, int(data.get("max_agent_steps", 32) or 32))
             ),
             request_timeout_seconds=max(
                 5.0,
@@ -366,6 +402,14 @@ class AISettings:
             save_conversations=bool(data.get("save_conversations", False)),
             verbose_logging=bool(data.get("verbose_logging", False)),
             highlight_changes=bool(data.get("highlight_changes", True)),
+            source_access=_enum(SourceAccess, data.get("source_access"), SourceAccess.OFF),
+            cloud_source_sharing=_enum(
+                CloudSourceSharing,
+                data.get("cloud_source_sharing"),
+                CloudSourceSharing.NEVER,
+            ),
+            source_root=str(data.get("source_root", "") or ""),
+            source_limits=SourceLimits.from_dict(data.get("source_limits")),
         )
 
 

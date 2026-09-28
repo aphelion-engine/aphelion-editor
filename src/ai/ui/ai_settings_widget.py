@@ -13,13 +13,40 @@ from typing import Any
 from ai.credentials import CredentialStore, mask_secret
 from ai.providers.registry import KIND_LABELS, supported_kinds
 from ai.settings import AISettings, AISettingsStore, ProviderConfig
-from ai.types import (ALL_PERMISSIONS, PERMISSION_LABELS, AgentMode, EditPolicy,
-                      Permission)
-from PyQt6.QtCore import Qt, pyqtSignal
+from ai.types import (ALL_PERMISSIONS, PERMISSION_LABELS, AgentMode,
+                      CloudSourceSharing, EditPolicy, Permission, SourceAccess)
+from PyQt6.QtCore import Qt, pyqtSignal, QThread
+from copy import deepcopy
 from PyQt6.QtWidgets import (QCheckBox, QComboBox, QFormLayout, QGroupBox,
                              QHBoxLayout, QLabel, QLineEdit, QListWidget,
                              QListWidgetItem, QMessageBox, QPushButton,
                              QScrollArea, QSpinBox, QVBoxLayout, QWidget)
+
+
+class _ProviderJob(QThread):
+    result_ready = pyqtSignal(str)
+
+    def __init__(self, config, credentials, timeout, refresh=False):
+        super().__init__()
+        self.config, self.credentials, self.timeout = deepcopy(config), credentials, timeout
+        self.refresh = refresh
+
+    def run(self):
+        from ai.providers.registry import create_provider
+        try:
+            provider = create_provider(self.config, credentials=self.credentials, timeout=self.timeout)
+            if self.refresh:
+                names = [m.model_id for m in provider.list_models()]
+                result = "Models: " + ", ".join(names) if names else "No models discovered. Enter a model manually."
+            else:
+                result = provider.test_connection().message
+            self.result_ready.emit(result)
+        except Exception as exc:
+            self.result_ready.emit(str(exc))
+
+
+# Keep workers alive even when a settings dialog closes during a request.
+_PROVIDER_JOBS = set()
 
 
 class AISettingsWidget(QWidget):
@@ -56,6 +83,7 @@ class AISettingsWidget(QWidget):
         layout.addWidget(self._build_defaults_group())
         layout.addWidget(self._build_providers_group())
         layout.addWidget(self._build_permissions_group())
+        layout.addWidget(self._build_source_group())
         layout.addWidget(self._build_advanced_group())
         layout.addStretch(1)
         scroll.setWidget(body)
@@ -178,6 +206,19 @@ class AISettingsWidget(QWidget):
         self._p_base.setPlaceholderText("https://api.example.com/v1")
         self._p_base.editingFinished.connect(self._on_provider_field_changed)
         form.addRow("Base URL", self._p_base)
+        self._p_mode = QComboBox()
+        for mode in ("custom", "local", "cloud"):
+            self._p_mode.addItem(mode.title(), mode)
+        self._p_mode.currentIndexChanged.connect(self._on_connection_mode)
+        form.addRow("Ollama connection mode", self._p_mode)
+        self._p_env = QLineEdit()
+        self._p_env.setPlaceholderText("Optional fallback, e.g. OLLAMA_API_KEY")
+        self._p_env.editingFinished.connect(self._on_provider_field_changed)
+        form.addRow("API key environment variable", self._p_env)
+        self._p_http = QCheckBox("Allow credentials over remote HTTP (unencrypted)")
+        self._p_http.toggled.connect(self._on_provider_field_changed)
+        form.addRow(self._p_http)
+
 
         key_row = QHBoxLayout()
         self._p_key = QLineEdit()
@@ -198,6 +239,13 @@ class AISettingsWidget(QWidget):
         self._p_model = QLineEdit()
         self._p_model.editingFinished.connect(self._on_provider_field_changed)
         form.addRow("Model", self._p_model)
+        refresh = QPushButton("Refresh Models")
+        refresh.clicked.connect(lambda: self._start_provider_job(True))
+        form.addRow(refresh)
+        diagnostics = QPushButton("Provider Diagnostics")
+        diagnostics.clicked.connect(self._show_diagnostics)
+        form.addRow(diagnostics)
+
 
         self._p_context = QSpinBox()
         self._p_context.setRange(0, 2_000_000)
@@ -255,6 +303,57 @@ class AISettingsWidget(QWidget):
             )
             layout.addWidget(box)
             self._permission_boxes[permission] = box
+        return group
+
+    def _build_source_group(self) -> QGroupBox:
+        """Read-only source intelligence: how much of Aphelion's code the AI may read."""
+        group = QGroupBox("Source intelligence")
+        form = QFormLayout(group)
+
+        self._source_access = QComboBox()
+        for level in SourceAccess:
+            self._source_access.addItem(level.label, level.value)
+        self._source_access.setToolTip(
+            "Off: registry metadata only (no checkout needed).\n"
+            "Installed Build Metadata: generated node metadata, still no files.\n"
+            "Core Source Read-Only: read the editor's own source files.\n"
+            "Full Repository Read-Only: read any allowed file under the root."
+        )
+        self._source_access.currentIndexChanged.connect(self._on_source_access)
+        form.addRow("Source access", self._source_access)
+
+        self._cloud_sharing = QComboBox()
+        for choice in CloudSourceSharing:
+            self._cloud_sharing.addItem(choice.label, choice.value)
+        self._cloud_sharing.setToolTip(
+            "Whether read-only source snippets may be sent to a remote model. "
+            "Local models are never affected. Secrets are redacted first."
+        )
+        self._cloud_sharing.currentIndexChanged.connect(self._on_cloud_sharing)
+        form.addRow("Cloud source sharing", self._cloud_sharing)
+
+        root_row = QHBoxLayout()
+        self._source_root = QLineEdit()
+        self._source_root.editingFinished.connect(self._on_source_root)
+        root_row.addWidget(self._source_root, 1)
+        detect = QPushButton("Detect")
+        detect.setToolTip("Use the checkout this build was run from, if any.")
+        detect.clicked.connect(self._on_detect_source_root)
+        root_row.addWidget(detect)
+        form.addRow("Source root", _wrap(root_row))
+
+        self._source_hint = QLabel("")
+        self._source_hint.setWordWrap(True)
+        self._source_hint.setObjectName("AIHint")
+        form.addRow("", self._source_hint)
+
+        audit = QPushButton("Show AI context…")
+        audit.setToolTip(
+            "See which files and node schemas were retrieved, what was "
+            "redacted, and whether the provider was local or remote."
+        )
+        audit.clicked.connect(self._on_show_context)
+        form.addRow("", audit)
         return group
 
     def _build_advanced_group(self) -> QGroupBox:
@@ -354,6 +453,15 @@ class AISettingsWidget(QWidget):
         for permission, box in self._permission_boxes.items():
             box.setChecked(settings.permissions.allows(permission))
 
+        self._source_access.setCurrentIndex(
+            max(0, self._source_access.findData(settings.source_access.value))
+        )
+        self._cloud_sharing.setCurrentIndex(
+            max(0, self._cloud_sharing.findData(settings.cloud_source_sharing.value))
+        )
+        self._source_root.setText(settings.source_root)
+        self._update_source_hint()
+
         self._reload_provider_list()
         self._vault_state.setText(
             "Credentials are encrypted at rest"
@@ -390,9 +498,106 @@ class AISettingsWidget(QWidget):
             self._steps,
             self._timeout,
             self._max_tokens,
+            self._source_access,
+            self._cloud_sharing,
+            self._source_root,
         ):
             widget.setEnabled(enabled)
         self._privacy.setVisible(not enabled)
+
+    def _update_source_hint(self) -> None:
+        """Explain exactly what the chosen source level means right now."""
+        settings = self._settings
+        level = settings.source_access
+        if level is SourceAccess.OFF:
+            text = (
+                "The assistant relies on the live node registry only: real "
+                "node types, ports, properties, and documentation, with no "
+                "access to your files."
+            )
+        elif not level.allows_file_reads:
+            text = (
+                "Generated node metadata only. No source files are read, so "
+                "nothing from a checkout can be sent anywhere."
+            )
+        else:
+            text = (
+                "Source files are read on demand, read-only, and only inside "
+                "the source root. Secrets are redacted before anything can be "
+                "sent."
+            )
+            active = settings.active_provider()
+            if active is not None and not active.is_local:
+                sharing = settings.cloud_source_sharing
+                if sharing is CloudSourceSharing.ALLOW:
+                    text += (
+                        " The selected provider is remote, so snippets may be "
+                        "included in requests."
+                    )
+                elif sharing is CloudSourceSharing.ASK:
+                    text += (
+                        " The selected provider is remote; you are asked once "
+                        "per request before any snippet is sent."
+                    )
+                else:
+                    text += (
+                        " The selected provider is remote and cloud sharing is "
+                        "off, so only node metadata is available."
+                    )
+            else:
+                text += " The selected provider runs locally, so nothing leaves this machine."
+        self._source_hint.setText(text)
+
+    def _on_source_access(self, _index: int) -> None:
+        if self._suppress:
+            return
+        try:
+            self._settings.source_access = SourceAccess(self._source_access.currentData())
+        except (ValueError, TypeError):
+            return
+        self._update_source_hint()
+        self._touch()
+
+    def _on_cloud_sharing(self, _index: int) -> None:
+        if self._suppress:
+            return
+        try:
+            self._settings.cloud_source_sharing = CloudSourceSharing(
+                self._cloud_sharing.currentData()
+            )
+        except (ValueError, TypeError):
+            return
+        self._update_source_hint()
+        self._touch()
+
+    def _on_source_root(self) -> None:
+        if self._suppress:
+            return
+        self._settings.source_root = self._source_root.text().strip()
+        self._update_source_hint()
+        self._touch()
+
+    def _on_detect_source_root(self) -> None:
+        try:
+            from ai.source.factory import detect_source_root
+        except Exception:  # noqa: BLE001 - the source package is optional
+            return
+        found = detect_source_root()
+        if found is None:
+            QMessageBox.information(
+                self,
+                "Source root",
+                "No Aphelion source checkout was found next to this build. "
+                "Node metadata still works without one.",
+            )
+            return
+        self._source_root.setText(str(found))
+        self._on_source_root()
+
+    def _on_show_context(self) -> None:
+        from ai.ui.context_view import ContextAuditDialog
+
+        ContextAuditDialog(self).exec()
 
     # ------------------------------------------------------------------
     # Interaction
@@ -464,6 +669,10 @@ class AISettingsWidget(QWidget):
         kind_index = self._p_kind.findData(config.kind)
         self._p_kind.setCurrentIndex(max(0, kind_index))
         self._p_base.setText(config.base_url)
+        self._p_mode.setCurrentIndex(max(0, self._p_mode.findData(config.connection_mode)))
+        self._p_mode.setEnabled(config.kind == "ollama")
+        self._p_env.setText(config.credential_env)
+        self._p_http.setChecked(config.allow_insecure_http)
         self._p_model.setText(config.model)
         self._p_context.setValue(int(config.context_length))
         self._p_tools.setCurrentIndex(
@@ -510,11 +719,18 @@ class AISettingsWidget(QWidget):
         config.label = self._p_label.text().strip() or config.label
         config.kind = str(self._p_kind.currentData() or config.kind)
         config.base_url = self._p_base.text().strip()
+        config.connection_mode = str(self._p_mode.currentData())
+        config.credential_env = self._p_env.text().strip()
+        config.allow_insecure_http = self._p_http.isChecked()
+        self._p_mode.setEnabled(config.kind == "ollama")
         config.model = self._p_model.text().strip()
         config.context_length = int(self._p_context.value())
         config.supports_tools = self._p_tools.currentData()
         config.supports_vision = self._p_vision.currentData()
-        config.is_local = self._p_local.isChecked()
+        from ai.providers.urls import is_loopback
+        config.is_local = self._p_local.isChecked() and is_loopback(config.base_url)
+        if config.kind == "ollama":
+            config.is_local = config.connection_mode != "cloud" and is_loopback(config.base_url)
         config.enabled = self._p_enabled.isChecked()
         secret = self._p_key.text()
         if secret:
@@ -537,7 +753,7 @@ class AISettingsWidget(QWidget):
     def _on_add_provider(self) -> None:
         existing = {config.provider_id for config in self._settings.providers}
         index = 1
-        while f"custom{index}" in existing:
+        while ("custom" if index == 1 else f"custom{index}") in existing:
             index += 1
         provider_id = f"custom{index}" if index > 1 else "custom"
         config = ProviderConfig(
@@ -571,27 +787,44 @@ class AISettingsWidget(QWidget):
         self._reload_provider_list()
         self._touch()
 
-    def _on_test_connection(self) -> None:
-        config = self._settings.active_provider()
-        if config is None:
-            self._test_result.setText("No provider is enabled.")
+    def _on_connection_mode(self, *_args):
+        if self._suppress or self._current_provider is None:
             return
-        self._test_result.setText("Testing…")
-        self.commit(save=False)
-        from ai.providers.registry import create_provider
+        mode = self._p_mode.currentData()
+        if self._p_kind.currentData() == "ollama":
+            if mode in ("local", "cloud"):
+                self._p_base.setText("https://ollama.com" if mode == "cloud" else "http://localhost:11434")
+            self._p_local.setChecked(mode == "local")
+        self._on_provider_field_changed()
 
+    def _show_diagnostics(self):
+        from ai.providers.registry import create_provider
         try:
-            provider = create_provider(
-                config,
-                credentials=self._credentials,
-                timeout=min(30.0, float(self._settings.request_timeout_seconds)),
-            )
-            result = provider.test_connection()
-        except Exception as exc:  # noqa: BLE001 - a test must never crash the UI
-            self._test_result.setText(f"✕ {type(exc).__name__}: {exc}")
+            provider = create_provider(self._current_provider, credentials=self._credentials)
+            values = provider.diagnostics()
+            route = "api/chat" if provider.kind == "ollama" else "messages" if provider.kind == "anthropic" else "chat/completions"
+            values["request_url"] = provider._endpoint(route)
+            values["streaming"] = self._settings.stream
+            QMessageBox.information(self, "Provider Diagnostics", "\n".join(f"{k}: {v}" for k, v in values.items()))
+        except Exception as exc:
+            self._test_result.setText(str(exc))
+
+    def _on_test_connection(self):
+        self._start_provider_job(False)
+
+    def _start_provider_job(self, refresh):
+        self._on_provider_field_changed()
+        config = self._current_provider
+        if config is None:
+            self._test_result.setText("Select a provider profile.")
             return
-        prefix = "✓" if result.ok else "✕"
-        self._test_result.setText(f"{prefix} {result.message}")
+        self._test_result.setText("Loading models..." if refresh else "Testing...")
+        job = _ProviderJob(config, self._credentials, min(30, self._settings.request_timeout_seconds), refresh)
+        _PROVIDER_JOBS.add(job)
+        job.result_ready.connect(self._test_result.setText)
+        job.finished.connect(lambda: _PROVIDER_JOBS.discard(job))
+        job.finished.connect(job.deleteLater)
+        job.start()
 
     # ------------------------------------------------------------------
     # Commit

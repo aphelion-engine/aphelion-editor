@@ -17,7 +17,7 @@ from ai.tools.helpers import resolve_node, short_list
 from ai.tools.node_tools import _coerce_property_value, _display
 from ai.types import Permission, ToolResult
 from core.history.commands import SetPropertyCommand
-from core.nodes.tracking_nodes import PlanarTrackerNode, TrackerNode
+from core.nodes.tracking_nodes import PlanarTrackerNode, Tracker
 
 #: Documented quality bundles. Each maps onto properties that really exist;
 #: keys absent from a given tracker type are skipped.
@@ -165,7 +165,10 @@ def register_tools(registry: ToolRegistry) -> None:
 
 def _tracker_node(ctx: ToolContext, reference: str) -> tuple[str, Any]:
     node_id, node = resolve_node(ctx, reference)
-    if not isinstance(node, TrackerNode):
+    # Point trackers subclass ``TrackerNode``; planar ones subclass
+    # ``PlanarTrackerNode``. ``Tracker`` is the common base both share, so it
+    # is the only correct isinstance check for "is this a tracker at all".
+    if not isinstance(node, Tracker):
         raise ToolError(
             "NOT_A_TRACKER",
             f"'{node.name}' is a {node.node_type}, not a tracker. Trackers are: "

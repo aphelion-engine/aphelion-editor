@@ -75,6 +75,32 @@ class ToolNotFoundError(ToolError):
         super().__init__("UNKNOWN_TOOL", f"No such tool: {name}")
 
 
+class SourceError(ToolError):
+    """Base class for the read-only source-intelligence subsystem.
+
+    Derives from :class:`ToolError` so a refusal keeps its error code all the
+    way back to the model (``ACCESS_DENIED``, ``SOURCE_SHARING_DISABLED``, ...)
+    instead of being flattened into a generic tool failure.
+    """
+
+    def __init__(self, message: str, *, code: str = "SOURCE_ERROR") -> None:
+        super().__init__(code, message)
+
+
+class SourceAccessError(SourceError):
+    """A source read was refused by the sandbox, allowlist, or denylist."""
+
+    def __init__(self, message: str, *, code: str = "ACCESS_DENIED") -> None:
+        super().__init__(message, code=code)
+
+
+class SourceUnavailableError(SourceError):
+    """No source tree is configured, or it could not be indexed."""
+
+    def __init__(self, message: str, *, code: str = "SOURCE_UNAVAILABLE") -> None:
+        super().__init__(message, code=code)
+
+
 class CancelledError(AIError):
     """The user pressed Stop; no further model or tool work should run."""
 

@@ -26,6 +26,21 @@ class OpenAICompatibleProvider(AIProvider):
 
     kind = "openai_compatible"
 
+    def _auth_headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+
+    def _require_key(self) -> None:
+        # Compatible gateways may intentionally use no authentication.
+        return None
+
+    def _endpoint(self, suffix: str) -> str:
+        from urllib.parse import urlsplit
+        from ai.providers.urls import endpoint
+        base = self.config.base_url
+        if not urlsplit(base).path.strip("/"):
+            base = endpoint(base, "v1")
+        return endpoint(base, suffix)
+
     # ------------------------------------------------------------------
     # Metadata
     # ------------------------------------------------------------------
@@ -179,6 +194,7 @@ class OpenAICompatibleProvider(AIProvider):
         on_token: TokenCallback | None = None,
         should_stop: StopCallback | None = None,
     ) -> ChatResponse:
+        self.transport.should_stop = should_stop
         self._require_key()
         if not request.model:
             raise ProviderResponseError(

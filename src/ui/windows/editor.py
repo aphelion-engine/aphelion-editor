@@ -864,6 +864,15 @@ class Editor(QMainWindow):
         self.tabifyDockWidget(self.docks.properties, self.docks.keyframes)
         self.docks.node_graph.raise_()
         self.docks.properties.raise_()
+        # Re-tab the assistant if it is open, because apply_layout just re-capped
+        # the Properties dock and the tab group must stay resizable for both.
+        if getattr(self, "_ai_dock", None) is not None:
+            try:
+                from ai.ui.integration import arrange_ai_dock
+
+                arrange_ai_dock(self)
+            except Exception:  # noqa: BLE001 - a layout change must not fail
+                pass
 
     def reset_layout(self) -> None:
         """Restore the default dock arrangement."""

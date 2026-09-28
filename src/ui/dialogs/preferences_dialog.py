@@ -181,17 +181,20 @@ class PreferencesDialog(QDialog):
         return page
 
     def _on_ai_settings_changed(self) -> None:
-        """Persist AI settings when the page changes.
+        """Push AI page edits into the shared store without touching disk.
 
-        The AI document lives in its own file, so it is written immediately
-        rather than being copied through ``AppPreferences``.
+        The document is written once on Apply/OK rather than on every widget
+        change; the editor still sees the new values immediately.
         """
         page = self._ai_page
         if page is None:
             return
         commit = getattr(page, "commit", None)
         if callable(commit):
-            commit()
+            try:
+                commit(save=False)
+            except TypeError:
+                commit()
         self.ai_settings_changed.emit()
 
     def _apply_dialog_style(self) -> None:

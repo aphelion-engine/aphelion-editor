@@ -26,8 +26,9 @@ from ai.ui.editor_host import EditorAgentHost
 from PyQt6.QtCore import QStringListModel, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont, QKeyEvent, QTextCharFormat, QTextCursor
 from PyQt6.QtWidgets import (QComboBox, QCompleter, QFrame, QHBoxLayout,
-                             QLabel, QPlainTextEdit, QPushButton, QSplitter,
-                             QTextBrowser, QToolButton, QVBoxLayout, QWidget)
+                             QLabel, QMenu, QMessageBox, QPlainTextEdit,
+                             QPushButton, QTextBrowser, QToolButton,
+                             QVBoxLayout, QWidget)
 
 #: How often queued UI effects and streamed text are flushed.
 _DRAIN_INTERVAL_MS: int = 55
@@ -153,9 +154,11 @@ class AIPanel(QWidget):
         self._confirm_result: bool = False
         self._action_times: dict[str, float] = {}
 
+        self._model_cache: list[Any] | None = None
+
         self._build_ui()
         self._connect_signals()
-        self._refresh_provider_selector()
+        self._refresh_provider_selector(force=True)
         self.refresh_state()
 
         self._drain_timer = QTimer(self)
@@ -168,26 +171,28 @@ class AIPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
+        # The layout is deliberately shallow: a two-line header, the
+        # conversation, a collapsed activity strip, the prompt, one footer
+        # row. Nothing that can be inferred from the transcript is shown by
+        # default, and everything that is shown earns its width, because the
+        # panel shares the narrow right sidebar with the Properties dock.
         root = QVBoxLayout(self)
-        root.setContentsMargins(8, 8, 8, 8)
+        root.setContentsMargins(10, 8, 10, 8)
         root.setSpacing(6)
 
         root.addLayout(self._build_header())
         root.addWidget(self._build_banner())
+        self._controls = self._build_controls()
+        root.addWidget(self._controls)
 
-        splitter = QSplitter(Qt.Orientation.Vertical)
         self._transcript = QTextBrowser()
         self._transcript.setObjectName("AITranscript")
         self._transcript.setOpenExternalLinks(False)
-        self._transcript.setMinimumHeight(160)
-        splitter.addWidget(self._transcript)
+        self._transcript.setMinimumHeight(140)
+        root.addWidget(self._transcript, 1)
 
-        self.activity = ActionLogView()
-        splitter.addWidget(self.activity)
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([420, 120])
-        root.addWidget(splitter, 1)
+        self._activity_section = self._build_activity_section()
+        root.addWidget(self._activity_section)
 
         self._input = PromptEdit()
         root.addWidget(self._input)
@@ -203,15 +208,41 @@ class AIPanel(QWidget):
         title.setFont(title_font)
         header.addWidget(title)
 
-        self._scope_label = QLabel("—")
+        self._scope_label = QLabel("")
         self._scope_label.setObjectName("AIScopeBadge")
         self._scope_label.setToolTip(
             "Whether the selected provider runs on this machine (LOCAL) or "
             "sends data to a remote service (CLOUD)."
         )
         header.addWidget(self._scope_label)
-
         header.addStretch(1)
+
+        gear = QToolButton()
+        gear.setText("⚙")
+        gear.setAutoRaise(True)
+        gear.setToolTip("AI settings")
+        gear.clicked.connect(self.open_settings)
+        header.addWidget(gear)
+        return header
+
+    def _build_controls(self) -> QWidget:
+        """The provider/model picker and the agent mode, on one compact row."""
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        self._provider_combo = QComboBox()
+        # A hard minimum width here propagates into the dock's own minimum and
+        # stops the right sidebar from being dragged narrower, so let the entry
+        # elide instead.
+        self._provider_combo.setMinimumContentsLength(8)
+        self._provider_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self._provider_combo.setToolTip("Provider and model for the next message.")
+        self._provider_combo.currentIndexChanged.connect(self._on_model_changed)
+        layout.addWidget(self._provider_combo, 1)
 
         self._mode_combo = QComboBox()
         for mode in AgentMode:
@@ -221,34 +252,75 @@ class AIPanel(QWidget):
             "directly (still undoable)."
         )
         self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
-        header.addWidget(self._mode_combo)
-
-        self._provider_combo = QComboBox()
-        self._provider_combo.setMinimumWidth(150)
-        self._provider_combo.setToolTip("Provider and model for the next message.")
-        self._provider_combo.currentIndexChanged.connect(self._on_model_changed)
-        header.addWidget(self._provider_combo)
-
-        gear = QToolButton()
-        gear.setText("⚙")
-        gear.setToolTip("AI settings")
-        gear.clicked.connect(self.open_settings)
-        header.addWidget(gear)
-        return header
+        layout.addWidget(self._mode_combo)
+        return row
 
     def _build_banner(self) -> QWidget:
+        """The "assistant is off" explainer (hidden once AI is enabled)."""
         self._banner = QFrame()
         self._banner.setObjectName("AIBanner")
-        layout = QHBoxLayout(self._banner)
-        layout.setContentsMargins(8, 4, 8, 4)
+        layout = QVBoxLayout(self._banner)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(6)
         self._banner_label = QLabel("")
         self._banner_label.setWordWrap(True)
-        layout.addWidget(self._banner_label, 1)
+        layout.addWidget(self._banner_label)
         self._enable_button = QPushButton("Enable AI…")
         self._enable_button.clicked.connect(self.open_settings)
-        layout.addWidget(self._enable_button)
+        layout.addWidget(self._enable_button, 0, Qt.AlignmentFlag.AlignLeft)
         self._banner.setVisible(False)
         return self._banner
+
+    def _build_activity_section(self) -> QWidget:
+        """A one-line toggle plus the tool-call tree, collapsed by default."""
+        section = QWidget()
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        self._activity_toggle = QToolButton()
+        self._activity_toggle.setObjectName("AIActivityToggle")
+        self._activity_toggle.setCheckable(True)
+        self._activity_toggle.setAutoRaise(True)
+        self._activity_toggle.setArrowType(Qt.ArrowType.RightArrow)
+        self._activity_toggle.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
+        self._activity_toggle.setToolTip("Show every tool call the assistant made")
+        self._activity_toggle.toggled.connect(self._on_activity_toggled)
+        layout.addWidget(self._activity_toggle)
+
+        self.activity = ActionLogView()
+        self.activity.setMinimumHeight(90)
+        self.activity.setVisible(False)
+        layout.addWidget(self.activity)
+
+        self._activity_count = 0
+        self._set_activity_summary()
+        return section
+
+    def _on_activity_toggled(self, expanded: bool) -> None:
+        self.activity.setVisible(expanded)
+        self._activity_toggle.setArrowType(
+            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
+        )
+
+    def _set_activity_summary(self) -> None:
+        count = self._activity_count
+        self._activity_toggle.setText(
+            "Activity" if not count else f"Activity ({count})"
+        )
+        # Nothing to disclose until the assistant has actually called a tool.
+        self._activity_toggle.setVisible(count > 0)
+
+    def _reset_activity(self) -> None:
+        """Clear the tool log and collapse it for a fresh turn."""
+        self._activity_count = 0
+        self.activity.clear()
+        self._pending_call.clear()
+        self._action_times.clear()
+        self._activity_toggle.setChecked(False)
+        self._set_activity_summary()
 
     def _build_footer(self) -> QHBoxLayout:
         footer = QHBoxLayout()
@@ -256,24 +328,43 @@ class AIPanel(QWidget):
 
         self._status = QLabel("Ready")
         self._status.setObjectName("AIHint")
+        # Status text can be long ("Not permitted: …"). Word wrapping keeps the
+        # label's minimum width down to its longest word, because the panel
+        # shares the sidebar with the Properties dock.
+        self._status.setWordWrap(True)
+        self._status.setMinimumWidth(0)
         footer.addWidget(self._status, 1)
 
-        self._new_chat = QPushButton("New chat")
-        self._new_chat.clicked.connect(self.new_conversation)
-        footer.addWidget(self._new_chat)
-
-        self._retry_button = QPushButton("Retry")
-        self._retry_button.setToolTip("Re-run the last request.")
-        self._retry_button.clicked.connect(lambda: self.retry())
-        self._retry_button.setEnabled(False)
-        footer.addWidget(self._retry_button)
+        # Secondary actions live behind one overflow button so the footer stays
+        # two buttons wide and the sidebar stays resizable.
+        self._overflow = QToolButton()
+        self._overflow.setText("⋯")
+        self._overflow.setAutoRaise(True)
+        self._overflow.setToolTip("More")
+        menu = QMenu(self._overflow)
+        self._new_chat_action = menu.addAction("New chat")
+        self._new_chat_action.triggered.connect(self.new_conversation)
+        self._retry_action = menu.addAction("Retry last request")
+        self._retry_action.setEnabled(False)
+        self._retry_action.triggered.connect(lambda: self.retry())
+        menu.addSeparator()
+        self._context_action = menu.addAction("Show AI context…")
+        self._context_action.setToolTip(
+            "Which source files and schemas were retrieved, redactions, and "
+            "whether the provider was local or remote."
+        )
+        self._context_action.triggered.connect(self.show_context_audit)
+        self._overflow.setMenu(menu)
+        self._overflow.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        footer.addWidget(self._overflow)
 
         self._stop_button = QPushButton("Stop")
         self._stop_button.setEnabled(False)
+        self._stop_button.setVisible(False)
         self._stop_button.clicked.connect(self.stop)
         footer.addWidget(self._stop_button)
 
-        self._send_button = QPushButton("Send ▶")
+        self._send_button = QPushButton("Send")
         self._send_button.setDefault(True)
         self._send_button.clicked.connect(self.send_message)
         footer.addWidget(self._send_button)
@@ -300,8 +391,13 @@ class AIPanel(QWidget):
     # State
     # ------------------------------------------------------------------
 
-    def refresh_state(self) -> None:
-        """Sync the panel with the current settings."""
+    def refresh_state(self, *, refresh_models: bool = False) -> None:
+        """Sync the panel with the current settings.
+
+        Listing models hits the network on providers that support it, so it is
+        only done when the user actually changes providers rather than on every
+        incidental settings edit.
+        """
         settings = self.settings_store.settings
         self.session.settings = settings
 
@@ -314,8 +410,13 @@ class AIPanel(QWidget):
         enabled = settings.enabled
         self._input.setEnabled(enabled)
         self._send_button.setEnabled(enabled)
+        self._stop_button.setVisible(enabled and self.session.state.busy)
         self._mode_combo.setEnabled(enabled)
         self._provider_combo.setEnabled(enabled)
+        # The provider/mode row and the activity strip only exist to serve a
+        # live conversation, so an off assistant shows neither.
+        self._controls.setVisible(enabled)
+        self._activity_section.setVisible(enabled)
         self._banner.setVisible(not enabled)
         if not enabled:
             self._banner_label.setText(
@@ -333,10 +434,12 @@ class AIPanel(QWidget):
                 self._status.setText("Not permitted: " + ", ".join(blocked[:3]))
             else:
                 self._status.setText("Ready")
-        self._refresh_provider_selector()
+        self._refresh_provider_selector(force=refresh_models)
 
-    def _refresh_provider_selector(self) -> None:
-        models = self.session.available_models()
+    def _refresh_provider_selector(self, *, force: bool = False) -> None:
+        if force or self._model_cache is None:
+            self._model_cache = self.session.available_models()
+        models = self._model_cache or []
         active_config = self.session.active_provider_config()
         active_id = active_config.provider_id if active_config else ""
         active_model = active_config.model if active_config else ""
@@ -376,11 +479,77 @@ class AIPanel(QWidget):
                 "is sent."
             )
 
+    def _on_mode_changed(self, index: int) -> None:
+        """Persist the agent mode the user picked in the header."""
+        value = self._mode_combo.itemData(index)
+        try:
+            mode = AgentMode(value)
+        except ValueError:
+            return
+        settings = self.settings_store.settings
+        if mode is settings.agent_mode:
+            return
+        # Switching *into* full Agent mode is the one transition the design
+        # insists on making explicit, so confirm it rather than assume.
+        if mode is AgentMode.AGENT and not self._confirm_agent_mode():
+            self._select_mode(settings.agent_mode)
+            return
+        settings.agent_mode = mode
+        self.settings_store.save()
+        self.session.settings = settings
+        self._status.setText(f"{mode.label} mode")
+
+    def _on_model_changed(self, index: int) -> None:
+        """Remember the provider/model the user picked for the next message."""
+        data = self._provider_combo.itemData(index)
+        if not isinstance(data, tuple) or len(data) != 2:
+            return
+        provider_id, model_id = data
+        settings = self.settings_store.settings
+        config = settings.provider(provider_id)
+        if config is None:
+            return
+        changed = False
+        if settings.default_provider_id != provider_id:
+            settings.default_provider_id = provider_id
+            changed = True
+        if model_id and config.model != model_id:
+            config.model = model_id
+            changed = True
+        if not changed:
+            return
+        self.settings_store.save()
+        self.session.settings = settings
+        # Re-derive the LOCAL/CLOUD badge for the newly selected provider.
+        self._refresh_provider_selector(force=False)
+
+    def _select_mode(self, mode: AgentMode) -> None:
+        index = self._mode_combo.findData(mode.value)
+        if index < 0:
+            return
+        self._mode_combo.blockSignals(True)
+        self._mode_combo.setCurrentIndex(index)
+        self._mode_combo.blockSignals(False)
+
+    def _confirm_agent_mode(self) -> bool:
+        answer = QMessageBox.warning(
+            self,
+            "Enable Agent mode",
+            "Agent mode lets the assistant edit your project directly instead "
+            "of proposing changes first.\n\nEvery AI edit is a single undoable "
+            "step, so Ctrl+Z still reverts it.\n\nEnable Agent mode?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
     def _set_busy(self, busy: bool) -> None:
         self.session.state.busy = busy
         self._send_button.setEnabled(not busy and self.settings_store.settings.enabled)
+        # Stop exists only while there is something to stop.
         self._stop_button.setEnabled(busy)
-        self._retry_button.setEnabled(not busy and self._can_retry())
+        self._stop_button.setVisible(busy)
+        self._retry_action.setEnabled(not busy and self._can_retry())
         self._input.setEnabled(not busy and self.settings_store.settings.enabled)
         if busy:
             self._status.setText("Working…")
@@ -399,6 +568,7 @@ class AIPanel(QWidget):
         self._input.clear()
         self._append_user(text)
         self._activity_divider()
+        self._reset_activity()
         self._set_busy(True)
         self._start_worker(AgentWorker(
             self.session,
@@ -432,21 +602,29 @@ class AIPanel(QWidget):
             self.stop()
         self.session.start_new_conversation()
         self._transcript.clear()
-        self.activity.clear()
-        self._status.setText("New conversation")
+        self._reset_activity()
+        self._status.setText("Ready")
         self._set_busy(False)
+
+    def show_context_audit(self) -> None:
+        """Open the "what did the AI actually see" report."""
+        from ai.ui.context_view import ContextAuditDialog
+
+        dialog = ContextAuditDialog(self, status=self.session.source_status())
+        dialog.exec()
 
     def open_settings(self) -> None:
         from ai.ui.ai_settings_dialog import AISettingsDialog
 
         dialog = AISettingsDialog(self.settings_store, self.credentials, self)
         if dialog.exec() == AISettingsDialog.DialogCode.Accepted:
-            self.on_settings_changed()
+            # The user just edited providers, so re-listing models is expected.
+            self.on_settings_changed(refresh_models=True)
 
-    def on_settings_changed(self) -> None:
+    def on_settings_changed(self, *, refresh_models: bool = False) -> None:
         """Called when AI settings change elsewhere (e.g. the Preferences tab)."""
         self.session.settings = self.settings_store.settings
-        self.refresh_state()
+        self.refresh_state(refresh_models=refresh_models)
 
     # ------------------------------------------------------------------
     # Worker plumbing
@@ -517,7 +695,6 @@ class AIPanel(QWidget):
             )
         else:
             self._status.setText("Ready")
-        self._refresh_provider_selector()
         self._set_busy(False)
         self.session.persist()
 
@@ -538,6 +715,8 @@ class AIPanel(QWidget):
         if kind is AgentEventKind.TOOL_START and event.tool_call is not None:
             self._flush_stream()
             self._activity_divider()
+            self._activity_count += 1
+            self._set_activity_summary()
             self.activity.begin_action(event.tool_call)
             self._action_times[event.tool_call.call_id or event.tool_call.name] = (
                 time.perf_counter()

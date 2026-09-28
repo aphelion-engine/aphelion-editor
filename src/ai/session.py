@@ -22,9 +22,11 @@ from ai.history import (Conversation, ConversationStore, StoredMessage,
 from ai.permissions import PermissionPolicy
 from ai.providers.registry import create_provider
 from ai.settings import AISettings, ProviderConfig
+from ai.task import AgentTask
+from ai.source.factory import build_source_context
 from ai.tools.base import build_default_registry
 from ai.types import (AgentEvent, AgentEventKind, AgentMode, ChatMessage,
-                      ModelInfo, PendingChanges)
+                      ModelInfo, PendingChanges, Permission, SourceAccess)
 from utils.logging_setup import get_logger
 
 _LOG = get_logger("ai.session")
@@ -81,6 +83,8 @@ class AssistantSession:
         self.registry = registry or build_default_registry()
         self.conversations = conversation_store or ConversationStore()
 
+        self.task = AgentTask()
+        self._retry_messages = []
         self.messages: list[ChatMessage] = []
         self.turns: list[StoredMessage] = []
         self.conversation: Conversation = new_conversation()
@@ -88,6 +92,8 @@ class AssistantSession:
         self._stop_requested = False
         self._unlocked_messages: list[ChatMessage] = []
         self.last_result: RunResult | None = None
+        #: The most recent source context, used by the "Show AI context" view.
+        self._last_source_context: Any = None
 
     # ------------------------------------------------------------------
     # Readiness
@@ -186,6 +192,8 @@ class AssistantSession:
 
     def start_new_conversation(self) -> None:
         """Begin a fresh conversation without touching the project."""
+        self.task = AgentTask()
+        self._retry_messages = []
         self.messages = []
         self.turns = []
         self._unlocked_messages = []
@@ -344,6 +352,7 @@ class AssistantSession:
             emit(AgentEvent(AgentEventKind.ERROR, message))
             return RunResult(error=message)
 
+        self._retry_messages = list(self.messages)
         request = ChatMessage(role="user", content=expanded or text)
         self.messages.append(request)
 
@@ -352,6 +361,11 @@ class AssistantSession:
         context_block = context_provider.build(
             ContextRequest(node_ids=mentioned)
         )
+        # Read-only source intelligence, assembled per run so a settings change
+        # takes effect immediately. Building this never walks the source tree:
+        # the index is populated on the first source.* tool call.
+        source_context = self._build_source_context(confirm)
+        context_block = self._with_architecture(context_block, source_context)
 
         config = AgentConfig(
             mode=mode or self.settings.agent_mode,
@@ -371,6 +385,8 @@ class AssistantSession:
             permissions=permissions,
             model=self.active_model(),
             context_block=context_block,
+            source_context=source_context,
+            task=self.task,
         )
 
         self._stop_requested = False
@@ -440,11 +456,11 @@ class AssistantSession:
         )
         if not last_user:
             return RunResult(error="There is nothing to retry.")
-        # Drop the previous assistant turn so the retry is not answering itself.
         while self.turns and self.turns[-1].role == "assistant":
             self.turns.pop()
-        if self.messages and self.messages[-1].role == "user":
-            self.messages.pop()
+        if self.turns and self.turns[-1].role == "user":
+            self.turns.pop()
+        self.messages = list(self._retry_messages)
         return self.send(last_user, on_event=on_event, confirm=confirm)
 
     def request_stop(self) -> None:
@@ -458,10 +474,74 @@ class AssistantSession:
 
     def _effective_permissions(self, mode: AgentMode | None) -> PermissionPolicy:
         policy = self.settings.permissions
+        # Choosing a source-access level *is* the grant: the two switches in
+        # settings must not disagree, so the capability follows the level.
+        if self.settings.source_access is not SourceAccess.OFF:
+            policy = policy.with_permission(Permission.READ_SOURCE, True)
         active_mode = mode or self.settings.agent_mode
         if active_mode is AgentMode.ASK:
             return policy.without_all_edits()
         return policy
+
+    def _build_source_context(self, confirm: Any) -> Any:
+        """Build this run's read-only source context (never raises)."""
+        try:
+            config = self.active_provider_config()
+            is_local = bool(config is not None and config.scope == "LOCAL")
+            consent = None
+            if confirm is not None:
+                consent = lambda: bool(
+                    confirm(
+                        PendingChanges(
+                            label="Share Aphelion source code with this provider?",
+                            actions=[
+                                "+ Read-only source snippets are sent to the "
+                                "remote model",
+                                "+ Only files inside the configured source root",
+                                "+ Secret-looking values are redacted first",
+                            ],
+                        ),
+                        None,
+                    )
+                )
+            context = build_source_context(
+                self.settings,
+                provider_is_local=is_local,
+                consent=consent,
+            )
+            self._last_source_context = context
+            return context
+        except Exception as exc:  # noqa: BLE001 - source context is optional
+            _LOG.warning("source context unavailable: %s", type(exc).__name__)
+            return None
+
+    def source_status(self) -> dict[str, Any]:
+        """Describe source access for the UI audit view."""
+        context = self._last_source_context
+        if context is None:
+            return {
+                "access": self.settings.source_access.value,
+                "access_label": self.settings.source_access.label,
+                "enabled": False,
+                "reason": "No source context has been built yet.",
+            }
+        return context.status()
+
+    @staticmethod
+    def _with_architecture(context_block: str, source_context: Any) -> str:
+        """Add the cheap registry digest to the context block."""
+        if source_context is None or not source_context.enabled:
+            return context_block
+        import json
+
+        try:
+            payload = json.loads(context_block)
+        except (TypeError, ValueError):
+            return context_block
+        if not isinstance(payload, dict):
+            return context_block
+        payload["architecture"] = source_context.digest()
+        return json.dumps(payload, ensure_ascii=False, default=str)
 
     @staticmethod
     def _transaction_label(text: str) -> str:

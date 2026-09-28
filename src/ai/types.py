@@ -28,6 +28,9 @@ class Permission(Flag):
     EDIT_PROJECT = auto()
     ACCESS_MEDIA = auto()
     ACCESS_VISION = auto()
+    #: Read-only access to the Aphelion application source tree. Never grants
+    #: a write, an execution, or a network call.
+    READ_SOURCE = auto()
 
 
 #: Human labels used by the settings UI and tool-description strings.
@@ -39,12 +42,14 @@ PERMISSION_LABELS: dict[Permission, str] = {
     Permission.EDIT_PROJECT: "Project settings and saving",
     Permission.ACCESS_MEDIA: "Local media filenames",
     Permission.ACCESS_VISION: "Media frames and graph snapshots",
+    Permission.READ_SOURCE: "Application source code",
 }
 
 #: Everything an agent needs to inspect a project but change nothing.
 READ_ONLY_PERMISSIONS: Permission = Permission.READ_PROJECT
 
-#: Sensible default: full editing, no media filenames, no vision.
+#: Sensible default: full editing, no media filenames, no vision, no source.
+#: Source access is opt-in because it can expose the developer's checkout.
 DEFAULT_PERMISSIONS: Permission = (
     Permission.READ_PROJECT
     | Permission.EDIT_GRAPH
@@ -115,6 +120,54 @@ class EditPolicy(str, Enum):
             EditPolicy.ASK_BEFORE_CHANGES: "Ask Before Changes",
             EditPolicy.AUTO_APPLY_SAFE: "Auto Apply Safe Changes",
             EditPolicy.FULL_AGENT: "Full Agent Mode",
+        }[self]
+
+
+class SourceAccess(str, Enum):
+    """How much of the Aphelion source tree the assistant may read.
+
+    ``METADATA`` needs no checkout at all: the generated node catalog plus the
+    live registry. ``CORE`` limits file reads to the editor's own source
+    directories, and ``FULL`` allows any allowed file under the configured
+    root. Every level is read-only and sandboxed.
+    """
+
+    OFF = "off"
+    METADATA = "metadata"
+    CORE = "core"
+    FULL = "full"
+
+    @property
+    def label(self) -> str:
+        return {
+            SourceAccess.OFF: "Off",
+            SourceAccess.METADATA: "Installed Build Metadata",
+            SourceAccess.CORE: "Core Source Read-Only",
+            SourceAccess.FULL: "Full Repository Read-Only",
+        }[self]
+
+    @property
+    def allows_file_reads(self) -> bool:
+        return self in (SourceAccess.CORE, SourceAccess.FULL)
+
+    @property
+    def allows_node_catalog(self) -> bool:
+        return self is not SourceAccess.OFF
+
+
+class CloudSourceSharing(str, Enum):
+    """Whether retrieved source may be sent to a remote provider."""
+
+    NEVER = "never"
+    ASK = "ask"
+    ALLOW = "allow"
+
+    @property
+    def label(self) -> str:
+        return {
+            CloudSourceSharing.NEVER: "Never",
+            CloudSourceSharing.ASK: "Ask Every Time",
+            CloudSourceSharing.ALLOW: "Allow",
         }[self]
 
 

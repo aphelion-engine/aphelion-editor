@@ -6,8 +6,8 @@ from core.history.commands import (AddNodeCommand, CompositeCommand,
                                    EditRotoDocumentCommand, InsertAfterCommand,
                                    MoveNodesCommand, PasteNodesCommand,
                                    RemoveKeyframeCommand, RemoveNodesCommand,
-                                   SetKeyframeCommand, SetPlanarTrackCommand,
-                                   SetProjectSettingsCommand,
+                                   RenameNodeCommand, SetKeyframeCommand,
+                                   SetPlanarTrackCommand, SetProjectSettingsCommand,
                                    SetPropertyCommand, SetTrackCommand,
                                    resolve_insert_sockets)
 from core.history.snapshots import NodeSnapshot
@@ -27,6 +27,7 @@ __all__ = [
     "PasteNodesCommand",
     "RemoveKeyframeCommand",
     "RemoveNodesCommand",
+    "RenameNodeCommand",
     "SetKeyframeCommand",
     "SetPlanarTrackCommand",
     "SetPropertyCommand",

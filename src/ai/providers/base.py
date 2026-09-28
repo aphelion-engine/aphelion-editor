@@ -23,6 +23,7 @@ from ai.errors import (ContextOverflowError, ProviderAuthError, ProviderError,
                        ProviderRateLimitError, ProviderResponseError,
                        ProviderUnavailableError)
 from ai.settings import ProviderConfig
+from ai.providers.urls import endpoint, is_loopback
 from ai.types import ChatMessage, ModelInfo, ProviderCapabilities, ProviderTestResult, ToolCall, Usage
 
 #: Called with each streamed text fragment.
@@ -110,146 +111,136 @@ class ChatResponse:
 # ======================================================================
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None  # Never replay credentials or POST bodies to redirect targets.
+
+
 class Transport:
-    """Minimal JSON / SSE client with consistent error mapping."""
+    """Shared TLS-verifying transport with bounded, cancellable I/O."""
 
-    def __init__(self, *, timeout: float = 120.0, user_agent: str = "Aphelion-AI") -> None:
-        self.timeout = float(timeout)
+    def __init__(self, *, timeout=120.0, user_agent="Aphelion-AI"):
+        self.timeout = timeout
+        self.connect_timeout = 10.0
+        self.stream_idle_timeout = 60.0
         self.user_agent = user_agent
+        self.should_stop = None
+        self.allow_insecure_http = False
+        self.opener = urllib.request.build_opener(_NoRedirect())
 
-    # -- helpers ---------------------------------------------------------
-
-    def _request(
-        self,
-        url: str,
-        payload: dict[str, Any],
-        headers: dict[str, str],
-    ) -> urllib.request.Request:
-        body = json.dumps(payload).encode("utf-8")
-        merged = {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "User-Agent": self.user_agent,
-        }
+    def _request(self, url, payload, headers):
+        from ai.providers.urls import validate_url, is_loopback
+        validate_url(url)
+        if headers and url.startswith("http:") and not is_loopback(url) and not self.allow_insecure_http:
+            raise ProviderAuthError("This remote endpoint uses HTTP. Credentials could be transmitted without encryption. Enable the explicit HTTP warning acknowledgement in provider settings to continue.")
+        merged = {"Content-Type": "application/json", "Accept": "application/json",
+                  "User-Agent": self.user_agent}
         merged.update(headers)
-        return urllib.request.Request(url, data=body, headers=merged, method="POST")
+        return urllib.request.Request(url, data=json.dumps(payload).encode() if payload is not None else None,
+                                      headers=merged, method="POST" if payload is not None else "GET")
 
-    def post_json(
-        self,
-        url: str,
-        payload: dict[str, Any],
-        headers: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
-        """POST a JSON body and decode the JSON reply."""
-        request = self._request(url, payload, headers or {})
+    def _read(self, url, payload, headers, streaming=False):
+        import queue
+        import threading
+        import time
+        from ai.errors import CancelledError
+        request = self._request(url, payload, headers)
+        events = queue.Queue(maxsize=64)
+        abandoned = threading.Event()
+        def emit(item):
+            while not abandoned.is_set():
+                try:
+                    events.put(item, timeout=0.1)
+                    return
+                except queue.Full:
+                    pass
+        def worker():
+            try:
+                with self.opener.open(request, timeout=min(self.connect_timeout, self.timeout)) as response:
+                    # urllib uses a socket timeout; the consumer also enforces total and idle deadlines.
+                    try:
+                        response.fp.raw._sock.settimeout(self.stream_idle_timeout if streaming else self.timeout)
+                    except AttributeError:
+                        pass
+                    if streaming:
+                        for line in response:
+                            if abandoned.is_set():
+                                break
+                            emit(("data", line))
+                    else:
+                        emit(("data", response.read()))
+            except urllib.error.HTTPError as exc:
+                emit(("error", self._http_error(exc, headers)))
+            except Exception:
+                emit(("error", ProviderUnavailableError("Provider network request failed or timed out.")))
+            finally:
+                emit(("done", None))
+        threading.Thread(target=worker, daemon=True, name="ai-http").start()
+        start = last = time.monotonic()
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                raw = response.read()
-        except urllib.error.HTTPError as exc:
-            raise self._http_error(exc) from exc
-        except (urllib.error.URLError, socket.timeout, TimeoutError, OSError) as exc:
-            raise ProviderUnavailableError(
-                f"Could not reach the provider: {_network_message(exc)}"
-            ) from exc
-        if not raw:
-            raise ProviderResponseError("The provider returned an empty response.")
-        try:
-            decoded = json.loads(raw.decode("utf-8", errors="replace"))
-        except json.JSONDecodeError as exc:
-            raise ProviderResponseError(
-                "The provider returned a non-JSON response."
-            ) from exc
-        if not isinstance(decoded, dict):
-            raise ProviderResponseError("The provider returned an unexpected payload.")
-        return decoded
-
-    def stream_lines(
-        self,
-        url: str,
-        payload: dict[str, Any],
-        headers: dict[str, str] | None = None,
-    ) -> Iterator[str]:
-        """POST and yield response lines (SSE or NDJSON) as they arrive."""
-        request = self._request(url, payload, headers or {})
-        try:
-            response = urllib.request.urlopen(request, timeout=self.timeout)
-        except urllib.error.HTTPError as exc:
-            raise self._http_error(exc) from exc
-        except (urllib.error.URLError, socket.timeout, TimeoutError, OSError) as exc:
-            raise ProviderUnavailableError(
-                f"Could not reach the provider: {_network_message(exc)}"
-            ) from exc
-
-        try:
-            for raw_line in response:
-                line = raw_line.decode("utf-8", errors="replace").strip()
-                if line:
-                    yield line
-        except (urllib.error.URLError, socket.timeout, TimeoutError, OSError) as exc:
-            raise ProviderUnavailableError(
-                f"The provider stream failed: {_network_message(exc)}"
-            ) from exc
+            while True:
+                if self.should_stop and self.should_stop():
+                    raise CancelledError("Request cancelled.")
+                now = time.monotonic()
+                if now - start > self.timeout or (streaming and now - last > self.stream_idle_timeout):
+                    raise ProviderUnavailableError("Provider request timed out.")
+                try:
+                    kind, value = events.get(timeout=0.05)
+                except queue.Empty:
+                    continue
+                last = time.monotonic()
+                if kind == "error":
+                    raise value from None
+                if kind == "done":
+                    return
+                yield value
         finally:
-            response.close()
+            abandoned.set()
 
-    def get_json(
-        self,
-        url: str,
-        headers: dict[str, str] | None = None,
-    ) -> Any:
-        merged = {"Accept": "application/json", "User-Agent": self.user_agent}
-        merged.update(headers or {})
-        request = urllib.request.Request(url, headers=merged, method="GET")
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                raw = response.read()
-        except urllib.error.HTTPError as exc:
-            raise self._http_error(exc) from exc
-        except (urllib.error.URLError, socket.timeout, TimeoutError, OSError) as exc:
-            raise ProviderUnavailableError(
-                f"Could not reach the provider: {_network_message(exc)}"
-            ) from exc
-        if not raw:
-            return {}
-        try:
-            return json.loads(raw.decode("utf-8", errors="replace"))
-        except json.JSONDecodeError as exc:
-            raise ProviderResponseError("The provider returned a non-JSON response.") from exc
+    def post_json(self, url, payload, headers=None):
+        return self._json(url, payload, headers or {})
 
-    # -- error mapping ---------------------------------------------------
+    def get_json(self, url, headers=None):
+        return self._json(url, None, headers or {})
+
+    def _json(self, url, payload, headers):
+        raw = b"".join(self._read(url, payload, headers))
+        try:
+            result = json.loads(raw)
+        except (ValueError, UnicodeError):
+            raise ProviderResponseError("Provider returned invalid JSON.") from None
+        if not isinstance(result, dict):
+            raise ProviderResponseError("Provider returned an unexpected payload.")
+        return result
+
+    def stream_lines(self, url, payload, headers=None):
+        for raw in self._read(url, payload, headers or {}, streaming=True):
+            line = raw.decode("utf-8", errors="replace").strip()
+            if line:
+                yield line
 
     @staticmethod
-    def _http_error(exc: urllib.error.HTTPError) -> ProviderError:
+    def _http_error(exc, headers=None):
         detail = ""
         try:
-            body = exc.read().decode("utf-8", errors="replace")
-            parsed = json.loads(body)
-            detail = _extract_message(parsed) or body[:400]
-        except Exception:  # noqa: BLE001 - the body is best-effort context
-            detail = ""
-
+            detail = _extract_message(json.loads(exc.read(8192)))[:400]
+        except Exception:
+            pass
+        for value in (headers or {}).values():
+            for secret in (value, value.removeprefix("Bearer ")):
+                if secret:
+                    detail = detail.replace(secret, "[REDACTED]")
         status = exc.code
+        message = f"Provider returned HTTP {status}." + (f" {detail}" if detail else "")
         if status in (401, 403):
-            return ProviderAuthError(
-                "The provider rejected the API key." + (f" {detail}" if detail else "")
-            )
+            return ProviderAuthError(message + " Verify this profile's API key.")
         if status == 429:
-            return ProviderRateLimitError(
-                "The provider is rate limiting requests."
-                + (f" {detail}" if detail else "")
-            )
+            return ProviderRateLimitError(message)
         if status in (400, 413, 422) and _looks_like_overflow(detail):
-            return ContextOverflowError(
-                "The request exceeded the model's context window."
-            )
-        if status >= 500:
-            return ProviderUnavailableError(
-                f"The provider is unavailable (HTTP {status})."
-                + (f" {detail}" if detail else "")
-            )
-        return ProviderResponseError(
-            f"The provider returned HTTP {status}." + (f" {detail}" if detail else "")
-        )
+            return ContextOverflowError("Request exceeded the model context window.")
+        if status >= 500 or status == 408:
+            return ProviderUnavailableError(message)
+        return ProviderResponseError(message)
 
 
 def _network_message(exc: BaseException) -> str:
@@ -300,6 +291,9 @@ class AIProvider:
         self.config = config
         self.api_key = api_key or ""
         self.transport = Transport(timeout=120.0)
+        self.transport.allow_insecure_http = config.allow_insecure_http
+        self.transport.connect_timeout = max(1, config.connect_timeout)
+        self.transport.stream_idle_timeout = max(1, config.stream_idle_timeout)
 
     # ------------------------------------------------------------------
     # Metadata
@@ -315,7 +309,7 @@ class AIProvider:
 
     @property
     def is_local(self) -> bool:
-        return bool(self.config.is_local)
+        return bool(self.config.is_local and is_loopback(self.config.base_url))
 
     @property
     def scope(self) -> str:
@@ -360,18 +354,13 @@ class AIProvider:
     # ------------------------------------------------------------------
 
     def _auth_headers(self) -> dict[str, str]:
-        if self.api_key:
-            return {"Authorization": f"Bearer {self.api_key}"}
+        """Adapters select their own authentication scheme."""
         return {}
 
-    def _require_key(self) -> None:
-        if self.config.is_local:
-            return
-        if not self.api_key:
-            raise ProviderAuthError(
-                f"{self.label} needs an API key. Add one in Preferences → AI."
-            )
-
     def _endpoint(self, suffix: str) -> str:
-        base = (self.config.base_url or "").rstrip("/")
-        return f"{base}/{suffix.lstrip('/')}"
+        return endpoint(self.config.base_url, suffix)
+
+    def diagnostics(self) -> dict[str, Any]:
+        return {"provider": self.label, "mode": self.config.connection_mode,
+                "base_url": self.config.base_url, "model": self.config.model,
+                "authentication": "configured" if self.api_key else "none"}
