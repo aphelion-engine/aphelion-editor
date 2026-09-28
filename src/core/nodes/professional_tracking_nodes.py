@@ -42,9 +42,11 @@ class _StoredTrackingNode(FrameNode):
         data = self.tracking_data.get(frame_num, {})
         state = str(data.get("state", "LOST"))
         state_code = {"TRACKING": 1, "WEAK": 2, "PARTIALLY_VISIBLE": 3,
-                      "PREDICTING": 4, "OFFSCREEN": 5, "OCCLUDED": 6,
-                      "SEARCHING": 7, "VERIFYING": 8, "RECOVERING": 9,
-                      "REACQUIRED": 10}.get(state, 0)
+                      "PARTIALLY_OFFSCREEN": 3, "MOSTLY_OFFSCREEN": 4,
+                      "PREDICTING": 5, "OFFSCREEN": 6, "OCCLUDED": 7,
+                      "SEARCHING": 8, "SEARCHING_FOR_REENTRY": 8,
+                      "VERIFYING": 9, "RECOVERING": 10,
+                      "REACQUIRED": 11}.get(state, 0)
         return {"x": float(data.get("x", data.get("position_x", 0.0))),
                 "y": float(data.get("y", data.get("position_y", 0.0))),
                 "confidence": float(data.get("confidence", 0.0)),

@@ -39,6 +39,7 @@ class PlanarTrackingOptions:
     max_references: int = 6
     reference_viewpoint_change: float = 0.18
     min_visible_fraction: float = 0.08
+    trusted_visible_fraction: float = 0.70
     max_area_ratio: tuple[float, float] = (0.005, 40.0)
     max_corner_jump: float = 2.0
     recovery_radius: float = 0.35
@@ -103,6 +104,8 @@ class TrackingSession:
     references: list[TrackingReference] = field(default_factory=list)
     history: dict[int, PlanarTrackingResult] = field(default_factory=dict)
     last_polygon: Polygon | None = None
+    last_good_result: PlanarTrackingResult | None = None
+    last_good_polygon: Polygon | None = None
     predicted_polygon: Polygon | None = None
     velocity: np.ndarray = field(default_factory=lambda: np.zeros((4, 2), np.float64), repr=False)
     acceleration: np.ndarray = field(default_factory=lambda: np.zeros((4, 2), np.float64), repr=False)
@@ -234,11 +237,12 @@ def _confidence(inliers, ratio, error, feature_count, flow_error=0.0, visible_fr
     return float(np.clip(value, 0.0, 1.0))
 
 
-def _descriptor_candidates(gray, polygon, references, detector, kind, options, predicted):
+def _descriptor_candidates(gray, polygon, references, detector, kind, options, predicted,
+                           search_region=None):
     """Return the strongest geometrically verified reference match."""
     h, w = gray.shape[:2]
     whole = ((0., 0.), (float(w), 0.), (float(w), float(h)), (0., float(h)))
-    points, descriptors = _features(gray, whole, detector, options)
+    points, descriptors = _features(gray, search_region or whole, detector, options)
     if descriptors is None:
         return None
     matcher = _matcher(kind)
@@ -276,11 +280,34 @@ def _descriptor_candidates(gray, polygon, references, detector, kind, options, p
     return best
 
 
+def _reentry_search_region(predicted, shape, missing_frames):
+    """Return a staged border/local ROI without clipping the tracked polygon."""
+    height, width = shape[:2]
+    points = _polygon_array(predicted)
+    center = points.mean(axis=0)
+    # A target predicted beyond a border is searched from its predicted entry
+    # border, not from its impossible off-image center.
+    center[0] = np.clip(center[0], 0, width)
+    center[1] = np.clip(center[1], 0, height)
+    radius = max(width, height) * min(1.0, .18 + .045 * missing_frames)
+    if radius >= max(width, height):
+        return None
+    return ((float(center[0] - radius), float(center[1] - radius)),
+            (float(center[0] + radius), float(center[1] - radius)),
+            (float(center[0] + radius), float(center[1] + radius)),
+            (float(center[0] - radius), float(center[1] + radius)))
+
+
 def _state_for_prediction(polygon, shape, lost, options):
     fraction = _clip_fraction(polygon, shape)
     if fraction <= 1e-5:
-        return TrackingState.OFFSCREEN, fraction
-    if fraction < options.min_visible_fraction:
+        return (TrackingState.SEARCHING_FOR_REENTRY if lost > options.max_lost_frames
+                else TrackingState.OFFSCREEN), fraction
+    if fraction <= .20:
+        return TrackingState.MOSTLY_OFFSCREEN, fraction
+    if fraction <= .70:
+        return TrackingState.PARTIALLY_OFFSCREEN, fraction
+    if fraction < options.trusted_visible_fraction:
         return TrackingState.PREDICTING, fraction
     if lost:
         return TrackingState.OCCLUDED, fraction
@@ -306,6 +333,9 @@ def _make_result(session, frame, polygon, status, *, confidence=0.0, inliers=0,
     session.history[frame] = result
     session.state = status
     session.last_frame = frame
+    if observed:
+        session.last_good_result = result
+        session.last_good_polygon = polygon
     return result
 
 
@@ -339,6 +369,7 @@ def track_planar_homography_range(
                                   _homography_for_polygon(seed, seed))
     session.references = [reference]
     session.last_polygon = seed
+    session.last_good_polygon = seed
     session.predicted_polygon = seed
     session.last_frame = first_number
     session.last_observed_frame = first_number
@@ -354,7 +385,9 @@ def track_planar_homography_range(
         number = int(number_raw)
         previous_frame = session.last_frame if session.last_frame is not None else number - 1
         dt = max(1, abs(number - previous_frame))
-        old_polygon = session.last_polygon or session.predicted_polygon or seed
+        # Continue from the latest prediction during an invisible run; the
+        # trusted observation remains separately available as last_good_polygon.
+        old_polygon = session.predicted_polygon or session.last_polygon or seed
         predicted_points = (_polygon_array(old_polygon) + session.velocity * dt +
                             .5 * session.acceleration * (dt ** 2))
         predicted_polygon = tuple(map(tuple, predicted_points))
@@ -364,9 +397,16 @@ def track_planar_homography_range(
         current_gray = None
         if frame is not None and _is_valid_frame(frame):
             current_gray = _to_gray_u8(frame)
-            if len(active_points) >= 4 and current_gray.shape == active_gray.shape:
+            # Points outside the current image are inactive, not bad matches.
+            # Never send them into LK/RANSAC while the target is crossing a
+            # border or is being predicted off-screen.
+            height, width = current_gray.shape[:2]
+            visible_points = ((active_points[:, 0] >= 0) & (active_points[:, 0] < width) &
+                              (active_points[:, 1] >= 0) & (active_points[:, 1] < height))
+            flow_points = active_points[visible_points]
+            if len(flow_points) >= 4 and current_gray.shape == active_gray.shape:
                 nxt, status, _ = cv2.calcOpticalFlowPyrLK(
-                    active_gray, current_gray, active_points.reshape(-1, 1, 2), None,
+                    active_gray, current_gray, flow_points.reshape(-1, 1, 2), None,
                     winSize=(21, 21), maxLevel=4,
                     criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 35, .01))
                 if nxt is not None and status is not None:
@@ -375,10 +415,10 @@ def track_planar_homography_range(
                     good = status.ravel().astype(bool) & back_status.ravel().astype(bool)
                     backward_error = 99.0
                     if back is not None:
-                        backward_error = np.linalg.norm(active_points - back.reshape(-1, 2), axis=1)
+                        backward_error = np.linalg.norm(flow_points - back.reshape(-1, 2), axis=1)
                         good &= backward_error <= options.flow_fb_error
                     new_points = nxt.reshape(-1, 2)
-                    estimate = _estimate(active_points[good], new_points[good], options)
+                    estimate = _estimate(flow_points[good], new_points[good], options)
                     if estimate is not None:
                         h_flow, mask, ratio, error = estimate
                         inlier_points = new_points[good][mask]
@@ -390,7 +430,10 @@ def track_planar_homography_range(
             if candidate is None or lost or index % max(1, options.reference_interval) == 0:
                 reference_candidate = _descriptor_candidates(current_gray, predicted_polygon,
                                                               session.references, detector, kind,
-                                                              options, predicted_polygon)
+                                                              options, predicted_polygon,
+                                                              _reentry_search_region(
+                                                                  predicted_polygon, current_gray.shape,
+                                                                  session.time_since_observation) if lost else None)
                 if reference_candidate is not None:
                     _, h_ref, mask, ratio, error, inlier_points, ref, polygon, fraction = reference_candidate
                     candidate = (h_ref, ratio, error, int(mask.sum()), inlier_points,
@@ -416,7 +459,10 @@ def track_planar_homography_range(
             valid_geometry = _valid_geometry(proposed_polygon, current_gray.shape,
                                              None if ref is not None else old_polygon, options)
             candidate_fraction = _clip_fraction(proposed_polygon, current_gray.shape)
-            if candidate_fraction <= 1e-5:
+            # A sliver with too little support is not a trustworthy measured
+            # surface. Preserve the last-good transform and let prediction
+            # carry it until a meaningful visible portion returns.
+            if candidate_fraction < options.min_visible_fraction:
                 valid_geometry = False
             # A match can be correct while the visible polygon has become very
             # thin. Area collapse alone is not rejection when inliers support it.
@@ -437,7 +483,8 @@ def track_planar_homography_range(
                 fraction = _clip_fraction(proposed_polygon, current_gray.shape)
                 confidence = _confidence(inliers, ratio, error, len(new_points), flow_error, fraction)
                 was_hidden = (session.state in (TrackingState.OFFSCREEN, TrackingState.PREDICTING,
-                                                TrackingState.SEARCHING, TrackingState.OCCLUDED) or
+                                                TrackingState.SEARCHING, TrackingState.SEARCHING_FOR_REENTRY,
+                                                TrackingState.OCCLUDED, TrackingState.MOSTLY_OFFSCREEN) or
                               _clip_fraction(old_polygon, current_gray.shape) <= options.min_visible_fraction)
                 status = TrackingState.REACQUIRED if was_hidden else (
                     TrackingState.PARTIALLY_VISIBLE if fraction < .999 else
@@ -448,8 +495,9 @@ def track_planar_homography_range(
                                       reference_frame=(ref.frame_number if ref else None),
                                       shape=current_gray.shape)
                 last_quality = confidence
-                if ((index % max(1, options.reference_interval) == 0 or was_hidden) and
-                        confidence > .55 and fraction > options.min_visible_fraction):
+                if (not was_hidden and index % max(1, options.reference_interval) == 0 and
+                        status == TrackingState.TRACKING and confidence > .65 and
+                        fraction >= options.trusted_visible_fraction):
                     p, d = _features(current_gray, proposed_polygon, detector, options)
                     if len(p) >= options.min_features and d is not None:
                         session.references.append(TrackingReference(
@@ -466,11 +514,13 @@ def track_planar_homography_range(
         state, fraction = _state_for_prediction(predicted_polygon,
                                                  current_gray.shape if current_gray is not None else first_gray.shape,
                                                  session.time_since_observation, options)
-        if current_gray is not None and fraction > options.min_visible_fraction:
-            state = TrackingState.OCCLUDED if session.time_since_observation <= options.max_lost_frames else TrackingState.SEARCHING
-        if session.time_since_observation > options.max_lost_frames:
-            state = TrackingState.SEARCHING
-        session.last_polygon = predicted_polygon
+        if current_gray is not None and fraction > .70:
+            state = (TrackingState.OCCLUDED if session.time_since_observation <= options.max_lost_frames
+                     else TrackingState.SEARCHING)
+        elif session.time_since_observation > options.max_lost_frames and fraction <= .20:
+            state = TrackingState.SEARCHING_FOR_REENTRY
+        # Keep the measured state immutable. Only the prediction advances;
+        # last_polygon/last_good_polygon remain the last trusted observation.
         _make_result(session, number, predicted_polygon, state,
                      confidence=max(0.0, last_quality * math.exp(-session.time_since_observation / 45.0)),
                      observed=False, shape=current_gray.shape if current_gray is not None else first_gray.shape,
