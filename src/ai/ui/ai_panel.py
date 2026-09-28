@@ -34,19 +34,36 @@ import threading
 import time
 from typing import Any
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QStringListModel, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont, QTextCharFormat, QTextCursor
-from PyQt6.QtWidgets import (QApplication, QComboBox, QFrame, QLabel, QLineEdit,
-                             QPushButton, QTextBrowser, QToolButton, QHBoxLayout, QVBoxLayout,
-                             QWidget, QPlainTextEdit)
+from PyQt6.QtWidgets import (
+    QApplication,
+    QComboBox,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMenu,
+    QPlainTextEdit,
+    QPushButton,
+    QTextBrowser,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
 
-from ai.platform.event_bus import (AgentEvent, AgentEventKind, AgentEventBus,
-                                    QuestionPayload, ThinkingPayload)
-from ai.settings import AISettingsStore
+from ai.platform.event_bus import (
+    AgentEvent,
+    AgentEventBus,
+    AgentEventKind,
+    QuestionPayload,
+    ThinkingPayload,
+)
 from ai.session import AssistantSession
+from ai.settings import AISettingsStore
 from ai.summary import AgentCompletionSummary
-from ai.task import StepStatus
-from ai.task import TodoList
+from ai.task import StepStatus, TodoList
+from ai.tasks import AgentEffort
 from ai.types import AgentMode, PendingChanges
 from ai.ui.action_view import ActionLogView
 from ai.ui.changes_dialog import ChangesPreviewDialog, describe_region_proposal
@@ -89,7 +106,8 @@ _EFFORT_LABELS = {
 
 class PromptEdit(QPlainTextEdit):
     """Input box: Enter sends, Shift+Enter breaks the line, '@' autocompletes."""
-    pass
+
+    send_requested = pyqtSignal()
 
 
 class EffortPicker(QComboBox):
@@ -97,7 +115,9 @@ class EffortPicker(QComboBox):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
         self.addItems([_EFFORT_LABELS[e] for e in AgentEffort])
         self.setMinimumWidth(96)
         self.setStyleSheet("""
@@ -226,7 +246,9 @@ class AIPanel(QWidget):
         header.setSpacing(6)
 
         title = QLabel("Aphelion AI")
-        title.setFont(QFont(title.font().family(), title.font().pointSize(), QFont.Weight.Bold))
+        title.setFont(
+            QFont(title.font().family(), title.font().pointSize(), QFont.Weight.Bold)
+        )
         header.addWidget(title)
 
         self._scope_label = QLabel("")
@@ -308,8 +330,16 @@ class AIPanel(QWidget):
         self._activity_toggle.toggled.connect(self._on_activity_toggled)
         layout.addWidget(self._activity_toggle)
 
+    def _on_activity_toggled(self, expanded: bool) -> None:
+        self.activity.setVisible(expanded)
+        self._activity_toggle.setArrowType(
+            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
+        )
+
         self.activity = ActionLogView()
-        self.activity.focus_nodes.connect(lambda ids: self.session.host.select_nodes(ids, focus=True))
+        self.activity.focus_nodes.connect(
+            lambda ids: self.session.host.select_nodes(ids, focus=True)
+        )
         self.activity.setMinimumHeight(90)
         self.activity.setVisible(False)
         layout.addWidget(self.activity)
@@ -320,7 +350,9 @@ class AIPanel(QWidget):
 
     def _build_input(self) -> QWidget:
         input = PromptEdit()
-        input.setPlaceholderText("Ask Aphelion anything...  (@ to mention a node, / for commands)")
+        input.setPlaceholderText(
+            "Ask Aphelion anything...  (@ to mention a node, / for commands)"
+        )
         input.setMinimumHeight(58)
         input.setMaximumHeight(140)
         input.setTabChangesFocus(True)
@@ -347,10 +379,14 @@ class AIPanel(QWidget):
         self._retry_action.triggered.connect(lambda: self.retry())
         self._undo_action = menu.addAction("Undo AI changes")
         self._undo_action.setEnabled(False)
-        self._undo_action.setToolTip("Undo the assistant's most recent change as a single step.")
+        self._undo_action.setToolTip(
+            "Undo the assistant's most recent change as a single step."
+        )
         self._undo_action.triggered.connect(self.undo_ai_changes)
         self._context_action = menu.addAction("Show AI context…")
-        self._context_action.setToolTip("Which source files and schemas were retrieved, redactions, and whether the provider was local or remote.")
+        self._context_action.setToolTip(
+            "Which source files and schemas were retrieved, redactions, and whether the provider was local or remote."
+        )
         self._context_action.triggered.connect(self.show_context_audit)
         self._overflow.setMenu(menu)
         self._overflow.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -380,7 +416,9 @@ class AIPanel(QWidget):
         self._mention_ids: list[str] = []
         self._mention_completer = QCompleter(self._mention_model, self)
         self._mention_completer.setWidget(self._input)
-        self._mention_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        self._mention_completer.setCompletionMode(
+            QCompleter.CompletionMode.PopupCompletion
+        )
         self._mention_completer.activated.connect(self._insert_mention)
 
     # -- state -------------------------------------------------------------
@@ -388,9 +426,15 @@ class AIPanel(QWidget):
     def refresh_state(self, *, refresh_models: bool = False) -> None:
         settings = self.settings_store.settings
         self.session.settings = settings
-        granted = [label for _name, label, allowed in settings.permissions.capability_rows() if allowed]
+        granted = [
+            label
+            for _name, label, allowed in settings.permissions.capability_rows()
+            if allowed
+        ]
         access = ", ".join(granted) if granted else "No project capabilities"
-        self._access_button.setToolTip(f"Agent has access to: {access}. Click to manage permissions.")
+        self._access_button.setToolTip(
+            f"Agent has access to: {access}. Click to manage permissions."
+        )
 
         index = self._mode_combo.findData(settings.agent_mode.value)
         if index >= 0:
@@ -408,17 +452,29 @@ class AIPanel(QWidget):
         self._activity_section.setVisible(enabled)
         self._banner.setVisible(not enabled)
         if not enabled:
-            self._banner_label.setText("The AI assistant is off. Nothing about your project is read or sent until you enable it and configure a provider.")
+            self._banner_label.setText(
+                "The AI assistant is off. Nothing about your project is read or sent until you enable it and configure a provider."
+            )
             self._status.setText("Disabled")
         else:
-            blocked = [label for _name, label, allowed in settings.permissions.capability_rows() if not allowed]
-            self._status.setText("Ready" if not blocked else "Not permitted: " + ", ".join(blocked[:3]))
+            blocked = [
+                label
+                for _name, label, allowed in settings.permissions.capability_rows()
+                if not allowed
+            ]
+            self._status.setText(
+                "Ready" if not blocked else "Not permitted: " + ", ".join(blocked[:3])
+            )
         self._refresh_provider_selector(force=refresh_models)
-        self._effort_picker.set_effort(self.session.settings.agent_effort or AgentEffort.NORMAL)
+        self._effort_picker.set_effort(
+            self.session.settings.agent_effort or AgentEffort.NORMAL
+        )
 
     def _refresh_provider_selector(self, *, force: bool = False) -> None:
         if force or self._model_cache is None:
-            self._model_cache = [p.model_info() for p in self.session.settings.enabled_providers()]
+            self._model_cache = [
+                p.model_info() for p in self.session.settings.enabled_providers()
+            ]
         models = self._model_cache or []
         active_config = self.session.active_provider_config()
         active_id = active_config.provider_id if active_config else ""
@@ -435,7 +491,10 @@ class AIPanel(QWidget):
             label = f"{info.provider_id} • {info.model_id or 'no model'}"
             self._provider_combo.addItem(label, key)
         if not models and active_config is not None:
-            self._provider_combo.addItem(f"{active_config.provider_id} • {active_config.model or 'no model'}", (active_config.provider_id, active_config.model))
+            self._provider_combo.addItem(
+                f"{active_config.provider_id} • {active_config.model or 'no model'}",
+                (active_config.provider_id, active_config.model),
+            )
         target = (active_id, active_model)
         index = self._provider_combo.findData(target)
         if index >= 0:
@@ -444,6 +503,18 @@ class AIPanel(QWidget):
 
         scope = self.session.provider_scope()
         self._scope_label.setText(scope)
+
+    def _on_model_changed(self, index: int) -> None:
+        """Apply the selected provider/model for the next message."""
+        payload = self._provider_combo.itemData(index)
+        if not isinstance(payload, tuple) or len(payload) != 2:
+            return
+        provider_id, model = payload
+        settings = self.settings_store.settings
+        settings.default_provider_id = provider_id
+        self.settings_store.save()
+        self.refresh_state(refresh_models=True)
+        self._status.setText(f"{provider_id} • {model}")
 
     def _on_mode_changed(self, index: int) -> None:
         value = self._mode_combo.itemData(index)
@@ -509,28 +580,32 @@ class AIPanel(QWidget):
         self._activity_divider()
         self._reset_activity()
         self._set_busy(True)
-        self._start_worker(AgentWorker(
-            self.session,
-            text,
-            on_event=self._emit_event,
-            on_finished=self._emit_finished,
-            confirm=self._confirm_from_worker,
-            mode=self._mode_combo.currentData(),
-        ))
+        self._start_worker(
+            AgentWorker(
+                self.session,
+                text,
+                on_event=self._emit_event,
+                on_finished=self._emit_finished,
+                confirm=self._confirm_from_worker,
+                mode=self._mode_combo.currentData(),
+            )
+        )
 
     def retry(self) -> None:
         if self._worker is not None or not self._can_retry():
             return
         self._set_busy(True)
-        self._start_worker(AgentWorker(
-            self.session,
-            "",
-            on_event=self._emit_event,
-            on_finished=self._emit_finished,
-            confirm=self._confirm_from_worker,
-            mode=self._mode_combo.currentData(),
-            retry=True,
-        ))
+        self._start_worker(
+            AgentWorker(
+                self.session,
+                "",
+                on_event=self._emit_event,
+                on_finished=self._emit_finished,
+                confirm=self._confirm_from_worker,
+                mode=self._mode_combo.currentData(),
+                retry=True,
+            )
+        )
 
     def stop(self) -> None:
         self.session.request_stop()
@@ -548,11 +623,13 @@ class AIPanel(QWidget):
 
     def show_context_audit(self) -> None:
         from ai.ui.context_view import ContextAuditDialog
+
         dialog = ContextAuditDialog(self, status=self.session.source_status())
         dialog.exec()
 
     def open_settings(self) -> None:
         from ai.ui.ai_settings_dialog import AISettingsDialog
+
         dialog = AISettingsDialog(self.settings_store, self.credentials, self)
         if dialog.exec() == AISettingsDialog.DialogCode.Accepted:
             self.on_settings_changed(refresh_models=True)
@@ -610,8 +687,15 @@ class AIPanel(QWidget):
             self._status.setText("Changes rejected")
         elif getattr(result, "committed", False):
             count = len(getattr(result, "changed_node_ids", []) or [])
-            self._status.setText(f"Applied ({count} node(s) touched) — Ctrl+Z to undo" if count else "Applied — Ctrl+Z to undo")
-        elif getattr(getattr(result, "task", None), "completion_reason", "") == "USER_INPUT_REQUIRED":
+            self._status.setText(
+                f"Applied ({count} node(s) touched) — Ctrl+Z to undo"
+                if count
+                else "Applied — Ctrl+Z to undo"
+            )
+        elif (
+            getattr(getattr(result, "task", None), "completion_reason", "")
+            == "USER_INPUT_REQUIRED"
+        ):
             self._status.setText("Waiting for your answer")
         else:
             self._status.setText("Done")
@@ -642,11 +726,24 @@ class AIPanel(QWidget):
             return
         if kind is AgentEventKind.STEP_STARTED:
             self._flush_stream()
-            self.activity.begin_action(ToolCall(name=event.payload.get("title", "step"), arguments={}, call_id="step"))
+            self.activity.begin_action(
+                ToolCall(
+                    name=event.payload.get("title", "step"),
+                    arguments={},
+                    call_id="step",
+                )
+            )
             return
         if kind is AgentEventKind.STEP_COMPLETED:
             self._flush_stream()
-            self.activity.finish_action(ToolCall(name=event.payload.get("title", "step"), arguments={}, call_id="step"), ToolResult(ok=True, summary=event.payload.get("title", "step")))
+            self.activity.finish_action(
+                ToolCall(
+                    name=event.payload.get("title", "step"),
+                    arguments={},
+                    call_id="step",
+                ),
+                ToolResult(ok=True, summary=event.payload.get("title", "step")),
+            )
             return
         if kind is AgentEventKind.TOOL_STARTED and event.tool_call is not None:
             self._flush_stream()
@@ -654,11 +751,19 @@ class AIPanel(QWidget):
             self._activity_count += 1
             self._set_activity_summary()
             self.activity.begin_action(event.tool_call)
-            self._action_times[event.tool_call.call_id or event.tool_call.name] = time.perf_counter()
-            self._pending_call[event.tool_call.call_id or event.tool_call.name] = event.tool_call
+            self._action_times[event.tool_call.call_id or event.tool_call.name] = (
+                time.perf_counter()
+            )
+            self._pending_call[event.tool_call.call_id or event.tool_call.name] = (
+                event.tool_call
+            )
             return
         if kind is AgentEventKind.TOOL_COMPLETED and event.tool_result is not None:
-            keys = [event.tool_call.call_id, event.tool_call.name] if event.tool_call else []
+            keys = (
+                [event.tool_call.call_id, event.tool_call.name]
+                if event.tool_call
+                else []
+            )
             call = None
             for key in keys:
                 if key and key in self._pending_call:
@@ -732,18 +837,22 @@ class AIPanel(QWidget):
             self._append_html(
                 f'<button id="ai-question-option-{index}" data-value="{html.escape(value)}" '
                 f'style="background:#343a45;color:#dce2eb;border:none;padding:8px 12px;'
-                f'border-radius:6px;margin-right:6px;text-align:left;width:100%;'
+                f"border-radius:6px;margin-right:6px;text-align:left;width:100%;"
                 f'cursor:pointer;" onclick="app.answer_question({index}, this)" {selected}>'
-                f'{label}</button>'
+                f"{label}</button>"
             )
         self._append_html("</div></div>")
         self._scroll_to_end()
-        self._transcript.document().findElementById("ai-question-card").setVisible(True) if self._transcript.document().findElementById("ai-question-card") is not None else None
+        self._transcript.document().findElementById("ai-question-card").setVisible(
+            True
+        ) if self._transcript.document().findElementById(
+            "ai-question-card"
+        ) is not None else None
 
     def _show_waiting_card(self) -> None:
         self._append_html(
             '<div style="margin:10px 0;padding:10px 12px;background:#333a45;border-radius:10px;color:#c8ccd4;">'
-            'The assistant is waiting for your answer. Click an option below to continue.</div>'
+            "The assistant is waiting for your answer. Click an option below to continue.</div>"
         )
         self._scroll_to_end()
 
@@ -803,33 +912,42 @@ class AIPanel(QWidget):
     def _append_system_note(self, text: str) -> None:
         self._append_html(
             '<div style="margin:6px 0;padding:6px 8px;background:#3a2a2a;color:#f0c0c0;">'
-            f'{html.escape(text)}</div>'
+            f"{html.escape(text)}</div>"
         )
         self._scroll_to_end()
 
-    def _render_thinking_card(self, payload: ThinkingPayload, *, expanded: bool) -> None:
+    def _render_thinking_card(
+        self, payload: ThinkingPayload, *, expanded: bool
+    ) -> None:
         """Render the thinking/progress card in place, replacing the previous one."""
         steps_html = "".join(
             f'<div style="margin:3px 0;">'
             f'<span style="color:#9aa2ae;">{s.get("status", "pending") and {"done": "✓", "active": "●", "failed": "✕", "skipped": "–"}.get(s.get("status"), "○")}</span> '
-            f'{html.escape(s.get("title", ""))}'
-            f'</div>'
+            f"{html.escape(s.get('title', ''))}"
+            f"</div>"
             for s in payload.steps or []
         )
-        body = "\n".join(f'<div style="margin-left:14px;">• {html.escape(d)}</div>' for d in (payload.details or []))
-        header = f'<div id="ai-thinking-card" style="margin:8px 0;padding:10px 12px;background:#2b3540;border-radius:10px;' \
-                 f'border:1px solid #343a45;transition:opacity {int(_THINKING_FADE_MS/1000)}s;">'
+        body = "\n".join(
+            f'<div style="margin-left:14px;">• {html.escape(d)}</div>'
+            for d in (payload.details or [])
+        )
+        header = (
+            f'<div id="ai-thinking-card" style="margin:8px 0;padding:10px 12px;background:#2b3540;border-radius:10px;'
+            f'border:1px solid #343a45;transition:opacity {int(_THINKING_FADE_MS / 1000)}s;">'
+        )
         header += f'<div style="display:flex;justify-content:space-between;align-items:center;">'
         header += f'<span style="font-weight:600;color:#8fd0ff;">▸ Thinking — {html.escape(payload.stage)}</span>'
         header += f'<button onclick="app.toggleThinking()" style="background:none;border:none;color:#9aa2ae;cursor:pointer;">{expanded and "▾" or "▸"}</button>'
-        header += f'</div>'
+        header += f"</div>"
         header += f'<div style="margin-top:6px;'
-        header += f'{'display:none;' if not expanded else 'display:block;'}'
+        header += f"{'display:none;' if not expanded else 'display:block;'}"
         header += f'line-height:1.5;">{body}</div>'
-        header += f'<div style="margin-top:8px;font-size:11pt;color:#9aa2ae;line-height:1.5;'
-        header += f'{'display:none;' if not expanded else 'display:block;'}'
+        header += (
+            f'<div style="margin-top:8px;font-size:11pt;color:#9aa2ae;line-height:1.5;'
+        )
+        header += f"{'display:none;' if not expanded else 'display:block;'}"
         header += f'">{steps_html}</div>'
-        header += f'</div>'
+        header += f"</div>"
         self._replace_html_in_place(header, "ai-thinking-card")
         self._scroll_to_end()
 
@@ -859,30 +977,52 @@ class AIPanel(QWidget):
         except Exception:  # noqa: BLE001
             return
 
-        background, accent = _STATUS_COLORS.get(summary.status.value, ("#22262e", "#e8ecf1"))
+        background, accent = _STATUS_COLORS.get(
+            summary.status.value, ("#22262e", "#e8ecf1")
+        )
         heading = f"{summary.status.symbol} {html.escape(summary.status.label)}"
         subject = summary.workflow_title or summary.task
         if subject:
             heading += f" — {html.escape(subject)}"
-        rows: list[str] = [f'<div style="font-weight:600;color:{accent};">{heading}</div>']
+        rows: list[str] = [
+            f'<div style="font-weight:600;color:{accent};">{heading}</div>'
+        ]
         if summary.because:
-            rows.append(f'<div style="margin-top:4px;color:#c8ccd4;">{html.escape(summary.because)}</div>')
+            rows.append(
+                f'<div style="margin-top:4px;color:#c8ccd4;">{html.escape(summary.because)}</div>'
+            )
         lines = summary.change_lines(limit=12)
         if lines:
-            rows.append('<div style="margin-top:6px;">' + "<br>".join(f"• {html.escape(line)}" for line in lines) + "</div>")
+            rows.append(
+                '<div style="margin-top:6px;">'
+                + "<br>".join(f"• {html.escape(line)}" for line in lines)
+                + "</div>"
+            )
         if summary.warnings:
-            rows.append('<div style="margin-top:6px;color:#f0d894;">' + "<br>".join(f"! {html.escape(item)}" for item in summary.warnings) + "</div>")
+            rows.append(
+                '<div style="margin-top:6px;color:#f0d894;">'
+                + "<br>".join(f"! {html.escape(item)}" for item in summary.warnings)
+                + "</div>"
+            )
         if summary.unmet:
-            rows.append('<div style="margin-top:6px;color:#f0d894;">' + "<br>".join(f"○ {html.escape(item)}" for item in summary.unmet) + "</div>")
+            rows.append(
+                '<div style="margin-top:6px;color:#f0d894;">'
+                + "<br>".join(f"○ {html.escape(item)}" for item in summary.unmet)
+                + "</div>"
+            )
         checklist = self._plan_checklist()
         if checklist:
-            rows.append('<div style="margin-top:8px;color:#9aa2ae;">Plan</div><div>{checklist}</div>')
+            rows.append(
+                '<div style="margin-top:8px;color:#9aa2ae;">Plan</div><div>{checklist}</div>'
+            )
         footer = self._summary_footer(summary)
         if footer:
             rows.append(f'<div style="margin-top:8px;color:#9aa2ae;">{footer}</div>')
 
         self._append_html(
-            '<div style="margin:10px 0;padding:8px 10px;background:' + background + ';border-radius:6px;">'
+            '<div style="margin:10px 0;padding:8px 10px;background:'
+            + background
+            + ';border-radius:6px;">'
             + "".join(rows)
             + "</div>"
         )
@@ -891,7 +1031,11 @@ class AIPanel(QWidget):
 
     def _plan_checklist(self) -> str:
         steps = (self._plan_payload or {}).get("steps") or []
-        rows = [f"{_STEP_SYMBOLS.get(str(step.get('status', '')), '○')} {html.escape(str(step.get('title', '')))}" for step in steps if isinstance(step, dict)]
+        rows = [
+            f"{_STEP_SYMBOLS.get(str(step.get('status', '')), '○')} {html.escape(str(step.get('title', '')))}"
+            for step in steps
+            if isinstance(step, dict)
+        ]
         return "<br>".join(rows)
 
     def _summary_footer(self, summary: AgentCompletionSummary) -> str:

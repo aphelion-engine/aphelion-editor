@@ -380,6 +380,13 @@ Rules:
 # Run result
 # ---------------------------------------------------------------------------
 
+
+_QUESTION_START = re.compile(
+    r"^\s*(what|how|why|when|where|who|which|does|do|is|are|would|can|should|must)[\s\(].*$",
+    re.IGNORECASE,
+)
+
+
 def _detect_workflow(self, objective: str) -> WorkflowPlan | None:
     """Recognise the professional workflow a request is asking for.
 
@@ -509,6 +516,8 @@ class AgentEngine:
         self.config = config
         self.permissions = permissions
         self.model = model
+        #: Recognised workflow before any graph work.
+        self.workflow_plan = None
         self.context_block = context_block
         #: Read-only source intelligence for this run (may be ``None``).
         self.source_context = source_context
