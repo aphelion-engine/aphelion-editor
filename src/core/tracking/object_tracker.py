@@ -24,6 +24,7 @@ class ObjectReference:
     descriptor: np.ndarray | None = None
     points: tuple[tuple[float, float], ...] = ()
     histogram: np.ndarray | None = None
+    template: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,12 @@ def _histogram(frame, bbox):
     return cv2.normalize(cv2.calcHist([gray], [0], None, [32], [0, 256]), None).ravel()
 
 
+def _histogram_similarity(first, second) -> float:
+    if first is None or second is None:
+        return 0.0
+    return float(np.clip((cv2.compareHist(first.astype(np.float32), second.astype(np.float32), cv2.HISTCMP_CORREL) + 1) / 2, 0, 1))
+
+
 def _bbox_polygon(bbox):
     x, y, w, h = bbox
     return np.float32([[x, y], [x + w, y], [x + w, y + h], [x, y + h]])
@@ -87,10 +94,11 @@ def track_object_range(sample_frame: Callable[[int], np.ndarray | None], frame_n
     lost = 0
     crop = _crop(first, bbox)
     keypoints, descriptors = detector.detectAndCompute(_to_gray_u8(crop), None) if crop is not None else ([], None)
-    if descriptors is not None:
-        references.append(ObjectReference(int(frame_numbers[0]), bbox, descriptors.copy(),
+    if crop is not None:
+        references.append(ObjectReference(int(frame_numbers[0]), bbox,
+                                          descriptors.copy() if descriptors is not None else None,
                                           tuple(map(tuple, (keypoint.pt for keypoint in keypoints))),
-                                          _histogram(first, bbox)))
+                                          _histogram(first, bbox), _to_gray_u8(crop).copy()))
     results[int(frame_numbers[0])] = ObjectTrackingResult(int(frame_numbers[0]), bbox, 1., TrackingState.TRACKING, True, False, track_id)
     for index, number_raw in enumerate(frame_numbers[1:], 1):
         if should_cancel and should_cancel():
@@ -122,24 +130,50 @@ def track_object_range(sample_frame: Callable[[int], np.ndarray | None], frame_n
                     if affine is None or inliers is None:
                         continue
                     count = int(inliers.sum())
-                    score = count / max(1, len(good))
+                    geometry_score = count / max(1, len(good))
+                    # Descriptor geometry proposes identity; the trusted
+                    # appearance histogram rejects a visually similar
+                    # distractor before it can become a new reference.
+                    local_box = (0.0, 0.0, reference.bbox[2], reference.bbox[3])
+                    corners = cv2.transform(_bbox_polygon(local_box)[None], affine)[0]
+                    x0, y0 = corners.min(axis=0); x1, y1 = corners.max(axis=0)
+                    measured = (float(x0), float(y0), float(x1 - x0), float(y1 - y0))
+                    appearance_score = _histogram_similarity(reference.histogram, _histogram(frame, measured))
+                    if reference.histogram is not None and appearance_score < .12:
+                        continue
+                    score = .65 * geometry_score + .35 * appearance_score
                     if best is None or score > best[0]:
                         # Descriptor points are local to the stored crop; the
                         # affine destination is in current-frame coordinates.
-                        local_box = (0.0, 0.0, reference.bbox[2], reference.bbox[3])
-                        corners = cv2.transform(_bbox_polygon(local_box)[None], affine)[0]
-                        x0, y0 = corners.min(axis=0); x1, y1 = corners.max(axis=0)
-                        best = score, (float(x0), float(y0), float(x1 - x0), float(y1 - y0))
+                        best = score, measured
             if best is not None:
                 candidate = best
             else:
-                # A local multiscale appearance fallback handles blur/scale
-                # changes when the descriptor set is temporarily sparse.
-                candidate = None
+                # Template fallback keeps small/low-texture targets alive until
+                # descriptors become available again. It is still verified by
+                # the trusted appearance histogram and is never stored as a
+                # reference unless the resulting observation is strong.
+                for reference in references:
+                    if reference.template is None:
+                        continue
+                    for scale in (.7, 1.0, 1.35):
+                        template = cv2.resize(reference.template, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+                        if template.shape[0] >= gray.shape[0] or template.shape[1] >= gray.shape[1]:
+                            continue
+                        match = cv2.matchTemplate(gray, template, cv2.TM_CCOEFF_NORMED)
+                        _, score, _, location = cv2.minMaxLoc(match)
+                        measured = (float(location[0]), float(location[1]), float(template.shape[1]), float(template.shape[0]))
+                        appearance_score = _histogram_similarity(reference.histogram, _histogram(frame, measured))
+                        combined = .65 * float(score) + .35 * appearance_score
+                        if score > .45 and appearance_score > .12 and (best is None or combined > best[0]):
+                            best = combined, measured
+                candidate = best
         if candidate is None:
             lost += 1
             bbox = predicted
-            state = TrackingState.OFFSCREEN if bbox[0] + bbox[2] < 0 or bbox[1] + bbox[3] < 0 or bbox[0] > previous_gray.shape[1] or bbox[1] > previous_gray.shape[0] else TrackingState.OCCLUDED
+            outside = bbox[0] + bbox[2] < 0 or bbox[1] + bbox[3] < 0 or bbox[0] > previous_gray.shape[1] or bbox[1] > previous_gray.shape[0]
+            state = (TrackingState.SEARCHING if lost > 15 else
+                     TrackingState.OFFSCREEN if outside else TrackingState.OCCLUDED)
             results[number] = ObjectTrackingResult(number, bbox, max(0, .35 * math.exp(-lost / 40)), state, False, True, track_id,
                                                     motion_score=max(0, 1 - lost / max_lost_frames))
         else:
@@ -155,7 +189,14 @@ def track_object_range(sample_frame: Callable[[int], np.ndarray | None], frame_n
             results[number] = ObjectTrackingResult(number, bbox, confidence, state, True, False, track_id,
                                                     appearance_score=appearance, motion_score=confidence)
             if confidence > .7 and hist is not None and (not references or index % 12 == 0):
-                references.append(ObjectReference(number, bbox, None, (), hist))
+                observed_crop = _crop(frame, bbox)
+                observed_keypoints, observed_descriptors = detector.detectAndCompute(
+                    _to_gray_u8(observed_crop), None) if observed_crop is not None else ([], None)
+                if observed_descriptors is not None:
+                    references.append(ObjectReference(
+                        number, bbox, observed_descriptors.copy(),
+                        tuple(map(tuple, (keypoint.pt for keypoint in observed_keypoints))), hist,
+                        _to_gray_u8(observed_crop).copy() if observed_crop is not None else None))
                 references = references[-max_references:]
         if on_progress:
             on_progress(index + 1, len(frame_numbers))

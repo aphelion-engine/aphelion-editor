@@ -1,0 +1,36 @@
+{
+  "format": "aphelion-graph",
+  "version": 1,
+  "name": "Wall Perspective Compositing",
+  "nodes": [
+    {"id": "video", "type": "Video Input", "position": [80, 180], "properties": {"file_path": "$USER_VIDEO"}},
+    {"id": "wall_tracker", "type": "Wall Tracker", "position": [380, 180], "properties": {"region_size": 20.0, "search_radius": 20.0}},
+    {"id": "artwork", "type": "Image Input", "position": [380, 520], "properties": {"file_path": "$WALL_ARTWORK", "scale": 100.0}},
+    {"id": "wall_pin", "type": "Corner Pin", "position": [760, 360], "properties": {"mix": 1}},
+    {"id": "merge", "type": "Merge", "position": [1120, 260], "properties": {"opacity": 1}},
+    {"id": "viewer", "type": "Viewer", "position": [1420, 260], "properties": {}}
+  ],
+  "connections": [
+    {"from": ["video", "frame"], "to": ["wall_tracker", "frame"]},
+    {"from": ["video", "frame"], "to": ["merge", "background"]},
+    {"from": ["artwork", "frame"], "to": ["wall_pin", "frame"]},
+    {"from": ["wall_tracker", "top_left_x"], "to": ["wall_pin", "in_top_left_x"]},
+    {"from": ["wall_tracker", "top_left_y"], "to": ["wall_pin", "in_top_left_y"]},
+    {"from": ["wall_tracker", "top_right_x"], "to": ["wall_pin", "in_top_right_x"]},
+    {"from": ["wall_tracker", "top_right_y"], "to": ["wall_pin", "in_top_right_y"]},
+    {"from": ["wall_tracker", "bottom_right_x"], "to": ["wall_pin", "in_bottom_right_x"]},
+    {"from": ["wall_tracker", "bottom_right_y"], "to": ["wall_pin", "in_bottom_right_y"]},
+    {"from": ["wall_tracker", "bottom_left_x"], "to": ["wall_pin", "in_bottom_left_x"]},
+    {"from": ["wall_tracker", "bottom_left_y"], "to": ["wall_pin", "in_bottom_left_y"]},
+    {"from": ["wall_pin", "frame"], "to": ["merge", "foreground"]},
+    {"from": ["merge", "frame"], "to": ["viewer", "frame"]}
+  ],
+  "groups": [
+    {"label": "SOURCE", "rect": [40, 120, 400, 230]},
+    {"label": "WALL TRACK + INSERT", "rect": [340, 120, 820, 520]},
+    {"label": "OUTPUT", "rect": [1080, 200, 500, 220]}
+  ],
+  "annotations": [
+    {"type": "callout", "text": "The wall's four corner streams are the reusable projective geometry; they remain meaningful beyond the viewport.", "position": [400, 100]}
+  ]
+}

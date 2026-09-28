@@ -6,7 +6,7 @@ from typing import Any
 
 from config.constants import NODE_CHAIN_GAP_PX
 from core.animation import AnimationCurve
-from core.events import Connection
+from core.events import Connection, ObserverEvent
 from core.history.command import Command
 from core.history.snapshots import NodeSnapshot, connections_touching
 from core.nodes import Node
@@ -96,6 +96,46 @@ class AddNodeCommand(Command):
     def description(self) -> str:
         name = self._node.node_type if self._snapshot is None else self._snapshot.node_type
         return f"Add {name}"
+
+
+class RenameNodeCommand(Command):
+    """Rename a node (mirrors the graph's inline rename).
+
+    The name is not a property but it *is* load-bearing: ``Property Link``
+    nodes resolve targets by name, so renaming has to be undoable.
+    """
+
+    def __init__(self, node_id: str, new_name: str) -> None:
+        self._node_id = node_id
+        self._new_name = str(new_name)
+        self._old_name: str | None = None
+
+    def execute(self, project: Project) -> bool:
+        node = project.nodes.get(self._node_id)
+        if node is None:
+            return False
+        if self._old_name is None:
+            self._old_name = node.name
+        if not self._new_name.strip():
+            return False
+        # Keep the name index in step with the rename.
+        project._unindex_node(self._node_id, node)
+        node.name = self._new_name.strip()
+        project._index_node(self._node_id, node)
+        project.notify_observers(ObserverEvent.NodeModified, self._node_id)
+        return True
+
+    def undo(self, project: Project) -> None:
+        node = project.nodes.get(self._node_id)
+        if node is None or self._old_name is None:
+            return
+        project._unindex_node(self._node_id, node)
+        node.name = self._old_name
+        project._index_node(self._node_id, node)
+        project.notify_observers(ObserverEvent.NodeModified, self._node_id)
+
+    def description(self) -> str:
+        return "Rename Node"
 
 
 class RemoveNodesCommand(Command):

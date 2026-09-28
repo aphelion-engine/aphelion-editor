@@ -1,0 +1,36 @@
+{
+  "format": "aphelion-graph",
+  "version": 1,
+  "name": "Floor Effect Tracking",
+  "nodes": [
+    {"id": "video", "type": "Video Input", "position": [80, 180], "properties": {"file_path": "$USER_VIDEO"}},
+    {"id": "floor_tracker", "type": "Floor Tracker", "position": [370, 180], "properties": {"region_size": 18.0, "search_radius": 22.0}},
+    {"id": "graphic", "type": "Image Input", "position": [370, 520], "properties": {"file_path": "$FLOOR_GRAPHIC", "scale": 100.0}},
+    {"id": "corner_pin", "type": "Corner Pin", "position": [720, 360], "properties": {"mix": 1}},
+    {"id": "merge", "type": "Merge", "position": [1080, 260], "properties": {"opacity": 1}},
+    {"id": "viewer", "type": "Viewer", "position": [1380, 260], "properties": {}}
+  ],
+  "connections": [
+    {"from": ["video", "frame"], "to": ["floor_tracker", "frame"]},
+    {"from": ["video", "frame"], "to": ["merge", "background"]},
+    {"from": ["graphic", "frame"], "to": ["corner_pin", "frame"]},
+    {"from": ["floor_tracker", "top_left_x"], "to": ["corner_pin", "in_top_left_x"]},
+    {"from": ["floor_tracker", "top_left_y"], "to": ["corner_pin", "in_top_left_y"]},
+    {"from": ["floor_tracker", "top_right_x"], "to": ["corner_pin", "in_top_right_x"]},
+    {"from": ["floor_tracker", "top_right_y"], "to": ["corner_pin", "in_top_right_y"]},
+    {"from": ["floor_tracker", "bottom_right_x"], "to": ["corner_pin", "in_bottom_right_x"]},
+    {"from": ["floor_tracker", "bottom_right_y"], "to": ["corner_pin", "in_bottom_right_y"]},
+    {"from": ["floor_tracker", "bottom_left_x"], "to": ["corner_pin", "in_bottom_left_x"]},
+    {"from": ["floor_tracker", "bottom_left_y"], "to": ["corner_pin", "in_bottom_left_y"]},
+    {"from": ["corner_pin", "frame"], "to": ["merge", "foreground"]},
+    {"from": ["merge", "frame"], "to": ["viewer", "frame"]}
+  ],
+  "groups": [
+    {"label": "INPUT", "rect": [40, 120, 700, 500]},
+    {"label": "TRACKING + PERSPECTIVE", "rect": [330, 120, 760, 520]},
+    {"label": "COMPOSITING", "rect": [1040, 200, 500, 220]}
+  ],
+  "annotations": [
+    {"type": "callout", "text": "Use a large textured floor region; do not crop the plane to the visible intersection.", "position": [350, 100]}
+  ]
+}

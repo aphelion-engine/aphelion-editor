@@ -90,6 +90,32 @@ class HistoryStack:
         self._notify()
         return True
 
+    def push_applied(self, command: Command) -> bool:
+        """Record ``command`` as already applied to the project.
+
+        Some producers — most notably the optional AI assistant — must execute
+        a command immediately in order to observe its result (a newly created
+        node's id, for example) and only later decide whether the whole batch
+        should become one undo step. Those producers apply the change through
+        the same ``Command`` objects the editor uses, then hand the finished
+        (possibly composite) command here.
+
+        This never re-executes: the caller guarantees the project is already
+        in the post-command state. ``undo`` reverses it as usual and ``redo``
+        re-applies it through the command's own ``execute``.
+
+        Returns:
+            ``True`` when the command was recorded.
+        """
+        if self._is_applying:
+            return False
+        self._undo.append(command)
+        if len(self._undo) > self._max_depth:
+            self._undo.pop(0)
+        self._redo.clear()
+        self._notify()
+        return True
+
     def undo(self) -> bool:
         if not self._undo or self._is_applying:
             return False

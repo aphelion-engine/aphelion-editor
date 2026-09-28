@@ -40,6 +40,9 @@ def _planar_quality(node: Any, frame_num: int, result: dict[str, Any]) -> None:
     result["inliers"] = float(diagnostic.get("inlier_count", 0))
     result["reprojection_error"] = float(diagnostic.get("reprojection_error", 0.0))
     result["valid"] = float(bool(diagnostic.get("valid", False)))
+    result["drift_score"] = float(diagnostic.get("drift_score", 0.0))
+    result["feature_coverage"] = float(diagnostic.get("feature_coverage", 0.0))
+    result["correcting"] = float(bool(diagnostic.get("correction_applied", False)))
 
 
 class Tracker:
@@ -233,7 +236,7 @@ class PlanarTrackerNode(FrameNode, Tracker):
     def _setup_sockets(self) -> None:
         """Register the tracked plate input, corner outputs, and seed positions."""
         self.add_input("frame", NodeSocketType.Frame)
-        for output in ("confidence", "inliers", "reprojection_error", "valid"):
+        for output in ("confidence", "inliers", "reprojection_error", "valid", "drift_score", "feature_coverage", "correcting"):
             self.add_output(output, NodeSocketType.Number)
         for corner, seed_x, seed_y in _PLANAR_CORNERS:
             self.add_output(f"{corner}_x", NodeSocketType.Number)
@@ -396,7 +399,7 @@ class PlanarHomographyTrackerNode(FrameNode, Tracker):
     def _setup_sockets(self) -> None:
         """Register the tracked plate input, corner outputs, and seed positions."""
         self.add_input("frame", NodeSocketType.Frame)
-        for output in ("confidence", "inliers", "reprojection_error", "valid"):
+        for output in ("confidence", "inliers", "reprojection_error", "valid", "drift_score", "feature_coverage", "correcting"):
             self.add_output(output, NodeSocketType.Number)
         for corner, seed_x, seed_y in _PLANAR_CORNERS:
             self.add_output(f"{corner}_x", NodeSocketType.Number)
@@ -566,7 +569,7 @@ class SurfaceTrackerNode(FrameNode, Tracker):
     def _setup_sockets(self) -> None:
         """Register the tracked plate input, corner outputs, and seed positions."""
         self.add_input("frame", NodeSocketType.Frame)
-        for output in ("confidence", "inliers", "reprojection_error", "valid"):
+        for output in ("confidence", "inliers", "reprojection_error", "valid", "drift_score", "feature_coverage", "correcting"):
             self.add_output(output, NodeSocketType.Number)
         for corner, seed_x, seed_y in _PLANAR_CORNERS:
             self.add_output(f"{corner}_x", NodeSocketType.Number)

@@ -45,6 +45,8 @@ class PlanarTrackingOptions:
     recovery_radius: float = 0.35
     verify_frames: int = 2
     feature_grid: tuple[int, int] = (6, 6)
+    max_reference_disagreement: float = 0.08
+    minimum_coverage: float = 0.12
 
 
 @dataclass(frozen=True)
@@ -84,6 +86,10 @@ class PlanarTrackingResult:
     track_id: str = ""
     time_since_observation: int = 0
     reason: str = ""
+    raw_polygon: Polygon | None = None
+    drift_score: float = 0.0
+    feature_coverage: float = 0.0
+    correction_applied: bool = False
 
     @property
     def predicted_polygon(self) -> Polygon | None:
@@ -113,6 +119,8 @@ class TrackingSession:
     last_observed_frame: int | None = None
     time_since_observation: int = 0
     state: TrackingState = TrackingState.TRACKING
+    last_raw_polygon: Polygon | None = None
+    drift_score: float = 0.0
 
 
 def _detector(options: PlanarTrackingOptions):
@@ -237,6 +245,24 @@ def _confidence(inliers, ratio, error, feature_count, flow_error=0.0, visible_fr
     return float(np.clip(value, 0.0, 1.0))
 
 
+def _feature_coverage(points, polygon, shape, options):
+    """Measure how widely support is distributed over the visible plane."""
+    if points is None or len(points) == 0:
+        return 0.0
+    rows, cols = options.feature_grid
+    mask = _inside_mask(shape, polygon)
+    ys, xs = np.where(mask > 0)
+    if len(xs) == 0:
+        return 0.0
+    x0, x1, y0, y1 = xs.min(), xs.max() + 1, ys.min(), ys.max() + 1
+    occupied = set()
+    for x, y in np.asarray(points):
+        if x0 <= x < x1 and y0 <= y < y1:
+            occupied.add((min(cols - 1, int((x - x0) / max(1, x1 - x0) * cols)),
+                          min(rows - 1, int((y - y0) / max(1, y1 - y0) * rows))))
+    return float(len(occupied) / max(1, rows * cols))
+
+
 def _descriptor_candidates(gray, polygon, references, detector, kind, options, predicted,
                            search_region=None):
     """Return the strongest geometrically verified reference match."""
@@ -316,7 +342,8 @@ def _state_for_prediction(polygon, shape, lost, options):
 
 def _make_result(session, frame, polygon, status, *, confidence=0.0, inliers=0,
                  ratio=0.0, error=0.0, observed=False, recovered=False,
-                 reference_frame=None, shape=None, reason=""):
+                 reference_frame=None, shape=None, reason="", raw_polygon=None,
+                 drift_score=0.0, feature_coverage=0.0, correction_applied=False):
     fraction = _clip_fraction(polygon, shape) if polygon is not None and shape is not None else 0.0
     homography = _homography_for_polygon(session.references[0].polygon, polygon) if polygon is not None and session.references else None
     output_polygon = None
@@ -329,7 +356,11 @@ def _make_result(session, frame, polygon, status, *, confidence=0.0, inliers=0,
         observed, predicted=not observed, recovered=recovered,
         reference_frame=reference_frame, visible=fraction > 1e-5,
         visible_fraction=fraction, track_id=session.track_id,
-        time_since_observation=session.time_since_observation, reason=reason)
+        time_since_observation=session.time_since_observation, reason=reason,
+        raw_polygon=(tuple((float(x) / max(1, shape[1]), float(y) / max(1, shape[0])) for x, y in raw_polygon)
+                     if raw_polygon is not None and shape is not None else None),
+        drift_score=drift_score, feature_coverage=feature_coverage,
+        correction_applied=correction_applied)
     session.history[frame] = result
     session.state = status
     session.last_frame = frame
@@ -395,6 +426,10 @@ def track_planar_homography_range(
         frame = _safe_sample_frame(sample_frame, number)
         candidate = None
         current_gray = None
+        candidate_polygon = None
+        raw_candidate_polygon = None
+        reference_disagreement = 0.0
+        correction_applied = False
         if frame is not None and _is_valid_frame(frame):
             current_gray = _to_gray_u8(frame)
             # Points outside the current image are inactive, not bad matches.
@@ -424,6 +459,7 @@ def track_planar_homography_range(
                         inlier_points = new_points[good][mask]
                         candidate = (h_flow, ratio, error, int(mask.sum()), inlier_points,
                                      current_gray, None, backward_error[good][mask].mean() if good.any() else 0.)
+                        raw_candidate_polygon = _apply(h_flow, old_polygon)
             # Periodic reference comparison corrects accumulated flow drift;
             # weak/lost frames always use the bank and not a stale template.
             lost = session.time_since_observation > 0
@@ -434,17 +470,26 @@ def track_planar_homography_range(
                                                               _reentry_search_region(
                                                                   predicted_polygon, current_gray.shape,
                                                                   session.time_since_observation) if lost else None)
+                flow_candidate = candidate
+                flow_polygon = raw_candidate_polygon
                 if reference_candidate is not None:
                     _, h_ref, mask, ratio, error, inlier_points, ref, polygon, fraction = reference_candidate
-                    candidate = (h_ref, ratio, error, int(mask.sum()), inlier_points,
-                                 current_gray, ref, 0.)
-                    candidate_polygon = polygon
-                else:
-                    candidate_polygon = None
-            else:
-                candidate_polygon = None
-        else:
-            candidate_polygon = None
+                    ref_quality = float(ratio * math.exp(-error / 8.0))
+                    flow_quality = (float(flow_candidate[1] * math.exp(-flow_candidate[2] / 8.0))
+                                    if flow_candidate is not None else -1.0)
+                    if flow_polygon is not None:
+                        reference_disagreement = float(np.mean(
+                            np.linalg.norm(_polygon_array(flow_polygon) - _polygon_array(polygon), axis=1)
+                        ) / max(current_gray.shape))
+                    # Absolute reference evidence wins when it is comparable
+                    # or when incremental flow has begun to disagree visibly.
+                    if flow_candidate is None or ref_quality >= flow_quality * .90 or reference_disagreement > options.max_reference_disagreement:
+                        candidate = (h_ref, ratio, error, int(mask.sum()), inlier_points,
+                                     current_gray, ref, 0.)
+                        candidate_polygon = polygon
+                        correction_applied = flow_candidate is not None and reference_disagreement > .02
+                    else:
+                        candidate_polygon = None
 
         if candidate is not None:
             h_update, ratio, error, inliers, new_points, current_gray, ref, flow_error = candidate
@@ -481,19 +526,27 @@ def track_planar_homography_range(
                 # a predicted/off-screen result or from a recovery candidate.
                 active_gray = current_gray
                 fraction = _clip_fraction(proposed_polygon, current_gray.shape)
+                coverage = _feature_coverage(new_points, proposed_polygon, current_gray.shape, options)
                 confidence = _confidence(inliers, ratio, error, len(new_points), flow_error, fraction)
+                if coverage < options.minimum_coverage:
+                    confidence *= max(.25, coverage / max(options.minimum_coverage, 1e-6))
                 was_hidden = (session.state in (TrackingState.OFFSCREEN, TrackingState.PREDICTING,
                                                 TrackingState.SEARCHING, TrackingState.SEARCHING_FOR_REENTRY,
                                                 TrackingState.OCCLUDED, TrackingState.MOSTLY_OFFSCREEN) or
                               _clip_fraction(old_polygon, current_gray.shape) <= options.min_visible_fraction)
-                status = TrackingState.REACQUIRED if was_hidden else (
+                status = TrackingState.REACQUIRED if was_hidden else (TrackingState.CORRECTING if correction_applied else (
                     TrackingState.PARTIALLY_VISIBLE if fraction < .999 else
-                    TrackingState.WEAK if confidence < .55 else TrackingState.TRACKING)
+                    TrackingState.WEAK if confidence < .55 else TrackingState.TRACKING))
+                if correction_applied:
+                    session.last_raw_polygon = raw_candidate_polygon
+                session.drift_score = reference_disagreement
                 result = _make_result(session, number, proposed_polygon, status,
                                       confidence=confidence, inliers=inliers, ratio=ratio,
                                       error=error, observed=True, recovered=was_hidden,
                                       reference_frame=(ref.frame_number if ref else None),
-                                      shape=current_gray.shape)
+                                      shape=current_gray.shape, raw_polygon=raw_candidate_polygon,
+                                      drift_score=reference_disagreement, feature_coverage=coverage,
+                                      correction_applied=correction_applied)
                 last_quality = confidence
                 if (not was_hidden and index % max(1, options.reference_interval) == 0 and
                         status == TrackingState.TRACKING and confidence > .65 and

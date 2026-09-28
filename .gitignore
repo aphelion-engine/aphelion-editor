@@ -12,7 +12,7 @@ resources/
 logs/
 .ruff_cache/
 release/
-
+.env
 installer/
 logs/
 lib/

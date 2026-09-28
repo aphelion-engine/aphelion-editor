@@ -1,0 +1,262 @@
+"""Local Ollama provider.
+
+Talks to Ollama's native ``/api/chat`` endpoint over loopback only. Nothing
+about a conversation using this provider leaves the machine, and no API key is
+involved, so it is the clearest "fully local" option in settings.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+from ai.errors import ProviderResponseError, ProviderUnavailableError
+from ai.providers.base import (AIProvider, ChatRequest, ChatResponse,
+                               StopCallback, TokenCallback)
+from ai.types import ModelInfo, ProviderCapabilities, ProviderTestResult, ToolCall, Usage
+
+
+class OllamaProvider(AIProvider):
+    """Ollama on the local machine."""
+
+    kind = "ollama"
+
+    @property
+    def is_local(self) -> bool:
+        return True
+
+    def capabilities(self, model: str | None = None) -> ProviderCapabilities:
+        declared = self.config.capabilities()
+        if self.config.supports_tools is not None:
+            return declared
+        name = (model or self.config.model or "").lower()
+        # Tool calling exists in most current Ollama models; the engine's
+        # structured fallback covers the ones that do not, so the cost of a
+        # wrong True here is a corrected retry rather than a broken feature.
+        tools = any(
+            marker in name
+            for marker in ("llama3", "llama-3", "qwen", "mistral", "mixtral",
+                           "deepseek", "granite", "hermes", "functionary",
+                           "command-r", "firefunction", "phi4", "gemma")
+        )
+        vision = any(
+            marker in name for marker in ("llava", "vision", "vl", "minicpm-v", "moondream")
+        )
+        return ProviderCapabilities(
+            supports_tools=tools,
+            supports_vision=vision,
+            supports_json=True,
+            context_window=8192,
+        )
+
+    def list_models(self) -> tuple[ModelInfo, ...]:
+        try:
+            payload = self.transport.get_json(self._endpoint("api/tags"))
+        except Exception:  # noqa: BLE001 - server may be down; that is not fatal
+            return () if not self.config.model else (self.config.model_info(),)
+        models: list[ModelInfo] = []
+        entries = payload.get("models") if isinstance(payload, dict) else None
+        if isinstance(entries, list):
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                name = str(entry.get("model") or entry.get("name") or "").strip()
+                if not name:
+                    continue
+                models.append(
+                    ModelInfo(
+                        provider_id=self.provider_id,
+                        model_id=name,
+                        label=name,
+                        capabilities=self.capabilities(name),
+                    )
+                )
+        models.sort(key=lambda item: item.model_id)
+        return tuple(models)
+
+    def test_connection(self) -> ProviderTestResult:
+        try:
+            models = self.list_models()
+        except ProviderUnavailableError as exc:
+            return ProviderTestResult(ok=False, message=str(exc))
+        if not models:
+            return ProviderTestResult(
+                ok=False,
+                message=(
+                    "Reached the address but no models are installed. Run "
+                    "`ollama pull <model>` then try again."
+                ),
+            )
+        names = tuple(model.model_id for model in models)
+        if not self.config.model:
+            return ProviderTestResult(
+                ok=False,
+                message="Server reachable. Pick one of: " + ", ".join(names[:8]),
+                models=names,
+            )
+        capabilities = self.capabilities(self.config.model)
+        return ProviderTestResult(
+            ok=True,
+            message=(
+                f"Connected to local Ollama. {len(names)} model(s) installed. "
+                f"Tool calling {'supported' if capabilities.supports_tools else 'will use the structured protocol'}."
+            ),
+            models=names,
+            capabilities=capabilities,
+        )
+
+    # ------------------------------------------------------------------
+    # Generation
+    # ------------------------------------------------------------------
+
+    def generate(
+        self,
+        request: ChatRequest,
+        *,
+        on_token: TokenCallback | None = None,
+        should_stop: StopCallback | None = None,
+    ) -> ChatResponse:
+        if not request.model:
+            raise ProviderResponseError(
+                "No Ollama model is selected. Pick one in Preferences → AI."
+            )
+        messages: list[dict[str, Any]] = []
+        if request.system:
+            messages.append({"role": "system", "content": request.system})
+        for message in request.messages:
+            if message.role == "assistant" and message.tool_calls:
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": message.content or "",
+                        "tool_calls": [
+                            {
+                                "function": {
+                                    "name": call.name,
+                                    "arguments": call.arguments,
+                                }
+                            }
+                            for call in message.tool_calls
+                        ],
+                    }
+                )
+                continue
+            if message.role == "tool":
+                messages.append(
+                    {"role": "tool", "content": message.content}
+                )
+                continue
+            entry: dict[str, Any] = {"role": message.role, "content": message.content}
+            if message.images:
+                entry["images"] = [
+                    image.split(",", 1)[1] if "," in image else image
+                    for image in message.images
+                ]
+            messages.append(entry)
+
+        payload: dict[str, Any] = {
+            "model": request.model,
+            "messages": messages,
+            "stream": bool(on_token is not None),
+            "options": {
+                "temperature": request.temperature,
+                "num_predict": request.max_tokens,
+            },
+        }
+        if request.tools:
+            payload["tools"] = [_to_ollama_tool(schema) for schema in request.tools]
+
+        url = self._endpoint("api/chat")
+        if on_token is None:
+            decoded = self.transport.post_json(url, payload, {})
+            return self._parse(decoded)
+        return self._stream(url, payload, on_token, should_stop)
+
+    def _parse(self, decoded: dict[str, Any]) -> ChatResponse:
+        message = decoded.get("message") if isinstance(decoded.get("message"), dict) else {}
+        calls: list[ToolCall] = []
+        for index, entry in enumerate(message.get("tool_calls") or []):
+            if not isinstance(entry, dict):
+                continue
+            function = entry.get("function") if isinstance(entry.get("function"), dict) else {}
+            name = str(function.get("name") or "").strip()
+            if not name:
+                continue
+            arguments = function.get("arguments")
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError:
+                    arguments = {"__raw__": arguments}
+            if not isinstance(arguments, dict):
+                arguments = {}
+            calls.append(ToolCall(name=name, arguments=arguments, call_id=f"ollama_{index}"))
+
+        prompt_tokens = int(decoded.get("prompt_eval_count", 0) or 0)
+        completion_tokens = int(decoded.get("eval_count", 0) or 0)
+        done_reason = str(decoded.get("done_reason") or "")
+        return ChatResponse(
+            content=str(message.get("content") or ""),
+            tool_calls=calls,
+            finish_reason="tool_calls" if calls else (done_reason or "stop"),
+            usage=Usage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=prompt_tokens + completion_tokens,
+            ),
+            raw=decoded,
+        )
+
+    def _stream(
+        self,
+        url: str,
+        payload: dict[str, Any],
+        on_token: TokenCallback,
+        should_stop: StopCallback | None,
+    ) -> ChatResponse:
+        content_parts: list[str] = []
+        final: dict[str, Any] = {}
+        for line in self.transport.stream_lines(url, payload, {}):
+            if should_stop is not None and should_stop():
+                break
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            message = event.get("message")
+            if isinstance(message, dict):
+                text = message.get("content")
+                if isinstance(text, str) and text:
+                    content_parts.append(text)
+                    on_token(text)
+                if message.get("tool_calls"):
+                    final = event
+            if event.get("done"):
+                final = event
+                break
+        if final:
+            parsed = self._parse(final)
+            if not parsed.content:
+                parsed.content = "".join(content_parts)
+            elif content_parts:
+                # Streaming deltas already delivered the text; avoid doubling.
+                parsed.content = "".join(content_parts)
+            return parsed
+        return ChatResponse(content="".join(content_parts), finish_reason="stop")
+
+
+def _to_ollama_tool(schema: dict[str, Any]) -> dict[str, Any]:
+    """Convert an OpenAI tool schema to Ollama's function shape."""
+    function = schema.get("function") if isinstance(schema, dict) else None
+    if not isinstance(function, dict):
+        return {"type": "function", "function": {"name": "", "parameters": {}}}
+    return {
+        "type": "function",
+        "function": {
+            "name": function.get("name", ""),
+            "description": function.get("description", ""),
+            "parameters": function.get("parameters", {}),
+        },
+    }

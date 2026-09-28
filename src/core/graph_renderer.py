@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import QRectF, Qt
+from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import QColor, QFont, QGuiApplication, QImage, QPainter, QPainterPath, QPen
 from core.nodes import global_node_registry
 from core.nodes.catalog import BUILTIN_NODE_TYPES
@@ -111,6 +111,14 @@ def render_graph_image(data: dict[str, Any], options: GraphRenderOptions | None 
     for node in nodes:
         x, y = node.get("position", [0, 0]); size = _node_size(node); sizes[node["id"]] = size
         bounds.append((float(x), float(y), float(x) + size[0], float(y) + size[1]))
+    for group in data.get("groups", []):
+        rect = group.get("rect", [])
+        if isinstance(rect, list) and len(rect) == 4:
+            bounds.append((float(rect[0]), float(rect[1]), float(rect[0]) + float(rect[2]), float(rect[1]) + float(rect[3])))
+    for annotation in data.get("annotations", []):
+        position = annotation.get("position", [])
+        if isinstance(position, list) and len(position) >= 2:
+            bounds.append((float(position[0]), float(position[1]), float(position[0]) + 300, float(position[1]) + 24))
     left = min(item[0] for item in bounds) - options.padding
     top = min(item[1] for item in bounds) - options.padding
     right = max(item[2] for item in bounds) + options.padding
@@ -160,6 +168,12 @@ def render_graph_image(data: dict[str, Any], options: GraphRenderOptions | None 
         painter.setPen(Qt.GlobalColor.white); painter.drawText(QRectF(x + 10, y + 4, w - 20, 20), str(node.get("name", node.get("type", "Node"))))
         painter.setPen(secondary); painter.setFont(QFont("Segoe UI", 8)); painter.drawText(QRectF(x + 10, y + 34, w - 20, 16), str(node.get("type", "")))
         painter.setPen(text); painter.setFont(QFont("Segoe UI", 8))
+        painter.setPen(QPen(QColor(15, 17, 22), 1)); painter.setBrush(QColor(90, 170, 220))
+        for index, _ in enumerate(node.get("inputs", [])):
+            painter.drawEllipse(QRectF(x - 5, y + 66 + index * 24 - 5, 10, 10))
+        painter.setBrush(QColor(220, 150, 90))
+        for index, _ in enumerate(node.get("outputs", [])):
+            painter.drawEllipse(QRectF(x + w - 5, y + 66 + index * 24 - 5, 10, 10))
         for index, port in enumerate(node.get("inputs", [])):
             painter.drawText(QRectF(x + 14, y + 61 + index * 24, w / 2 - 20, 18), str(port))
         for index, port in enumerate(node.get("outputs", [])):
