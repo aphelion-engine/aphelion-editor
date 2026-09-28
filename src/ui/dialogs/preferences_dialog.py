@@ -43,6 +43,9 @@ class PreferencesDialog(QDialog):
     #: editor, which owns the live project and decoder caches.
     clear_caches_requested = pyqtSignal()
     plugins_reloaded = pyqtSignal(int)
+    #: Emitted after the AI tab is committed, so the editor can enable/disable
+    #: the assistant without restarting.
+    ai_settings_changed = pyqtSignal()
 
     def __init__(
         self,
@@ -60,6 +63,9 @@ class PreferencesDialog(QDialog):
         self._slot_fields: dict[str, KeyCaptureEdit] = {}
         self._plugin_page = PluginPreferencesPage(self._working.plugins)
         self._plugin_page.plugins_reloaded.connect(self.plugins_reloaded.emit)
+        # The AI page is built lazily so a user who never opens it never loads
+        # the assistant modules or reads its settings file.
+        self._ai_page: QWidget | None = None
 
         self.setObjectName("PreferencesDialog")
         self.setWindowTitle("Preferences")
@@ -90,6 +96,7 @@ class PreferencesDialog(QDialog):
         tabs.addTab(self._build_keybinds_tab(), "Keybinds")
         tabs.addTab(self._scrollable(self._build_theme_tab()), "Appearance")
         tabs.addTab(self._build_node_colors_tab(), "Node Colors")
+        tabs.addTab(self._build_ai_tab(), "AI")
         root.addWidget(tabs, 1)
 
         buttons = QDialogButtonBox(
@@ -148,6 +155,44 @@ class PreferencesDialog(QDialog):
     def plugins_were_reloaded(self) -> bool:
         """Return whether the user reloaded plugins during this session."""
         return self._plugin_page.did_reload
+
+    def _build_ai_tab(self) -> QWidget:
+        """Build the optional AI provider page.
+
+        Imported here rather than at module scope so the assistant package is
+        only pulled in when a user actually opens Preferences.
+        """
+        try:
+            from ai.credentials import credentials_store
+            from ai.settings import ai_settings_store
+            from ai.ui.ai_settings_widget import AISettingsWidget
+        except Exception as exc:  # noqa: BLE001 - AI support is optional
+            placeholder = QWidget()
+            layout = QVBoxLayout(placeholder)
+            label = QLabel(f"The AI assistant is unavailable: {exc}")
+            label.setWordWrap(True)
+            layout.addWidget(label)
+            layout.addStretch(1)
+            return placeholder
+
+        page = AISettingsWidget(ai_settings_store(), credentials_store(), self)
+        page.settings_changed.connect(self._on_ai_settings_changed)
+        self._ai_page = page
+        return page
+
+    def _on_ai_settings_changed(self) -> None:
+        """Persist AI settings when the page changes.
+
+        The AI document lives in its own file, so it is written immediately
+        rather than being copied through ``AppPreferences``.
+        """
+        page = self._ai_page
+        if page is None:
+            return
+        commit = getattr(page, "commit", None)
+        if callable(commit):
+            commit()
+        self.ai_settings_changed.emit()
 
     def _apply_dialog_style(self) -> None:
         styles = build_theme_styles(self._theme_tokens)
@@ -1463,8 +1508,27 @@ class PreferencesDialog(QDialog):
 
     def _on_apply_clicked(self) -> None:
         self._collect_preferences()
+        self._commit_ai_page()
         self.applied.emit()
 
     def accept(self) -> None:
         self._collect_preferences()
+        self._commit_ai_page()
         super().accept()
+
+    def _commit_ai_page(self) -> None:
+        """Persist the AI page, if the user ever opened it."""
+        page = self._ai_page
+        if page is None:
+            return
+        commit = getattr(page, "commit", None)
+        if callable(commit):
+            try:
+                commit()
+            except Exception as exc:  # noqa: BLE001 - AI settings are optional
+                from utils.logging_setup import get_logger
+
+                get_logger("ui.preferences").warning(
+                    "Could not save AI settings: %s", exc
+                )
+        self.ai_settings_changed.emit()

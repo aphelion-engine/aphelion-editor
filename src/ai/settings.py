@@ -376,6 +376,30 @@ def _enum(enum_type: Any, value: Any, default: Any) -> Any:
         return default
 
 
+_STORE: AISettingsStore | None = None
+
+
+def ai_settings_store() -> AISettingsStore:
+    """Return the process-wide AI settings store, loading it on first use.
+
+    Deliberately lazy: the editor never touches AI settings during startup, so
+    a user who never opens the assistant pays nothing for its existence.
+    """
+    global _STORE
+    if _STORE is None:
+        _STORE = AISettingsStore()
+        _STORE.load()
+    return _STORE
+
+
+def reset_ai_settings_store_for_tests(path: Path | None = None) -> AISettingsStore:
+    """Replace the module singleton (tests only)."""
+    global _STORE
+    _STORE = AISettingsStore(path)
+    _STORE.load()
+    return _STORE
+
+
 class AISettingsStore:
     """Atomic JSON persistence for :class:`AISettings`."""
 
@@ -405,7 +429,11 @@ class AISettingsStore:
         return self.settings
 
     def save(self) -> None:
-        """Write settings atomically. Never writes secrets."""
+        """Write settings atomically. Never writes secrets.
+
+        The document deliberately contains only provider *references* and
+        capabilities; :mod:`ai.credentials` owns the encrypted values.
+        """
         path = self._path
         ensure_directory(path.parent)
         payload = self.settings.to_dict()

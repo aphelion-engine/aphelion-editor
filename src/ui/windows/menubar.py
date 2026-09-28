@@ -98,6 +98,7 @@ def _build_edit_menu(menubar: QMenuBar, editor: Editor) -> None:
     _add_action(edit_menu, editor, KeyAction.CLEAR_CACHE)
     edit_menu.addSeparator()
     _add_action(edit_menu, editor, KeyAction.OPEN_PREFERENCES)
+    _add_action(edit_menu, editor, KeyAction.OPEN_AI_SETTINGS)
     editor._sync_history_actions()
 
 
@@ -150,6 +151,8 @@ def _build_view_menu(menubar: QMenuBar, editor: Editor) -> None:
     _add_action(view_menu, editor, KeyAction.FOCUS_GRAPH)
     _add_action(view_menu, editor, KeyAction.FOCUS_TIMELINE)
     _add_action(view_menu, editor, KeyAction.FOCUS_PROPERTIES)
+    view_menu.addSeparator()
+    _add_action(view_menu, editor, KeyAction.TOGGLE_AI_ASSISTANT)
 
 
 def _build_window_menu(menubar: QMenuBar, editor: Editor) -> None:

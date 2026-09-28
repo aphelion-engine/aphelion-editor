@@ -36,6 +36,24 @@ KEY_FILENAME: str = "ai_credentials.key"
 VISIBLE_TAIL: int = 4
 
 
+_STORE: CredentialStore | None = None
+
+
+def credentials_store() -> CredentialStore:
+    """Return the process-wide credential store (created on first use)."""
+    global _STORE
+    if _STORE is None:
+        _STORE = CredentialStore()
+    return _STORE
+
+
+def reset_credentials_store_for_tests(directory: Path | None = None) -> CredentialStore:
+    """Replace the module singleton (tests only)."""
+    global _STORE
+    _STORE = CredentialStore(directory)
+    return _STORE
+
+
 def mask_secret(secret: str | None, *, visible_tail: int = VISIBLE_TAIL) -> str:
     """Return a display-safe summary of ``secret``.
 

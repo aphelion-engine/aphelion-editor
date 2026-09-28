@@ -80,6 +80,8 @@ class NodeGraphView(QGraphicsView):
         self._search_palette: NodeSearchPalette | None = None
         self._selection_bar: SelectionActionBar | None = None
         self._spotlight: bool = False
+        self._ai_highlight_ids: list[str] = []
+        self._ai_highlight_timer: QTimer | None = None
         self._freeze_worker: ExportWorker | None = None
         self._freeze_output: Path | None = None
         self._freeze_selection: set[str] = set()
@@ -117,6 +119,7 @@ class NodeGraphView(QGraphicsView):
         self.node_items.clear()
         self.connection_items.clear()
         self.scene.clear()
+        self._ai_highlight_ids = []
         self.project.subscribe(self.on_project_changed)
         for node_id in self.project.nodes:
             self.add_node_to_view(node_id)
@@ -196,6 +199,74 @@ class NodeGraphView(QGraphicsView):
         self._report_expansion(
             selection_ops.select_same_type(self),
             "same type",
+        )
+
+    # ==================================================================
+    # Assistant highlights
+    # ==================================================================
+
+    def highlight_nodes(
+        self,
+        node_ids: Any,
+        *,
+        label: str = "",
+        focus: bool = False,
+        duration_ms: int = 3200,
+    ) -> None:
+        """Temporarily ring the nodes the assistant just touched.
+
+        Purely visual: nothing about the project changes, and the ring clears
+        itself so a long session does not accumulate clutter.
+        """
+        ids = [str(node_id) for node_id in node_ids]
+        if not ids:
+            return
+        self.clear_ai_highlights()
+        touched = 0
+        for node_id in ids:
+            item = self.node_items.get(node_id)
+            if item is None:
+                continue
+            item.set_ai_highlight(True)
+            touched += 1
+        if touched == 0:
+            return
+        self._ai_highlight_ids = ids
+        if focus:
+            self.focus_nodes(ids)
+        if self._ai_highlight_timer is None:
+            self._ai_highlight_timer = QTimer(self)
+            self._ai_highlight_timer.setSingleShot(True)
+            self._ai_highlight_timer.timeout.connect(self.clear_ai_highlights)
+        self._ai_highlight_timer.start(max(600, int(duration_ms)))
+        if label:
+            self.notify(label, 2500)
+
+    def clear_ai_highlights(self) -> None:
+        """Remove every assistant highlight ring."""
+        for node_id in getattr(self, "_ai_highlight_ids", ()):
+            item = self.node_items.get(node_id)
+            if item is not None:
+                item.set_ai_highlight(False)
+        self._ai_highlight_ids = []
+
+    def focus_nodes(self, node_ids: Any) -> None:
+        """Center the view on the given nodes without changing the selection."""
+        rect = QRectF()
+        found = False
+        for node_id in node_ids:
+            item = self.node_items.get(str(node_id))
+            if item is None:
+                continue
+            bounds = item.sceneBoundingRect()
+            rect = bounds if not found else rect.united(bounds)
+            found = True
+        if not found:
+            return
+        margin = 120.0
+        self.fitInView(
+            rect.adjusted(-margin, -margin, margin, margin),
+            Qt.AspectRatioMode.KeepAspectRatio,
         )
 
     def fit_selection(self) -> None:

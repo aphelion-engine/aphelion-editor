@@ -242,6 +242,15 @@ class EditorActions:
             editor.toggle_logs_panel,
             icon=AppIcon.LOGS,
         )
+        self._register(
+            KeyAction.TOGGLE_AI_ASSISTANT,
+            editor.toggle_ai_assistant,
+        )
+        self._register(
+            KeyAction.OPEN_AI_SETTINGS,
+            editor.open_ai_settings,
+            icon=AppIcon.SETTINGS,
+        )
 
         self._register_node_create_slots()
 

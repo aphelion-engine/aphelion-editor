@@ -318,6 +318,9 @@ class PendingChanges:
     label: str
     actions: list[str] = field(default_factory=list)
     changed_node_ids: list[str] = field(default_factory=list)
+    #: ``True`` when the batch contains, or is, a destructive action that must
+    #: be confirmed even under an auto-apply policy.
+    destructive: bool = False
 
 
 @dataclass

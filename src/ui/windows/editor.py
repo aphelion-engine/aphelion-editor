@@ -405,6 +405,7 @@ class Editor(QMainWindow):
         )
         dialog.plugins_reloaded.connect(self._refresh_plugin_ui)
         dialog.clear_caches_requested.connect(self._clear_all_caches)
+        dialog.ai_settings_changed.connect(self._on_ai_settings_changed)
         if dialog.exec() != PreferencesDialog.DialogCode.Accepted:
             if dialog.plugins_were_reloaded:
                 PluginLoader.reload(self.preferences_store.preferences.plugins)
@@ -758,6 +759,7 @@ class Editor(QMainWindow):
         self.log_viewer.shutdown()
         self.media_pool.shutdown()
         self.timeline_editor.shutdown()
+        self._shutdown_ai()
         self.project.unsubscribe(self._on_project_dirty_event)
         self.project.close()
         # Do not leave worker threads alive past interpreter shutdown.
@@ -902,3 +904,47 @@ class Editor(QMainWindow):
             self.showNormal()
         else:
             self.showFullScreen()
+
+    # ==================================================================
+    # Optional AI assistant
+    #
+    # Everything below imports :mod:`ai` lazily. A user who never opens the
+    # assistant therefore never loads its modules, settings, or providers.
+    # ==================================================================
+
+    def toggle_ai_assistant(self) -> None:
+        """View → AI Assistant (Ctrl+Shift+A)."""
+        try:
+            from ai.ui.integration import toggle_ai_assistant
+        except Exception as exc:  # noqa: BLE001 - never break the editor
+            _LOG.error("AI assistant unavailable: %s", exc)
+            return
+        toggle_ai_assistant(self)
+
+    def open_ai_settings(self) -> None:
+        """Open the AI provider/preferences dialog."""
+        try:
+            from ai.ui.integration import open_ai_settings
+        except Exception as exc:  # noqa: BLE001
+            _LOG.error("AI settings unavailable: %s", exc)
+            return
+        open_ai_settings(self)
+
+    def _on_ai_settings_changed(self) -> None:
+        """React to AI preference edits made in the Preferences dialog."""
+        try:
+            from ai.ui.integration import on_ai_settings_changed
+        except Exception:  # noqa: BLE001 - the assistant may not be available
+            return
+        on_ai_settings_changed(self)
+
+    def _shutdown_ai(self) -> None:
+        """Cancel any in-flight agent run before the window closes."""
+        if getattr(self, "_ai_panel", None) is None:
+            return
+        try:
+            from ai.ui.integration import shutdown_ai
+
+            shutdown_ai(self)
+        except Exception:  # noqa: BLE001 - shutdown must never block closing
+            pass

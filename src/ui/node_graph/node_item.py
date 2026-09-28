@@ -56,6 +56,8 @@ class NodeItem(QGraphicsRectItem):
         self.node_id = node_id
         self.graph_view: NodeGraphView | None = None
         self.is_hovered: bool = False
+        #: Set while the assistant is showing the user which nodes it touched.
+        self.ai_highlight: bool = False
         self._drag_origins: dict[int, QPointF] = {}
         self._drag_before_positions: dict[str, tuple[float, float]] = {}
         self._node_width: int = dimensions.width
@@ -87,6 +89,18 @@ class NodeItem(QGraphicsRectItem):
     def node_width(self) -> int:
         """Current painted node width in pixels."""
         return self._node_width
+
+    def set_ai_highlight(self, active: bool) -> None:
+        """Show or clear the temporary "the AI changed this" ring.
+
+        This is purely presentational: it never touches the node model, so a
+        highlight can never be mistaken for a document change.
+        """
+        active = bool(active)
+        if self.ai_highlight == active:
+            return
+        self.ai_highlight = active
+        self.update()
 
     def set_dimmed(self, dimmed: bool) -> None:
         """Fade this node when spotlight mode highlights a different selection.
@@ -165,6 +179,38 @@ class NodeItem(QGraphicsRectItem):
         self._paint_header(painter, body, palette)
         self._paint_labels(painter, body, palette)
         self._paint_sockets(painter, palette)
+        if self.ai_highlight:
+            self._paint_ai_highlight(painter, body)
+
+    def _paint_ai_highlight(self, painter: QPainter, body: QRectF) -> None:
+        """Draw the assistant's "I changed this" ring and badge."""
+        accent = QColor(120, 220, 255)
+        glow = QColor(accent)
+        glow.setAlpha(70)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(glow, 6.0))
+        painter.drawRoundedRect(
+            body.adjusted(-7, -7, 7, 7),
+            CORNER_RADIUS_PX + 4,
+            CORNER_RADIUS_PX + 4,
+        )
+        painter.setPen(QPen(accent, 2.0))
+        painter.drawRoundedRect(
+            body.adjusted(-4, -4, 4, 4),
+            CORNER_RADIUS_PX + 2,
+            CORNER_RADIUS_PX + 2,
+        )
+        badge = QRectF(body.x(), body.y() - 20, 34, 16)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(accent))
+        painter.drawRoundedRect(badge, 4, 4)
+        painter.setPen(QPen(QColor(12, 24, 32)))
+        painter.setFont(QFont("Segoe UI", 7, QFont.Weight.Bold))
+        painter.drawText(
+            badge,
+            int(Qt.AlignmentFlag.AlignCenter),
+            "AI",
+        )
 
     def _paint_shadow(self, painter: QPainter, body: QRectF) -> None:
         shadow = body.translated(SHADOW_OFFSET_X_PX, SHADOW_OFFSET_Y_PX)

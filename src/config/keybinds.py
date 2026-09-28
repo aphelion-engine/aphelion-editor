@@ -47,6 +47,8 @@ class KeyAction(Enum):
 
     RESET_LAYOUT = "reset_layout"
     SHOW_ALL_PANELS = "show_all_panels"
+    TOGGLE_AI_ASSISTANT = "toggle_ai_assistant"
+    OPEN_AI_SETTINGS = "open_ai_settings"
 
     PLAY_PAUSE = "play_pause"
     GO_TO_START = "go_to_start"
@@ -270,6 +272,20 @@ DEFAULT_KEYBINDS: tuple[KeybindSpec, ...] = (
         "Window",
         "Ctrl+Shift+L",
         "Show or hide the log viewer panel",
+    ),
+    KeybindSpec(
+        KeyAction.TOGGLE_AI_ASSISTANT,
+        "AI Assistant",
+        "View",
+        "Ctrl+Shift+A",
+        "Show the optional AI assistant panel (off by default)",
+    ),
+    KeybindSpec(
+        KeyAction.OPEN_AI_SETTINGS,
+        "AI Settings…",
+        "Edit",
+        "",
+        "Configure AI providers, modes, and context permissions",
     ),
     KeybindSpec(
         KeyAction.RESET_LAYOUT,
