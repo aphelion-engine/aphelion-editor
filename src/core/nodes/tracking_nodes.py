@@ -30,6 +30,17 @@ _PLANAR_CORNERS: tuple[tuple[str, float, float], ...] = (
 )
 
 TRACKER_NODES = []
+
+
+def _planar_quality(node: Any, frame_num: int, result: dict[str, Any]) -> None:
+    """Expose engine diagnostics without making playback run the tracker."""
+    diagnostic = node.tracking_diagnostics.get(frame_num, {})
+    result["confidence"] = float(diagnostic.get("confidence", 0.0))
+    result["inliers"] = float(diagnostic.get("inlier_count", 0))
+    result["reprojection_error"] = float(diagnostic.get("reprojection_error", 0.0))
+    result["valid"] = float(bool(diagnostic.get("valid", False)))
+
+
 class Tracker:
     """Base class for all tracker nodes."""
     pass
@@ -213,11 +224,14 @@ class PlanarTrackerNode(FrameNode, Tracker):
             corner: (AnimationCurve(), AnimationCurve())
             for corner, _, _ in _PLANAR_CORNERS
         }
+        self.tracking_diagnostics: dict[int, dict[str, Any]] = {}
         super().__init__(name)
 
     def _setup_sockets(self) -> None:
         """Register the tracked plate input, corner outputs, and seed positions."""
         self.add_input("frame", NodeSocketType.Frame)
+        for output in ("confidence", "inliers", "reprojection_error", "valid"):
+            self.add_output(output, NodeSocketType.Number)
         for corner, seed_x, seed_y in _PLANAR_CORNERS:
             self.add_output(f"{corner}_x", NodeSocketType.Number)
             self.add_output(f"{corner}_y", NodeSocketType.Number)
@@ -319,6 +333,7 @@ class PlanarTrackerNode(FrameNode, Tracker):
             # Match ``CornerPinNode`` corner properties (0–100 percent of frame).
             result[f"{corner}_x"] = x_norm * 100.0
             result[f"{corner}_y"] = y_norm * 100.0
+        _planar_quality(self, frame_num, result)
         return result
 
     def to_dict(self) -> dict[str, Any]:
@@ -328,11 +343,13 @@ class PlanarTrackerNode(FrameNode, Tracker):
             corner: {"x": curve_x.to_dict(), "y": curve_y.to_dict()}
             for corner, (curve_x, curve_y) in self.corner_curves.items()
         }
+        data["tracking_diagnostics"] = self.tracking_diagnostics
         return data
 
     def apply_document(self, data: dict[str, Any]) -> None:
         """Restore base node data plus every corner's tracked curves."""
         super().apply_document(data)
+        self.tracking_diagnostics = {int(k): v for k, v in (data.get("tracking_diagnostics") or {}).items()}
         raw = data.get("corner_curves")
         if not isinstance(raw, dict):
             return
@@ -369,11 +386,14 @@ class PlanarHomographyTrackerNode(FrameNode, Tracker):
             corner: (AnimationCurve(), AnimationCurve())
             for corner, _, _ in _PLANAR_CORNERS
         }
+        self.tracking_diagnostics: dict[int, dict[str, Any]] = {}
         super().__init__(name)
 
     def _setup_sockets(self) -> None:
         """Register the tracked plate input, corner outputs, and seed positions."""
         self.add_input("frame", NodeSocketType.Frame)
+        for output in ("confidence", "inliers", "reprojection_error", "valid"):
+            self.add_output(output, NodeSocketType.Number)
         for corner, seed_x, seed_y in _PLANAR_CORNERS:
             self.add_output(f"{corner}_x", NodeSocketType.Number)
             self.add_output(f"{corner}_y", NodeSocketType.Number)
@@ -485,6 +505,7 @@ class PlanarHomographyTrackerNode(FrameNode, Tracker):
                 y_norm = curve_y.value_at(frame_num)
             result[f"{corner}_x"] = x_norm * 100.0
             result[f"{corner}_y"] = y_norm * 100.0
+        _planar_quality(self, frame_num, result)
         return result
 
     def to_dict(self) -> dict[str, Any]:
@@ -494,11 +515,13 @@ class PlanarHomographyTrackerNode(FrameNode, Tracker):
             corner: {"x": curve_x.to_dict(), "y": curve_y.to_dict()}
             for corner, (curve_x, curve_y) in self.corner_curves.items()
         }
+        data["tracking_diagnostics"] = self.tracking_diagnostics
         return data
 
     def apply_document(self, data: dict[str, Any]) -> None:
         """Restore base node data plus every corner's tracked curves."""
         super().apply_document(data)
+        self.tracking_diagnostics = {int(k): v for k, v in (data.get("tracking_diagnostics") or {}).items()}
         raw = data.get("corner_curves")
         if not isinstance(raw, dict):
             return
@@ -532,11 +555,14 @@ class SurfaceTrackerNode(FrameNode, Tracker):
             corner: (AnimationCurve(), AnimationCurve())
             for corner, _, _ in _PLANAR_CORNERS
         }
+        self.tracking_diagnostics: dict[int, dict[str, Any]] = {}
         super().__init__(name)
 
     def _setup_sockets(self) -> None:
         """Register the tracked plate input, corner outputs, and seed positions."""
         self.add_input("frame", NodeSocketType.Frame)
+        for output in ("confidence", "inliers", "reprojection_error", "valid"):
+            self.add_output(output, NodeSocketType.Number)
         for corner, seed_x, seed_y in _PLANAR_CORNERS:
             self.add_output(f"{corner}_x", NodeSocketType.Number)
             self.add_output(f"{corner}_y", NodeSocketType.Number)
@@ -646,6 +672,7 @@ class SurfaceTrackerNode(FrameNode, Tracker):
                 y_norm = curve_y.value_at(frame_num)
             result[f"{corner}_x"] = x_norm * 100.0
             result[f"{corner}_y"] = y_norm * 100.0
+        _planar_quality(self, frame_num, result)
         return result
 
     def to_dict(self) -> dict[str, Any]:
@@ -655,11 +682,13 @@ class SurfaceTrackerNode(FrameNode, Tracker):
             corner: {"x": curve_x.to_dict(), "y": curve_y.to_dict()}
             for corner, (curve_x, curve_y) in self.corner_curves.items()
         }
+        data["tracking_diagnostics"] = self.tracking_diagnostics
         return data
 
     def apply_document(self, data: dict[str, Any]) -> None:
         """Restore base node data plus every corner's tracked curves."""
         super().apply_document(data)
+        self.tracking_diagnostics = {int(k): v for k, v in (data.get("tracking_diagnostics") or {}).items()}
         raw = data.get("corner_curves")
         if not isinstance(raw, dict):
             return

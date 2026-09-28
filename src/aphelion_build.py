@@ -205,6 +205,7 @@ class BuildConfig:
         "soundfile",
         "librosa",
         "sounddevice",
+        "cryptography",
     )
 
     #: ``(source, destination)`` pairs copied next to the frozen executable.

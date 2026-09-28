@@ -11,6 +11,11 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from core.tracking.model import TrackingOptions, TrackingSample
 from core.tracking import track_planar_range, track_point_range
+from core.tracking.planar_tracker import (
+    PlanarTrackingOptions,
+    planar_results_to_corners,
+    track_planar_homography_range,
+)
 
 if TYPE_CHECKING:
     from core.project import Project
@@ -45,6 +50,7 @@ class TrackingRequest:
     region_size: NormalizedPoint
     search_radius: float
     options: TrackingOptions | None = None
+    planar_options: PlanarTrackingOptions | None = None
 
 
 class PointTrackingWorker(QThread):
@@ -150,22 +156,16 @@ class PlanarTrackingWorker(QThread):
             return
 
         try:
-            (
-                top_left,
-                top_right,
-                bottom_right,
-                bottom_left,
-            ) = track_planar_range(
+            results = track_planar_homography_range(
                 sampler,
                 self._request.frame_numbers,
                 initial_corners=self._initial_corners,
-                region_size=self._request.region_size,
-                search_radius=self._request.search_radius,
                 should_cancel=lambda: self._cancelled,
                 on_progress=lambda done, total: self.progress.emit(
                     done,
                     total,
                 ),
+                options=self._request.planar_options,
             )
         except Exception as exc:
             self.failed.emit(
@@ -173,27 +173,17 @@ class PlanarTrackingWorker(QThread):
             )
             return
 
-        if not any(
-            (
-                top_left,
-                top_right,
-                bottom_right,
-                bottom_left,
-            )
-        ):
+        corners = planar_results_to_corners(results)
+        if not any(corners.values()):
             self.failed.emit(
                 "Tracking failed: no frames could be matched."
             )
             return
 
-        self.finished_ok.emit(
-            {
-                "top_left": top_left,
-                "top_right": top_right,
-                "bottom_right": bottom_right,
-                "bottom_left": bottom_left,
-            }
-        )
+        # Keep the existing corner-curve contract and add diagnostics for new
+        # consumers.  Older UI code simply ignores the extra entry.
+        corners["diagnostics"] = results
+        self.finished_ok.emit(corners)
 
 
 def _build_frame_sampler(

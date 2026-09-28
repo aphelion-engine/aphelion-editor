@@ -12,7 +12,12 @@ from typing import TYPE_CHECKING
 
 from core.animation import AnimationCurve
 from core.history import SetPlanarTrackCommand, SetTrackCommand
-from core.nodes.tracking_nodes import PlanarTrackerNode, TrackerNode
+from core.nodes.tracking_nodes import (
+    PlanarHomographyTrackerNode,
+    PlanarTrackerNode,
+    SurfaceTrackerNode,
+    TrackerNode,
+)
 from render.tracking_worker import (
     PlanarTrackingWorker,
     PointTrackingWorker,
@@ -52,7 +57,7 @@ def split_xy_curves(
 
 
 def run_tracking(
-    node: TrackerNode | PlanarTrackerNode,
+    node: TrackerNode | PlanarTrackerNode | PlanarHomographyTrackerNode | SurfaceTrackerNode,
     node_id: str,
     project: Project,
     history: HistoryStack,
@@ -93,8 +98,9 @@ def run_tracking(
         )
         return False
 
+    planar_node = isinstance(node, (PlanarTrackerNode, PlanarHomographyTrackerNode, SurfaceTrackerNode))
     try:
-        options = node.tracking_options() if isinstance(node,TrackerNode) else None
+        options = node.tracking_options() if isinstance(node, TrackerNode) else None
     except ValueError as exc:
         QMessageBox.warning(parent, "Invalid tracking settings", str(exc))
         return False
@@ -104,10 +110,10 @@ def run_tracking(
         frame_numbers=frame_numbers,
         region_size=node.region_size_normalized(),
         search_radius=node.search_radius_normalized(),
-            options=options,
+        options=options,
     )
 
-    if isinstance(node, PlanarTrackerNode):
+    if planar_node:
         worker = PlanarTrackingWorker(project, request, node.seed_corners())
         dialog = TrackingProgressDialog(worker, title=f"Tracking {node.name}", parent=parent)
         if not dialog.run_modal():
@@ -115,6 +121,11 @@ def run_tracking(
                 QMessageBox.warning(parent, "Tracking Failed", dialog.error)
             return False
         raw = dialog.result or {}
+        diagnostics = raw.get("diagnostics", {}) if isinstance(raw, dict) else {}
+        if hasattr(node, "tracking_diagnostics"):
+            node.tracking_diagnostics = {
+                int(frame): value.to_dict() for frame, value in diagnostics.items()
+            }
         corner_curves = {
             corner: split_xy_curves(raw.get(corner, {})) for corner in CORNER_NAMES
         }
@@ -133,12 +144,12 @@ def run_tracking(
 
 
 def clear_tracking(
-    node: TrackerNode | PlanarTrackerNode,
+    node: TrackerNode | PlanarTrackerNode | PlanarHomographyTrackerNode | SurfaceTrackerNode,
     node_id: str,
     history: HistoryStack,
 ) -> None:
     """Remove all tracked keyframes from ``node``, keeping its seed position."""
-    if isinstance(node, PlanarTrackerNode):
+    if isinstance(node, (PlanarTrackerNode, PlanarHomographyTrackerNode, SurfaceTrackerNode)):
         empty_curves = {
             corner: (AnimationCurve(), AnimationCurve()) for corner in CORNER_NAMES
         }
