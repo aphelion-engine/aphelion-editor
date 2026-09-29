@@ -21,7 +21,7 @@ class TaskStatus(str, Enum):
     CANCELLED = "CANCELLED"
 
 
-_EDIT = re.compile(r"\b(add|create|insert|build|make|set|change|adjust|increase|decrease|connect|wire|rewire|disconnect|delete|remove|move|rename|fix|repair|optimize|organize|apply|use|replace|improve)\b", re.I)
+_EDIT = re.compile(r"\b(add|create|insert|build|make|set|change|adjust|increase|decrease|connect|wire|rewire|disconnect|delete|remove|move|rename|fix|repair|optimize|organize|apply|use|replace|improve|track|stabilize|stabilise|roto)\b", re.I)
 _NARRATION = re.compile(r"\b(let me|i['\u2019]?ll|i will|i need to|next i|going to)\b", re.I)
 
 
@@ -114,6 +114,8 @@ class AgentTask:
             self.required_operations.add("connect")
         if self.requires_edit and re.search(r"\b(cinematic|contrast|exposure|saturation|accurate|accuracy|stronger|property|properties|configure)\b", objective, re.I):
             self.required_operations.add("configure")
+        if self.requires_edit and re.search(r"\b(track|tracking|stabilize|stabilise|roto)\b", objective, re.I):
+            self.required_operations.add("track")
 
     def set_workflow(self, plan):
         """Record the recognised professional workflow and re-plan around it.
@@ -216,7 +218,8 @@ class AgentTask:
         categories = {"create": {"node.create", "graph.import"},
                       "delete": {"node.delete", "node.remove"},
                       "connect": {"connection.connect", "connection.create", "graph.connect"},
-                      "configure": {"node.set_property", "node.set_properties", "tracking.configure"}}
+                      "configure": {"node.set_property", "node.set_properties", "tracking.configure"},
+                      "track": {"tracking.run"}}
         missing = sorted(name for name in self.required_operations if not self.successful_tools.intersection(categories[name]))
         missing.extend(step["description"] for step in self.planned_tool_steps if not step["done"])
         return missing

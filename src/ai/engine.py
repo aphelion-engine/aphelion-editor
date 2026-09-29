@@ -870,6 +870,13 @@ class AgentEngine:
         self.workflow_plan = self._detect_workflow(objective)
         if self.workflow_plan is not None:
             self.task.set_workflow(self.workflow_plan)
+            # A non-vision model can still build a grounded tracking setup, but
+            # it cannot honestly identify a target or inspect track quality.
+            # Do not deadlock scripted/offline workflow runs on an operation the
+            # selected model cannot perform; the final summary reports that QA
+            # limitation instead.
+            if not self.capabilities.supports_vision:
+                self.task.required_operations.discard("track")
         self._organised_layout = False
 
         transaction = AIEditTransaction(label=label or "AI: Edit project")

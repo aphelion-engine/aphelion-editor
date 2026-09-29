@@ -62,7 +62,7 @@ import time
 from typing import Any
 
 from PyQt6.QtCore import QUrl, QStringListModel, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QFont, QTextCharFormat, QTextCursor
+from PyQt6.QtGui import QFont, QPalette, QTextCharFormat, QTextCursor
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -74,9 +74,6 @@ from PyQt6.QtWidgets import (
     QMenu,
     QPlainTextEdit,
     QPushButton,
-    QListWidget,
-    QListWidgetItem,
-    QSplitter,
     QTextBrowser,
     QToolButton,
     QVBoxLayout,
@@ -95,7 +92,7 @@ from ai.session import SLASH_COMMANDS, AssistantSession
 from ai.settings import AISettingsStore
 from ai.summary import AgentCompletionSummary
 from ai.task import StepStatus, TodoList
-from ai.tasks import AgentEffort
+from ai.tasks import AgentEffort, effort_from_string
 from ai.types import AgentMode, PendingChanges
 from ai.ui.action_view import ActionLogView
 from ai.ui.changes_dialog import ChangesPreviewDialog, describe_region_proposal
@@ -313,7 +310,6 @@ class AIPanel(QWidget):
         self._model_cache: list[Any] | None = None
 
         self._live_steps: list[str] = []
-        self._history_visible = True
 
         self._build_ui()
 
@@ -348,43 +344,46 @@ class AIPanel(QWidget):
 
     def _build_ui(self) -> None:
 
-        root = QHBoxLayout(self)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 14, 18, 14)
+        root.setSpacing(10)
 
-        root.setContentsMargins(10, 8, 10, 8)
+        root.addLayout(self._build_header())
 
-        root.setSpacing(0)
-
-        main = QWidget()
-        main_layout = QVBoxLayout(main)
-        main_layout.setContentsMargins(18, 14, 18, 14)
-        main_layout.setSpacing(10)
-
-        main_layout.addLayout(self._build_header())
-
-        main_layout.addWidget(self._build_banner())
+        root.addWidget(self._build_banner())
 
         self._controls = self._build_controls()
-        main_layout.addWidget(self._controls)
+        root.addWidget(self._controls)
 
         self._live_card = self._build_live_card()
-        main_layout.addWidget(self._live_card)
+        root.addWidget(self._live_card)
 
         self._transcript = QTextBrowser()
 
-        main_layout.addWidget(self._transcript)
-
         self._transcript.setObjectName("AITranscript")
+        self._transcript.setFrameShape(QFrame.Shape.NoFrame)
+        self._transcript.setContentsMargins(0, 0, 0, 0)
+        self._transcript.document().setDocumentMargin(4)
+        transcript_font = self._transcript.font()
+        transcript_font.setPointSize(max(11, transcript_font.pointSize() + 1))
+        self._transcript.setFont(transcript_font)
+        transcript_palette = self._transcript.palette()
+        transcript_palette.setColor(QPalette.ColorRole.Base, Qt.GlobalColor.transparent)
+        transcript_palette.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.white)
+        self._transcript.setPalette(transcript_palette)
+        self._transcript.setAutoFillBackground(False)
+        self._transcript.viewport().setAutoFillBackground(False)
 
         self._transcript.setOpenExternalLinks(False)
         self._transcript.anchorClicked.connect(self._on_transcript_link)
 
         self._transcript.setMinimumHeight(140)
 
-        main_layout.addWidget(self._transcript, 1)
+        root.addWidget(self._transcript, 1)
 
         self._activity_section = self._build_activity_section()
 
-        main_layout.addWidget(self._activity_section)
+        root.addWidget(self._activity_section)
 
         self._selection_context = QLabel()
 
@@ -394,21 +393,12 @@ class AIPanel(QWidget):
 
         self._selection_context.setVisible(False)
 
-        main_layout.addWidget(self._selection_context)
+        root.addWidget(self._selection_context)
 
         self._input = self._build_input()
 
-        composer = QFrame()
-        composer.setObjectName("AIComposer")
-        composer_layout = QVBoxLayout(composer)
-        composer_layout.setContentsMargins(0, 0, 0, 0)
-        composer_layout.addWidget(self._input)
-        main_layout.addWidget(composer)
-
-        main_layout.addLayout(self._build_footer())
-        self._history_sidebar = self._build_history_sidebar()
-        root.addWidget(self._history_sidebar)
-        root.addWidget(main, 1)
+        root.addWidget(self._input)
+        root.addLayout(self._build_footer())
         self._apply_panel_style()
         self._show_empty_state()
 
@@ -449,7 +439,7 @@ class AIPanel(QWidget):
             QLabel#AILiveTitle { color: #eef6ff; font-size: 11pt; font-weight: 600; }
             QLabel#AILiveDetail { color: #9fc8eb; font-size: 10pt; }
             QLabel#AILiveSteps { color: #aab7c6; font-size: 9pt; }
-            QTextBrowser#AITranscript { background: #12161c; border: 0; padding: 8px; color: #e9eef5; }
+            QTextBrowser#AITranscript, QTextBrowser#AITranscript QWidget { background: transparent; border: none; padding: 0; color: #e9eef5; }
             QPlainTextEdit { background: #1b2028; border: 1px solid #334151; border-radius: 14px; padding: 12px; color: #eef2f7; selection-background-color: #31597b; }
             QPlainTextEdit:focus { border: 1px solid #6ea8d8; }
             QPushButton#AISendButton { background: #d7ebff; color: #162333; border: 0; border-radius: 16px; padding: 8px 15px; font-weight: 600; }
@@ -1069,6 +1059,9 @@ class AIPanel(QWidget):
 
         self._input.clear()
 
+        if not self.session.messages and not self.session.turns:
+            self._transcript.clear()
+
         self._append_user(text)
 
         self._activity_divider()
@@ -1125,6 +1118,7 @@ class AIPanel(QWidget):
         self.session.start_new_conversation()
 
         self._transcript.clear()
+        self._show_empty_state()
 
         self._reset_activity()
 
@@ -1160,6 +1154,7 @@ class AIPanel(QWidget):
     def _start_worker(self, worker: AgentWorker) -> None:
 
         self._begin_turn()
+        self.session._stop_requested = False
 
         self._worker = worker
 
@@ -1167,7 +1162,7 @@ class AIPanel(QWidget):
         # These connections use QueuedConnection automatically because the
         # worker thread and the panel live on different threads.
         worker.event_received.connect(self._on_event)
-        worker.finished.connect(self._on_run_finished)
+        worker.finished.connect(self._on_run_finished, Qt.ConnectionType.QueuedConnection)
         worker.confirm_requested.connect(self._on_confirm_requested)
 
         worker.start()
@@ -1197,7 +1192,10 @@ class AIPanel(QWidget):
 
     def _on_run_finished(self, result: Any) -> None:
 
+        worker = self._worker
         self._worker = None
+        if worker is not None:
+            worker.deleteLater()
 
         self._flush_stream()
 
@@ -1534,8 +1532,9 @@ class AIPanel(QWidget):
     def _append_user(self, text: str) -> None:
 
         self._append_html(
-            f'<div style="margin:12px 0 2px 0;"><b>You</b></div>'
-            f'<div style="color:#e8ecf1;">{html.escape(text).replace(chr(10), "<br>")}</div>'
+            '<div style="margin:14px 8px 5px 18%;text-align:right;color:#93a2b3;font-size:10pt;">You</div>'
+            '<div style="margin-left:18%;padding:10px 13px;background:#26313d;border-radius:15px 15px 5px 15px;color:#edf2f7;">'
+            f'{html.escape(text).replace(chr(10), "<br>")}</div>'
         )
 
         self._scroll_to_end()
@@ -1545,7 +1544,7 @@ class AIPanel(QWidget):
         if self._streaming_block:
             return
 
-        self._append_html('<div style="margin:12px 0 2px 0;"><b>Aphelion AI</b></div>')
+        self._append_html('<div style="margin:18px 0 5px 2px;color:#a9d5ff;font-weight:600;">Aphelion AI</div>')
 
         cursor = self._transcript.textCursor()
 

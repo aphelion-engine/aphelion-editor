@@ -141,7 +141,7 @@ class HeadlessAgentHost:
     ) -> str | None:
         """Return the current preview as a PNG data URL, when possible."""
         try:
-            from ai.ui.frame_grab import preview_frame_data_url
+            from ai.rendering import preview_frame_data_url
         except Exception:  # noqa: BLE001 - GUI-only helper
             return None
         try:

@@ -9,6 +9,7 @@ returned so the user can see exactly what changed.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from ai.errors import ToolError
@@ -17,6 +18,10 @@ from ai.tools.helpers import resolve_node, short_list
 from ai.tools.node_tools import _coerce_property_value, _display
 from ai.types import Permission, ToolResult
 from core.history.commands import SetPropertyCommand
+from core.history.commands import SetPlanarTrackCommand, SetTrackCommand
+from core.animation import AnimationCurve
+from core.tracking import track_planar_range, track_point_range
+from render.tracking_worker import _build_frame_sampler
 from core.nodes.tracking_nodes import PlanarTrackerNode, Tracker
 
 #: Documented quality bundles. Each maps onto properties that really exist;
@@ -157,10 +162,124 @@ def register_tools(registry: ToolRegistry) -> None:
         )
     )
 
+    registry.register(
+        ToolSpec(
+            name="tracking.run",
+            description=(
+                "Run the selected point or planar tracker across a real frame range. "
+                "The tracker must have a connected frame input and a seeded region. "
+                "This writes undoable tracking curves into the node and returns "
+                "the measured frame count and confidence summary."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "node": {"type": "string", "description": "Tracker node id or name."},
+                    "start_frame": {"type": "integer", "minimum": 0},
+                    "end_frame": {"type": "integer", "minimum": 0},
+                },
+                "required": ["node"],
+                "additionalProperties": False,
+            },
+            permission=Permission.EDIT_TIMELINE,
+            handler=_run_tracking,
+            mutates=True,
+            category="Tracking",
+        )
+    )
+
 
 # ======================================================================
 # Handlers
 # ======================================================================
+
+
+def _run_tracking(ctx: ToolContext) -> ToolResult:
+    transaction = ctx.require_transaction("run tracking")
+    node_id, node = _tracker_node(ctx, str(ctx.args["node"]))
+    project = ctx.project
+    start = int(ctx.args.get("start_frame", getattr(project, "current_frame", 0)))
+    end = int(ctx.args.get("end_frame", getattr(project, "max_frame", start)))
+    if end < start:
+        raise ToolError("INVALID_ARGUMENT", "end_frame must not be before start_frame.")
+    frame_numbers = list(range(start, end + 1))
+    sampler = _build_frame_sampler(project, node_id)
+
+    if isinstance(node, PlanarTrackerNode):
+        corners = node.seed_corners()
+        region_size = node.region_size_normalized()
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="aphelion-track") as executor:
+            results = executor.submit(
+                track_planar_range,
+                sampler,
+                frame_numbers,
+                initial_corners=corners,
+                region_size=region_size,
+                search_radius=node.search_radius_normalized(),
+            ).result()
+        curves = {
+            name: (
+                AnimationCurve({frame: point[0] for frame, point in values.items()}),
+                AnimationCurve({frame: point[1] for frame, point in values.items()}),
+            )
+            for name, values in zip(PLANAR_CORNERS, results)
+        }
+        measured = sum(len(values) for values in results)
+        if not measured:
+            return ToolResult.failure(
+                "TRACKING_FAILED",
+                "No frames could be matched. Check the seed region and frame input.",
+            )
+        if not transaction.apply(
+            project,
+            SetPlanarTrackCommand(node_id, curves),
+            action=f"+ Track {node.name} across {len(frame_numbers)} frame(s)",
+            changed_node_ids=[node_id],
+        ):
+            return ToolResult.failure("TRACKING_FAILED", "The planar tracking result could not be applied.")
+        return ToolResult(
+            ok=True,
+            summary=f"Tracked {node.name} across {len(frame_numbers)} frame(s).",
+            details=[f"Measured {measured} planar corner samples."],
+            data={"node_id": node_id, "frames": len(frame_numbers), "measured_samples": measured, "kind": "planar"},
+            changed_node_ids=[node_id],
+        )
+
+    if not hasattr(node, "seed_position"):
+        raise ToolError("NOT_A_TRACKER", f"'{node.name}' cannot run a supported tracker.")
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="aphelion-track") as executor:
+        result = executor.submit(
+            track_point_range,
+            sampler,
+            frame_numbers,
+            initial_center=node.seed_position(),
+            region_size=node.region_size_normalized(),
+            search_radius=node.search_radius_normalized(),
+            options=node.tracking_options() if hasattr(node, "tracking_options") else None,
+        ).result()
+    valid = {frame: sample for frame, sample in result.items() if sample.valid and sample.x is not None and sample.y is not None}
+    if not valid:
+        return ToolResult.failure(
+            "TRACKING_FAILED",
+            "No frames could be matched. Check the seed region and frame input.",
+        )
+    track_x = AnimationCurve({frame: float(sample.x) for frame, sample in valid.items()})
+    track_y = AnimationCurve({frame: float(sample.y) for frame, sample in valid.items()})
+    if not transaction.apply(
+        project,
+        SetTrackCommand(node_id, track_x, track_y, samples=result),
+        action=f"+ Track {node.name} across {len(frame_numbers)} frame(s)",
+        changed_node_ids=[node_id],
+    ):
+        return ToolResult.failure("TRACKING_FAILED", "The tracking result could not be applied.")
+    confidence = sum(float(sample.confidence) for sample in valid.values()) / len(valid)
+    return ToolResult(
+        ok=True,
+        summary=f"Tracked {node.name} across {len(frame_numbers)} frame(s).",
+        details=[f"Measured {len(valid)} frames; average confidence {confidence:.2f}."],
+        data={"node_id": node_id, "frames": len(frame_numbers), "measured_frames": len(valid), "average_confidence": confidence, "kind": "point"},
+        changed_node_ids=[node_id],
+    )
 
 
 def _tracker_node(ctx: ToolContext, reference: str) -> tuple[str, Any]:
