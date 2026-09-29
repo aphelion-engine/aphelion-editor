@@ -67,6 +67,10 @@ class ExportRequest:
     #: PNG zlib compression level (0-9). Lower is dramatically faster and
     #: only costs disk space, which is why it defaults below OpenCV's own.
     png_compression: int = 1
+    render_memory_budget_bytes: int = 256 * 1024 * 1024
+    # Whole-file packet copy preserves source codec and quality, so it must
+    # never silently override a normal render request.
+    allow_stream_copy: bool = False
 
 
 _PROGRESS_UPDATE_SECONDS: float = 0.1
@@ -128,18 +132,22 @@ class ExportWorker(QThread):
         self._render_seconds = 0.0
         self._encode_seconds = 0.0
         self._frames_rendered = 0
+        self._active_writer: Mp4VideoWriter | None = None
 
     def cancel(self) -> None:
         """Request a graceful stop after the current frame."""
         self._cancelled = True
         self.requestInterruption()
+        writer = self._active_writer
+        if writer is not None and writer._process.poll() is None:
+            # Killing the owned child unblocks the encoder pipe. Cleanup stays
+            # on the export thread, which exclusively owns the writer.
+            writer._process.kill()
 
     def stop(self) -> None:
         """Block until the export thread exits."""
         self.cancel()
-        if not self.wait(30000):
-            self.terminate()
-            self.wait(1000)
+        self.wait()
 
     def run(self) -> None:
         from core.native import require_available
@@ -208,6 +216,8 @@ class ExportWorker(QThread):
         """
         project = self._project
         request = self._request
+        if not request.allow_stream_copy:
+            return False
         if len(project.nodes) != 2 or len(project.connections) != 1:
             return False
         connection = next(iter(project.connections))
@@ -249,7 +259,7 @@ class ExportWorker(QThread):
             return False
         try:
             info = source.probe_media()
-            if info is None or end < int(round(float(info[1]) * float(info[0]))) - 1:
+            if info is None or end != int(round(float(info[1]) * float(info[0]))) - 1:
                 return False
             if abs(float(request.fps) - float(info[0])) > 0.01:
                 return False
@@ -468,7 +478,7 @@ class ExportWorker(QThread):
 
                 frame, audio = evaluate(frame_num)
                 if frame is None:
-                    continue
+                    raise RuntimeError(f"Failed to render frame {frame_num}; export stopped to preserve timing")
 
                 if writer is None:
                     height, width = frame.shape[:2]
@@ -488,6 +498,7 @@ class ExportWorker(QThread):
                         self.failed.emit(f"Could not open the video writer: {exc}")
                         return
                     writer_write = writer.write
+                    self._active_writer = writer
                 elif frame.shape[0] != height or frame.shape[1] != width:
                     interpolation = (
                         cv2.INTER_AREA
@@ -506,8 +517,13 @@ class ExportWorker(QThread):
                     self.progress.emit(index + 1, total)
                     last_progress = now
         finally:
+            self._active_writer = None
             if writer is not None:
-                writer.close()
+                import sys
+                if self._cancelled or self.isInterruptionRequested() or sys.exc_info()[0] is not None:
+                    writer.abort()
+                else:
+                    writer.close()
 
         if written == 0:
             self.failed.emit(self._no_frames_message("written"))
@@ -515,98 +531,84 @@ class ExportWorker(QThread):
         self.finished_ok.emit(str(output))
 
     def _try_parallel_video_export(self, start: int, end: int, total: int) -> bool:
-        """Render independent video-only chunks concurrently.
+        """Evaluate independent frames with bounded retention and ordered encode.
 
-        ``Project`` intentionally serializes one live graph because nodes are
-        stateful. Export snapshots remove that constraint for video-only jobs:
-        each worker owns a complete project and decoder, while this thread
-        writes completed chunks in timeline order to the native encoder.
-        Audio-enabled graphs stay on the ordered path so synchronization and
-        stateful audio nodes cannot be changed accidentally.
+        Unknown/plugin and temporal nodes stay sequential. Worker-local project
+        snapshots own decoder state; no live graph is evaluated concurrently.
         """
-        # Audio decoding currently materializes a complete track per decoder;
-        # duplicating that work in worker snapshots is slower than the ordered
-        # path. Parallel rendering is therefore reserved for silent exports.
         if total < 4 or self._request.export_audio_enabled:
             return False
+        plan = self._project.render_plan()
+        if any(not getattr(self._project.nodes[node_id], "independent_frames", False)
+               or entry.is_temporal for node_id, entry in plan.nodes.items()):
+            return False
+        import threading
+        from core.project import Project
+        from render.frame_pipeline import ordered_frames
 
-        writer: Mp4VideoWriter | None = None
-        try:
-            from concurrent.futures import ThreadPoolExecutor
-            from core.project import Project
+        document = self._project.to_dict()
+        # Account conservatively for float intermediates per worker as well as
+        # completed RGB results. The writer has its own separate byte budget.
+        frame_bytes = max(1, self._project.width * self._project.height * 3)
+        budget = max(frame_bytes, self._request.render_memory_budget_bytes)
+        capacity = max(1, min(8, budget // (frame_bytes * 6)))
+        workers = min(capacity, max(1, min(4, os.cpu_count() or 1)))
+        local = threading.local()
+        clones = []
+        clone_lock = threading.Lock()
+        cancelled = lambda: self._cancelled or self.isInterruptionRequested()
 
-            document = self._project.to_dict()
-            cpu_count = os.cpu_count() or 2
-            workers = max(2, min( min(8, cpu_count), total))
-            chunk_size = max(1, (total + workers - 1) // workers)
-            chunks = [
-                (chunk_start, min(end + 1, chunk_start + chunk_size))
-                for chunk_start in range(start, end + 1, chunk_size)
-            ]
-            def render_chunk(bounds: tuple[int, int]):
+        def render(frame_num):
+            if cancelled():
+                return None
+            if not hasattr(local, "worker"):
                 clone = Project.from_dict(document)
                 clone.set_full_resolution_override(True)
                 clone.set_export_mode(True)
                 clone.set_export_audio_enabled(False)
-                local = ExportWorker(clone, self._request)
-                return bounds[0], [
-                    (frame_num, *local._evaluate_frame_rgb(frame_num))
-                    for frame_num in range(*bounds)
-                ], local._skipped_frames
-            width = height = written = skipped = 0
-            output = self._request.output_path
-            fps = float(max(1, self._request.fps))
+                local.worker = ExportWorker(clone, self._request)
+                with clone_lock:
+                    clones.append(clone)
+            frame, _ = local.worker._evaluate_frame_rgb(frame_num)
+            if frame is None:
+                raise RuntimeError(f"Failed to render frame {frame_num}")
+            return frame
 
-            def write_chunk(result: tuple[int, list[tuple[int, np.ndarray | None, AudioData | None]], int]) -> None:
-                nonlocal writer, width, height, written, skipped
-                chunk_start, frames, chunk_skipped = result
-                skipped += chunk_skipped
-                for _, frame, _audio in frames:
-                    if self._cancelled or self.isInterruptionRequested():
-                        return
-                    if frame is None:
-                        continue
-                    if writer is None:
-                        height, width = frame.shape[:2]
-                        output.parent.mkdir(parents=True, exist_ok=True)
-                        writer = Mp4VideoWriter(output, fps=fps, width=width, height=height,
-                                                include_audio=False, quality=self._request.export_quality)
-                    elif frame.shape[:2] != (height, width):
-                        interpolation = cv2.INTER_AREA if frame.shape[0] > height or frame.shape[1] > width else cv2.INTER_LINEAR
-                        frame = cv2.resize(frame, (width, height), interpolation=interpolation)
-                    writer.write_video_only(frame)
-                    written += 1
-                self.progress.emit(min(end + 1, chunk_start + len(frames)), total)
-
-            # Keep only a small ordered window in memory. Rendering continues
-            # ahead, but the entire export is never materialized before the
-            # encoder starts consuming frames.
-            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="AphelionRender") as pool:
-                pending = {
-                    index: pool.submit(render_chunk, bounds)
-                    for index, bounds in enumerate(chunks[:workers])
-                }
-                next_index = min(workers, len(chunks))
-                for index in range(len(chunks)):
-                    result = pending.pop(index).result()
-                    write_chunk(result)
-                    if next_index < len(chunks):
-                        pending[next_index] = pool.submit(render_chunk, chunks[next_index])
-                        next_index += 1
-                    if self._cancelled or self.isInterruptionRequested():
-                        for future in pending.values():
-                            future.cancel()
-                        break
-        except Exception as exc:  # noqa: BLE001 - ordered path remains authoritative
-            _LOG.warning("Parallel export unavailable; using ordered renderer: %s", exc)
-            return False
-        finally:
+        writer = None
+        written = 0
+        try:
+            for frame in ordered_frames(render, range(start, end + 1), workers=workers,
+                                        capacity=capacity, cancelled=cancelled):
+                if cancelled():
+                    break
+                if frame is None:
+                    raise RuntimeError("Frame render was cancelled")
+                if writer is None:
+                    height, width = frame.shape[:2]
+                    writer = Mp4VideoWriter(self._request.output_path, fps=self._request.fps,
+                                            width=width, height=height, include_audio=False,
+                                            quality=self._request.export_quality)
+                    self._active_writer = writer
+                elif frame.shape[:2] != (height, width):
+                    frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
+                writer.write_video_only(frame)
+                written += 1
+                self.progress.emit(written, total)
+            if cancelled():
+                if writer is not None:
+                    writer.abort()
+                self.failed.emit("Export cancelled.")
+                return True
+            if writer is None:
+                raise RuntimeError("No frames rendered")
+            writer.close()
+        except BaseException:
             if writer is not None:
-                writer.close()
-
-        if written == 0:
-            self._skipped_frames += skipped
-            self.failed.emit(self._no_frames_message("written"))
-            return True
-        self.finished_ok.emit(str(output))
+                writer.abort()
+            raise
+        finally:
+            self._active_writer = None
+            for clone in clones:
+                clone.close()
+        self.finished_ok.emit(str(self._request.output_path))
         return True

@@ -231,6 +231,9 @@ class Node(ABC):
 
     #: Whether the node reads neighbouring frames.
     is_temporal: bool = False
+    #: Explicit opt-in: a fresh snapshot can evaluate any frame independently.
+    #: Plugins and stateful effects default to ordered evaluation.
+    independent_frames: bool = False
 
     def __init__(self, name: str | None = None) -> None:
         self.name = name or self.node_type

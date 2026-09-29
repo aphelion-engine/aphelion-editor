@@ -32,6 +32,7 @@ class ViewerNode(Node):
 
     #: Tolerates a raw 8-bit frame and promotes it only when it must.
     accepts_u8_frame = True
+    independent_frames = True
     #: Forwards the incoming dtype on every pass-through path.
     preserves_frame_dtype = True
     preview_cost = PreviewCost.LIGHT
@@ -226,6 +227,8 @@ class ViewerNode(Node):
         ):
             exposure_prop = self.get_property("exposure")
             exposure = 1.0 if exposure_prop is None or exposure_prop.value is None else float(exposure_prop.value) / 100.0
+            if not self._bool_prop("apply_exposure", True):
+                exposure = 1.0
             flip_horizontal = self._bool_prop("flip_horizontal", False)
             flip_vertical = self._bool_prop("flip_vertical", False)
             if flip_horizontal or flip_vertical or abs(exposure - 1.0) >= 0.001:

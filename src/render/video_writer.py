@@ -114,20 +114,20 @@ class VideoEncoder(Enum):
     AMD_AMF = auto()
 
 
-_ENCODER_CACHE: dict[str, bool] | None = None
+_ENCODER_CACHE: dict[str, dict[str, bool]] = {}
 _ENCODER_CACHE_LOCK = threading.Lock()
 
 
 def _detect_encoders(
     ffmpeg_exe: str,
 ) -> dict[str, bool]:
-    """Detect hardware H.264 encoders exposed by this FFmpeg build."""
+    """Probe actual encode sessions; compiled-in support is not a device."""
 
     global _ENCODER_CACHE
 
     with _ENCODER_CACHE_LOCK:
-        if _ENCODER_CACHE is not None:
-            return _ENCODER_CACHE.copy()
+        if ffmpeg_exe in _ENCODER_CACHE:
+            return _ENCODER_CACHE[ffmpeg_exe].copy()
 
         result: dict[str, bool] = {
             "h264_qsv": False,
@@ -156,12 +156,23 @@ def _detect_encoders(
             )
 
             for encoder in result:
-                result[encoder] = encoder in text
+                if encoder not in text:
+                    continue
+                try:
+                    trial = subprocess.run(
+                        [ffmpeg_exe, '-v', 'error', '-nostdin', '-f', 'lavfi',
+                         '-i', 'color=size=128x128:rate=30', '-frames:v', '1',
+                         '-c:v', encoder, '-pix_fmt', 'yuv420p', '-f', 'null', '-'],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=10,
+                    )
+                    result[encoder] = trial.returncode == 0
+                except (OSError, subprocess.TimeoutExpired):
+                    result[encoder] = False
 
         except Exception:
             pass
 
-        _ENCODER_CACHE = result
+        _ENCODER_CACHE[ffmpeg_exe] = result
         return result.copy()
 
 
@@ -287,6 +298,7 @@ class Mp4VideoWriter:
         quality: ExportQuality = ExportQuality.FAST,
         queue_size: int = _DEFAULT_QUEUE_SIZE,
         encoder: VideoEncoder = VideoEncoder.AUTO,
+        memory_budget_bytes: int = 128 * 1024 * 1024,
     ) -> None:
         from core.native import require_available
 
@@ -364,11 +376,7 @@ class Mp4VideoWriter:
         # Temporary video
         # ==================================================================
 
-        self._temp_video_path = (
-            self._make_temp_video_path()
-            if self._include_audio
-            else output_path
-        )
+        self._temp_video_path = self._make_temp_video_path()
 
         self._ffmpeg_exe = (
             imageio_ffmpeg.get_ffmpeg_exe()
@@ -597,10 +605,8 @@ class Mp4VideoWriter:
         self._frame_queue: queue.Queue[
             np.ndarray | _EndOfFrames
         ] = queue.Queue(
-            maxsize=max(
-                2,
-                int(queue_size),
-            )
+            maxsize=max(1, min(int(queue_size), max(1, int(memory_budget_bytes)) //
+                               (self._encoded_width * self._encoded_height * 3)))
         )
 
         self._encoder_thread = threading.Thread(
@@ -794,7 +800,7 @@ class Mp4VideoWriter:
                         return
 
                     # Direct view over NumPy memory.
-                    view = memoryview(item)
+                    view = memoryview(item).cast('B')
 
                     # Usually one write is sufficient, but FileIO is allowed
                     # to perform partial writes.
@@ -1075,9 +1081,9 @@ class Mp4VideoWriter:
             frame_rgb,
         )
 
-        self._frame_queue.put(
-            frame,
-        )
+        # Borrowed storage: the caller must not mutate a submitted frame.
+        # Polling also observes an encoder that dies while backpressure applies.
+        self._enqueue(frame)
 
         # ==============================================================
         # AUDIO
@@ -1121,6 +1127,39 @@ class Mp4VideoWriter:
             frame_rgb,
         )
 
+    def _enqueue(self, item: np.ndarray | _EndOfFrames) -> None:
+        while True:
+            if self._write_error is not None or not self._encoder_thread.is_alive():
+                raise RuntimeError('FFmpeg encoder stopped') from self._write_error
+            try:
+                self._frame_queue.put(item, timeout=0.05)
+                return
+            except queue.Full:
+                continue
+
+    def abort(self) -> None:
+        """Discard an unfinished export and unblock a pending pipe write."""
+        if self._closed:
+            return
+        self._closed = True
+        if self._process.poll() is None:
+            self._process.kill()
+        self._process.wait(timeout=5)
+        # Wake an encoder waiting for a frame rather than inside write().
+        try:
+            self._frame_queue.put_nowait(_END)
+        except queue.Full:
+            pass
+        self._encoder_thread.join(timeout=5)
+        if self._process.stdin is not None:
+            self._process.stdin.close()
+        if self._audio_wave is not None:
+            self._audio_wave.close()
+            self._audio_wave = None
+        self._cleanup_audio()
+        self._stderr_file.close()
+        self._cleanup_temp_video()
+
     # ======================================================================
     # Close
     # ======================================================================
@@ -1136,14 +1175,12 @@ class Mp4VideoWriter:
             # Stop accepting video.
             # ==============================================================
 
-            self._frame_queue.put(
-                _END,
-            )
-
-            # Wait for every frame to enter FFmpeg.
-            self._frame_queue.join()
-
-            self._encoder_thread.join()
+            self._enqueue(_END)
+            # Queue.join can deadlock when the consumer fails after draining
+            # but before the producer inserts the end marker.
+            self._encoder_thread.join(timeout=300)
+            if self._encoder_thread.is_alive():
+                raise TimeoutError('FFmpeg frame submission timed out')
 
             # ==============================================================
             # Close FFmpeg stdin.
@@ -1390,4 +1427,7 @@ class Mp4VideoWriter:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
-        self.close()
+        if exc_type is not None:
+            self.abort()
+        else:
+            self.close()

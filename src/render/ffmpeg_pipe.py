@@ -105,17 +105,20 @@ class FfmpegPipe:
         if proc is None or proc.stdout is None or self._frame_bytes <= 0:
             return None
         try:
-            data = proc.stdout.read(self._frame_bytes)
+            # Read directly into the final writable storage, avoiding a bytes
+            # allocation followed by a second full-frame memcpy. Pipes may
+            # return short reads; only complete frames can enter the graph.
+            frame = np.empty((self._height, self._width, 3), dtype=np.uint8)
+            view = memoryview(frame).cast('B')
+            offset = 0
+            while offset < len(view):
+                count = proc.stdout.readinto(view[offset:])
+                if not count:
+                    return None
+                offset += count
         except (OSError, ValueError):
             return None
-        if not data or len(data) < self._frame_bytes:
-            return None
-        # ``frombuffer`` over ``bytes`` is read-only; the rest of the pipeline
-        # treats decoded frames as owned, mutable buffers, so hand over a
-        # writable copy. The memcpy is ~0.1 ms at this frame size.
-        return np.frombuffer(data, dtype=np.uint8).reshape(
-            self._height, self._width, 3
-        ).copy()
+        return frame
 
     def stop(self) -> None:
         proc = self._proc
@@ -130,3 +133,5 @@ class FfmpegPipe:
             proc.wait(timeout=2)
         except Exception:  # noqa: BLE001 - best-effort cleanup only
             pass
+        if proc.stdout is not None:
+            proc.stdout.close()

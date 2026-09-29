@@ -440,7 +440,8 @@ class FrameKernels:
             if flip_vertical:
                 rendered = rendered[::-1]
             if exposure != 1.0:
-                rendered = np.clip(rendered.astype(np.float32) * exposure, 0, 255).astype(np.uint8)
+                lut = np.minimum(255, np.floor(np.arange(256, dtype=np.float64) * exposure + 0.5)).astype(np.uint8)
+                rendered = lut[rendered]
             destination[...] = rendered
             return
         self._module.render_rgb_u8(

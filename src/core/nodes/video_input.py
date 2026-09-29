@@ -42,6 +42,7 @@ class VideoInputNode(Node):
     """
 
     node_type = "Video Input"
+    independent_frames = True
     node_category = "Input/Output"
     node_description = "Acts as an input source for video stream"
     node_color = (50, 150, 50)

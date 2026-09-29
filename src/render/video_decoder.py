@@ -43,6 +43,7 @@ _LOGGING_CONFIGURED = False
 # VideoInput node's decoder picks up a preference change immediately,
 # without the node graph needing to know about the preference system.
 _DECODE_CACHE_FRAMES: int = DEFAULT_DECODE_CACHE_FRAMES
+_DECODE_CACHE_BYTES: int = 128 * 1024 * 1024
 _HARDWARE_DECODE_ENABLED: bool = False
 
 #: Whether verified editing proxies may be substituted for originals.
@@ -148,6 +149,12 @@ def set_decode_cache_frames(frame_count: int) -> None:
     _DECODE_CACHE_FRAMES = max(1, int(frame_count))
 
 
+def set_decode_cache_bytes(byte_count: int) -> None:
+    """Set the per-decoder retention ceiling; oversized frames are not cached."""
+    global _DECODE_CACHE_BYTES
+    _DECODE_CACHE_BYTES = max(0, int(byte_count))
+
+
 def set_hardware_decode_enabled(enabled: bool) -> None:
     """Toggle best-effort hardware-accelerated decode for newly opened media.
 
@@ -198,22 +205,23 @@ def _apply_decode_threads(capture: cv2.VideoCapture, threads: int) -> None:
         pass
 
 
-def _try_enable_hardware_acceleration(capture: cv2.VideoCapture) -> None:
-    """Best-effort request for hardware-accelerated decode.
-
-    Not every OpenCV build exposes ``CAP_PROP_HW_ACCELERATION`` and not every
-    platform has a working backend, so failures are silently ignored and
-    decode falls back to software — this is strictly an opt-in speed hint,
-    never a correctness requirement.
-    """
-    accel_flag = getattr(cv2, "CAP_PROP_HW_ACCELERATION", None)
-    accel_any = getattr(cv2, "VIDEO_ACCELERATION_ANY", None)
-    if accel_flag is None or accel_any is None:
-        return
-    try:
-        capture.set(accel_flag, accel_any)
-    except Exception:  # noqa: BLE001
-        pass
+def _open_capture(path: str, threads: int = 0) -> cv2.VideoCapture:
+    """Supply open-only codec options at construction, with CPU fallback."""
+    params = []
+    if _HARDWARE_DECODE_ENABLED:
+        params.extend((cv2.CAP_PROP_HW_ACCELERATION, cv2.VIDEO_ACCELERATION_ANY))
+    count = int(threads) if threads > 0 else _DECODE_THREADS
+    if count > 0 and hasattr(cv2, "CAP_PROP_N_THREADS"):
+        params.extend((cv2.CAP_PROP_N_THREADS, count))
+    if params:
+        try:
+            capture = cv2.VideoCapture(path, cv2.CAP_FFMPEG, params)
+            if capture.isOpened():
+                return capture
+            capture.release()
+        except cv2.error:
+            pass
+    return cv2.VideoCapture(path, cv2.CAP_FFMPEG)
 
 
 @dataclass(frozen=True, slots=True)
@@ -543,18 +551,14 @@ class VideoDecoder:
 
             self._close_unlocked()
 
-            capture = cv2.VideoCapture(decode_path, cv2.CAP_FFMPEG)
-            _apply_decode_threads(capture, self._decode_threads)
-            if _HARDWARE_DECODE_ENABLED:
-                _try_enable_hardware_acceleration(capture)
+            capture = _open_capture(decode_path, self._decode_threads)
             if not capture.isOpened() and adopted is not None:
                 # A broken proxy must never make the media unopenable: fall
                 # back to the original file and carry on.
                 capture.release()
                 adopted = None
                 decode_path = path
-                capture = cv2.VideoCapture(path, cv2.CAP_FFMPEG)
-                _apply_decode_threads(capture, self._decode_threads)
+                capture = _open_capture(path, self._decode_threads)
             if not capture.isOpened():
                 capture.release()
                 return None
@@ -894,7 +898,10 @@ class VideoDecoder:
         """Insert ``rgb`` into the bounded LRU, evicting the oldest entry."""
         self._frame_cache[key] = rgb
         self._frame_cache.move_to_end(key)
-        while len(self._frame_cache) > max(1, _DECODE_CACHE_FRAMES):
+        retained = sum(frame.nbytes for frame in self._frame_cache.values())
+        while (len(self._frame_cache) > max(1, _DECODE_CACHE_FRAMES)
+               or retained > _DECODE_CACHE_BYTES):
+            retained -= next(iter(self._frame_cache.values())).nbytes
             self._frame_cache.popitem(last=False)
 
     def clear_frame_cache(self) -> None:
@@ -918,6 +925,8 @@ class VideoDecoder:
         return {
             "entries": len(self._frame_cache),
             "capacity": max(1, _DECODE_CACHE_FRAMES),
+            "bytes": sum(frame.nbytes for frame in self._frame_cache.values()),
+            "budget_bytes": _DECODE_CACHE_BYTES,
             "is_proxy": 1 if self._proxy_path else 0,
             "native_width": self._native_width,
             "decode_width": self._capture_width,
