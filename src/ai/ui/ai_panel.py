@@ -957,9 +957,6 @@ class AIPanel(QWidget):
             AgentWorker(
                 self.session,
                 text,
-                on_event=self._emit_event,
-                on_finished=self._emit_finished,
-                confirm=self._confirm_from_worker,
                 mode=self._mode_combo.currentData(),
             )
         )
@@ -975,9 +972,6 @@ class AIPanel(QWidget):
             AgentWorker(
                 self.session,
                 "",
-                on_event=self._emit_event,
-                on_finished=self._emit_finished,
-                confirm=self._confirm_from_worker,
                 mode=self._mode_combo.currentData(),
                 retry=True,
             )
@@ -1037,15 +1031,14 @@ class AIPanel(QWidget):
 
         self._worker = worker
 
+        # Connect the worker's signals to the panel's GUI-thread slots.
+        # These connections use QueuedConnection automatically because the
+        # worker thread and the panel live on different threads.
+        worker.event_received.connect(self._on_event)
+        worker.finished.connect(self._on_run_finished)
+        worker.confirm_requested.connect(self._on_confirm_requested)
+
         worker.start()
-
-    def _emit_event(self, event: AgentEvent) -> None:
-
-        self._event_received.emit(event)
-
-    def _emit_finished(self, result: Any) -> None:
-
-        self._run_finished.emit(result)
 
     def _drain(self) -> None:
 
@@ -1058,21 +1051,6 @@ class AIPanel(QWidget):
 
             self._append_stream(fragment)
 
-    def _confirm_from_worker(self, pending: PendingChanges, _transaction: Any) -> bool:
-
-        self._confirm_event = threading.Event()
-
-        self._confirm_result = False
-
-        self._confirm_requested.emit(pending)
-
-        self._confirm_event.wait(timeout=_CONFIRM_TIMEOUT_S)
-
-        approved = self._confirm_result
-
-        self._confirm_event = None
-
-        return approved
 
     def _on_confirm_requested(self, pending: PendingChanges) -> None:
 

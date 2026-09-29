@@ -287,12 +287,15 @@ class AISettings:
     stream: bool = True
     temperature: float = 0.2
     max_output_tokens: int = 2048
+    max_tool_calls: int = -1
     #: Persist conversations next to the project (opt-in, off by default).
     save_conversations: bool = False
     #: Verbose developer logging (still never logs secrets).
     verbose_logging: bool = False
     #: Show the AI-created highlight animation on changed nodes.
     highlight_changes: bool = True
+    #: System prompt injected into the agent's context.
+    system_prompt: str = ""
 
     # -- read-only source intelligence (opt-in, off by default) ---------
 
@@ -370,6 +373,7 @@ class AISettings:
             "stream": self.stream,
             "temperature": self.temperature,
             "max_output_tokens": self.max_output_tokens,
+            "max_tool_calls": self.max_tool_calls,
             "save_conversations": self.save_conversations,
             "verbose_logging": self.verbose_logging,
             "highlight_changes": self.highlight_changes,
@@ -377,6 +381,7 @@ class AISettings:
             "cloud_source_sharing": self.cloud_source_sharing.value,
             "source_root": self.source_root,
             "source_limits": self.source_limits.to_dict(),
+            "system_prompt": self.system_prompt,
         }
 
     @classmethod
@@ -420,9 +425,13 @@ class AISettings:
             max_output_tokens=max(
                 128, min(32768, int(data.get("max_output_tokens", 2048) or 2048))
             ),
+            max_tool_calls=int(
+                data.get("max_tool_calls", -1)
+            ),
             save_conversations=bool(data.get("save_conversations", False)),
             verbose_logging=bool(data.get("verbose_logging", False)),
             highlight_changes=bool(data.get("highlight_changes", True)),
+            system_prompt=str(data.get("system_prompt", "") or ""),
             source_access=_enum(SourceAccess, data.get("source_access"), SourceAccess.OFF),
             cloud_source_sharing=_enum(
                 CloudSourceSharing,

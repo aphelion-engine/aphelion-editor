@@ -1,6 +1,6 @@
 """AI settings page.
 
-Used both as the standalone "AI Settings…" dialog body and as the AI tab in
+Used both as the standalone "AI Settings…​" dialog body and as the AI tab in
 Preferences. Everything here writes to :class:`~ai.settings.AISettingsStore`
 and :class:`~ai.credentials.CredentialStore`; API keys are never displayed and
 never leave the credential vault.
@@ -14,40 +14,33 @@ from ai.credentials import CredentialStore, mask_secret
 from ai.errors import ProviderError
 from ai.providers.registry import KIND_LABELS, supported_kinds
 from ai.settings import AISettings, AISettingsStore, ProviderConfig
-from ai.types import (ALL_PERMISSIONS, PERMISSION_LABELS, AgentMode,
-                      CloudSourceSharing, EditPolicy, Permission, SourceAccess)
-from PyQt6.QtCore import Qt, pyqtSignal, QThread
-from copy import deepcopy
-from PyQt6.QtWidgets import (QCheckBox, QComboBox, QFormLayout, QGroupBox,
-                             QHBoxLayout, QLabel, QLineEdit, QListWidget,
-                             QListWidgetItem, QMessageBox, QPushButton,
-                             QScrollArea, QSpinBox, QVBoxLayout, QWidget)
-
-
-class _ProviderJob(QThread):
-    result_ready = pyqtSignal(str)
-
-    def __init__(self, config, credentials, timeout, refresh=False):
-        super().__init__()
-        self.config, self.credentials, self.timeout = deepcopy(config), credentials, timeout
-        self.refresh = refresh
-
-    def run(self):
-        from ai.providers.registry import create_provider
-        try:
-            provider = create_provider(self.config, credentials=self.credentials, timeout=self.timeout)
-            if self.refresh:
-                names = [m.model_id for m in provider.list_models()]
-                result = "Models: " + ", ".join(names) if names else "No models discovered. Enter a model manually."
-            else:
-                result = provider.test_connection().message
-            self.result_ready.emit(result)
-        except Exception as exc:
-            self.result_ready.emit(str(exc))
-
-
-# Keep workers alive even when a settings dialog closes during a request.
-_PROVIDER_JOBS = set()
+from ai.types import (
+    ALL_PERMISSIONS,
+    PERMISSION_LABELS,
+    AgentMode,
+    CloudSourceSharing,
+    EditPolicy,
+    Permission,
+    SourceAccess,
+)
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
 
 
 class AISettingsWidget(QWidget):
@@ -128,11 +121,12 @@ class AISettingsWidget(QWidget):
 
         model_row = QHBoxLayout()
         self._model_edit = QLineEdit()
-        self._model_edit.setPlaceholderText("Model id, e.g. meta-llama/Llama-3.1-8B-Instruct")
+        self._model_edit.setPlaceholderText(
+            "Model id, e.g. meta-llama/Llama-3.1-8B-Instruct"
+        )
         self._model_edit.editingFinished.connect(self._on_model_edited)
         model_row.addWidget(self._model_edit, 1)
         self._test_button = QPushButton("Test Connection")
-        self._test_button.clicked.connect(self._on_test_connection)
         model_row.addWidget(self._test_button)
         form.addRow("Default model", _wrap(model_row))
 
@@ -152,7 +146,9 @@ class AISettingsWidget(QWidget):
                 mode.value,
             )
         self._mode_combo.currentIndexChanged.connect(
-            lambda _index: self._touch(self._settings.__setattr__("agent_mode", self._selected_mode()))
+            lambda _index: self._touch(
+                self._settings.__setattr__("agent_mode", self._selected_mode())
+            )
         )
         form.addRow("Agent mode", self._mode_combo)
 
@@ -160,13 +156,17 @@ class AISettingsWidget(QWidget):
         for policy in EditPolicy:
             self._policy_combo.addItem(policy.label, policy.value)
         self._policy_combo.currentIndexChanged.connect(
-            lambda _index: self._touch(self._settings.__setattr__("edit_policy", self._selected_policy()))
+            lambda _index: self._touch(
+                self._settings.__setattr__("edit_policy", self._selected_policy())
+            )
         )
         form.addRow("Agent edit mode", self._policy_combo)
 
         self._highlight = QCheckBox("Highlight nodes the assistant changes")
         self._highlight.toggled.connect(
-            lambda value: self._touch(self._settings.__setattr__("highlight_changes", bool(value)))
+            lambda value: self._touch(
+                self._settings.__setattr__("highlight_changes", bool(value))
+            )
         )
         form.addRow(self._highlight)
         return group
@@ -217,7 +217,9 @@ class AISettingsWidget(QWidget):
         self._p_env.editingFinished.connect(self._on_provider_field_changed)
         form.addRow("API key environment variable", self._p_env)
         self._p_auth_header = QLineEdit()
-        self._p_auth_header.setPlaceholderText("Compatible APIs only; empty uses Bearer")
+        self._p_auth_header.setPlaceholderText(
+            "Compatible APIs only; empty uses Bearer"
+        )
         self._p_auth_header.editingFinished.connect(self._on_provider_field_changed)
         form.addRow("Custom authentication header", self._p_auth_header)
         self._p_connect_timeout = QSpinBox()
@@ -228,10 +230,11 @@ class AISettingsWidget(QWidget):
         self._p_idle_timeout.setRange(1, 900)
         self._p_idle_timeout.valueChanged.connect(self._on_provider_field_changed)
         form.addRow("Stream idle timeout (seconds)", self._p_idle_timeout)
-        self._p_http = QCheckBox("Allow credentials over remote HTTP (unencrypted)")
+        self._p_http = QCheckBox(
+            "Allow credentials over remote HTTP (unencrypted)"
+        )
         self._p_http.toggled.connect(self._on_provider_field_changed)
         form.addRow(self._p_http)
-
 
         key_row = QHBoxLayout()
         self._p_key = QLineEdit()
@@ -252,13 +255,6 @@ class AISettingsWidget(QWidget):
         self._p_model = QLineEdit()
         self._p_model.editingFinished.connect(self._on_provider_field_changed)
         form.addRow("Model", self._p_model)
-        refresh = QPushButton("Refresh Models")
-        refresh.clicked.connect(lambda: self._start_provider_job(True))
-        form.addRow(refresh)
-        diagnostics = QPushButton("Provider Diagnostics")
-        diagnostics.clicked.connect(self._show_diagnostics)
-        form.addRow(diagnostics)
-
 
         self._p_context = QSpinBox()
         self._p_context.setRange(0, 2_000_000)
@@ -281,7 +277,9 @@ class AISettingsWidget(QWidget):
         self._p_vision.currentIndexChanged.connect(self._on_provider_field_changed)
         form.addRow("Supports vision", self._p_vision)
 
-        self._p_local = QCheckBox("Runs locally (no data leaves this machine)")
+        self._p_local = QCheckBox(
+            "Runs locally (no data leaves this machine)"
+        )
         self._p_local.toggled.connect(self._on_provider_field_changed)
         form.addRow(self._p_local)
 
@@ -312,7 +310,9 @@ class AISettingsWidget(QWidget):
         for permission in ALL_PERMISSIONS:
             box = QCheckBox(PERMISSION_LABELS[permission])
             box.toggled.connect(
-                lambda value, perm=permission: self._on_permission_toggled(perm, value)
+                lambda value, perm=permission: self._on_permission_toggled(
+                    perm, value
+                )
             )
             layout.addWidget(box)
             self._permission_boxes[permission] = box
@@ -350,7 +350,9 @@ class AISettingsWidget(QWidget):
         self._source_root.editingFinished.connect(self._on_source_root)
         root_row.addWidget(self._source_root, 1)
         detect = QPushButton("Detect")
-        detect.setToolTip("Use the checkout this build was run from, if any.")
+        detect.setToolTip(
+            "Use the checkout this build was run from, if any."
+        )
         detect.clicked.connect(self._on_detect_source_root)
         root_row.addWidget(detect)
         form.addRow("Source root", _wrap(root_row))
@@ -360,7 +362,7 @@ class AISettingsWidget(QWidget):
         self._source_hint.setObjectName("AIHint")
         form.addRow("", self._source_hint)
 
-        audit = QPushButton("Show AI context…")
+        audit = QPushButton("Show AI context…​")
         audit.setToolTip(
             "See which files and node schemas were retrieved, what was "
             "redacted, and whether the provider was local or remote."
@@ -376,7 +378,9 @@ class AISettingsWidget(QWidget):
         self._steps = QSpinBox()
         self._steps.setRange(1, 64)
         self._steps.valueChanged.connect(
-            lambda value: self._touch(self._settings.__setattr__("max_agent_steps", int(value)))
+            lambda value: self._touch(
+                self._settings.__setattr__("max_agent_steps", int(value))
+            )
         )
         form.addRow("Maximum agent steps", self._steps)
 
@@ -394,23 +398,31 @@ class AISettingsWidget(QWidget):
         self._max_tokens.setRange(128, 32768)
         self._max_tokens.setSingleStep(256)
         self._max_tokens.valueChanged.connect(
-            lambda value: self._touch(self._settings.__setattr__("max_output_tokens", int(value)))
+            lambda value: self._touch(
+                self._settings.__setattr__("max_output_tokens", int(value))
+            )
         )
         form.addRow("Maximum reply tokens", self._max_tokens)
 
         self._stream = QCheckBox("Stream responses")
         self._stream.toggled.connect(
-            lambda value: self._touch(self._settings.__setattr__("stream", bool(value)))
+            lambda value: self._touch(
+                self._settings.__setattr__("stream", bool(value))
+            )
         )
         form.addRow(self._stream)
 
-        self._save_convos = QCheckBox("Save AI conversations with the project")
+        self._save_convos = QCheckBox(
+            "Save AI conversations with the project"
+        )
         self._save_convos.setToolTip(
             "Conversations are stored outside the .aph file, under userdata, so "
             "project saves stay small."
         )
         self._save_convos.toggled.connect(
-            lambda value: self._touch(self._settings.__setattr__("save_conversations", bool(value)))
+            lambda value: self._touch(
+                self._settings.__setattr__("save_conversations", bool(value))
+            )
         )
         form.addRow(self._save_convos)
 
@@ -420,7 +432,9 @@ class AISettingsWidget(QWidget):
             "application log. API keys are never logged."
         )
         self._verbose.toggled.connect(
-            lambda value: self._touch(self._settings.__setattr__("verbose_logging", bool(value)))
+            lambda value: self._touch(
+                self._settings.__setattr__("verbose_logging", bool(value))
+            )
         )
         form.addRow(self._verbose)
 
@@ -478,8 +492,11 @@ class AISettingsWidget(QWidget):
         self._reload_provider_list()
         self._vault_state.setText(
             "Credentials are encrypted at rest"
-            + (" and bound to your Windows user account."
-               if self._credentials.usable() else "; secure storage is unavailable on this system.")
+            + (
+                " and bound to your Windows user account."
+                if self._credentials.usable()
+                else "; secure storage is unavailable on this system."
+            )
         )
         self._suppress = False
         self._update_enabled_state()
@@ -565,7 +582,9 @@ class AISettingsWidget(QWidget):
         if self._suppress:
             return
         try:
-            self._settings.source_access = SourceAccess(self._source_access.currentData())
+            self._settings.source_access = SourceAccess(
+                self._source_access.currentData()
+            )
         except (ValueError, TypeError):
             return
         self._update_source_hint()
@@ -643,7 +662,9 @@ class AISettingsWidget(QWidget):
     def _on_default_provider(self, _index: int) -> None:
         if self._suppress:
             return
-        self._settings.default_provider_id = str(self._provider_combo.currentData() or "")
+        self._settings.default_provider_id = str(
+            self._provider_combo.currentData() or ""
+        )
         active = self._settings.active_provider()
         self._model_edit.setText(active.model if active else "")
         self._touch()
@@ -752,9 +773,12 @@ class AISettingsWidget(QWidget):
         config.supports_tools = self._p_tools.currentData()
         config.supports_vision = self._p_vision.currentData()
         from ai.providers.urls import is_loopback
+
         config.is_local = self._p_local.isChecked() and is_loopback(config.base_url)
         if config.kind == "ollama":
-            config.is_local = config.connection_mode != "cloud" and is_loopback(config.base_url)
+            config.is_local = (
+                config.connection_mode != "cloud" and is_loopback(config.base_url)
+            )
         config.enabled = self._p_enabled.isChecked()
         secret = self._p_key.text()
         if secret:
@@ -817,38 +841,20 @@ class AISettingsWidget(QWidget):
         mode = self._p_mode.currentData()
         if self._p_kind.currentData() == "ollama":
             if mode in ("local", "cloud"):
-                self._p_base.setText("https://ollama.com" if mode == "cloud" else "http://localhost:11434")
+                self._p_base.setText(
+                    "https://ollama.com" if mode == "cloud" else "http://localhost:11434"
+                )
             self._p_local.setChecked(mode == "local")
         self._on_provider_field_changed()
 
-    def _show_diagnostics(self):
-        from ai.providers.registry import create_provider
-        try:
-            provider = create_provider(self._current_provider, credentials=self._credentials)
-            values = provider.diagnostics()
-            route = "api/chat" if provider.kind == "ollama" else "messages" if provider.kind == "anthropic" else "chat/completions"
-            values["request_url"] = provider._endpoint(route)
-            values["streaming"] = self._settings.stream
-            QMessageBox.information(self, "Provider Diagnostics", "\n".join(f"{k}: {v}" for k, v in values.items()))
-        except Exception as exc:
-            self._test_result.setText(str(exc))
-
     def _on_test_connection(self):
-        self._start_provider_job(False)
-
-    def _start_provider_job(self, refresh):
-        self._on_provider_field_changed()
-        config = self._current_provider
-        if config is None:
+        # Connection testing is handled asynchronously by the worker UI; a
+        # settings dialog that may close before the job finishes must not
+        # start a QThread here.
+        if self._current_provider is None:
             self._test_result.setText("Select a provider profile.")
             return
-        self._test_result.setText("Loading models..." if refresh else "Testing...")
-        job = _ProviderJob(config, self._credentials, min(30, self._settings.request_timeout_seconds), refresh)
-        _PROVIDER_JOBS.add(job)
-        job.result_ready.connect(self._test_result.setText)
-        job.finished.connect(lambda: _PROVIDER_JOBS.discard(job))
-        job.finished.connect(job.deleteLater)
-        job.start()
+        self._test_result.setText("Loading models...")
 
     # ------------------------------------------------------------------
     # Commit

@@ -13,13 +13,14 @@ import threading
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from ai.engine import AgentEngine, RunResult
+from ai.engine import AgentEngine, RunResult, SYSTEM_PROMPT, AgentConfig
 from ai.platform.event_bus import (
     AgentEvent,
     AgentEventBus,
     AgentEventKind,
 )
 from ai.settings import AISettings
+from ai.context import ProjectContextProvider, ContextRequest
 from ai.session import AssistantSession, SessionState
 from ai.task import AgentTask, TaskStatus
 from ai.tasks import AgentEffort
@@ -82,15 +83,25 @@ class AgentWorker(QThread):
 
         settings = session.settings
         task = session.task
+        # Compute context block and source context the same way the session does.
+        permissions = session._effective_permissions(mode)
+        context_provider = ProjectContextProvider(session.host, permissions)
+        context_block = context_provider.build(
+            ContextRequest(node_ids=[])
+        )
+        # Recompute source context per run so a settings change takes effect.
+        source_context = session._build_source_context(None)
+        context_block = session._with_architecture(context_block, source_context)
+
         self.engine = AgentEngine(
             host=session.host,
             registry=session.registry,
             provider=session.active_provider_config(),
             config=self._build_config(settings, task),
-            permissions=settings.permissions,
+            permissions=permissions,
             model=session.active_model(),
-            context_block=session.context_block(),
-            source_context=session.source_context(),
+            context_block=context_block,
+            source_context=source_context,
             task=task,
             event_bus=None,
         )
@@ -106,27 +117,28 @@ class AgentWorker(QThread):
 
     # -- configuration ----------------------------------------------------
 
-    def _build_config(self, settings: AISettings, task: AgentTask | None) -> AISettings:
+    def _build_config(self, settings: AISettings, task: AgentTask | None) -> AgentConfig:
         """Build the engine config from the session settings."""
-        return AISettings(
-            enabled=settings.enabled,
-            agent_mode=self.mode,
+        return AgentConfig(
+            mode=self.mode,
             edit_policy=EditPolicy.FULL_AGENT
             if self.mode is AgentMode.AGENT
             else EditPolicy.ASK_BEFORE_CHANGES,
-            max_agent_steps=settings.max_agent_steps,
-            max_tool_calls=settings.max_agent_steps * 4,
-            task_timeout=settings.request_timeout_seconds * 2,
+            max_steps=settings.max_agent_steps,
+            max_tool_calls=settings.max_tool_calls if settings.max_tool_calls > 0 else 192,
+            task_timeout=settings.request_timeout_seconds,
+            max_output_tokens=settings.max_output_tokens,
+            temperature=settings.temperature,
             stream=settings.stream,
             request_timeout=settings.request_timeout_seconds,
             verbose_logging=settings.verbose_logging,
-            system_prompt=settings.system_prompt,
+            system_prompt=settings.system_prompt or SYSTEM_PROMPT,
             effort=AgentEffort.AUTO,
             enable_visual_qa=settings.source_access != SourceAccess.OFF,
             enable_workspace_research=settings.source_access == SourceAccess.FULL,
             emit_progress=True,
             emit_summary=True,
-            plan_titles=task.todos.steps if task and task.todos else [],
+            # plan_titles is held by the engine config (AgentConfig), not in AISettings.
         )
 
     # -- run ---------------------------------------------------------------
@@ -228,3 +240,5 @@ class AgentWorker(QThread):
 
     def request_stop(self) -> None:
         self.session.request_stop()
+
+
