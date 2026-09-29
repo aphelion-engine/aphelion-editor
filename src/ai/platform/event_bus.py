@@ -35,6 +35,7 @@ from enum import Enum
 from typing import Any, Callable
 
 from PyQt6.QtCore import QObject, Qt, pyqtSignal
+from ai.types import AgentEventKind
 
 Logger = logging.Logger
 
@@ -43,65 +44,6 @@ _EVENT_LOG = logging.getLogger("aphelion.event_bus")
 # ---------------------------------------------------------------------------
 # Event kinds
 # ---------------------------------------------------------------------------
-
-class AgentEventKind(str, Enum):
-    #: Worker is about to start some work and wants a "thinking" bubble.
-    THINKING = "agent_thinking"
-
-    #: A plan became available for the UI to render.
-    PLAN_READY = "plan_ready"
-
-    #: A task (one assistant run) started.
-    TASK_STARTED = "task_started"
-
-    #: One step of the current task started.
-    STEP_STARTED = "step_started"
-
-    #: One step of the current task completed.
-    STEP_COMPLETED = "step_completed"
-
-    #: A tool call started.
-    TOOL_STARTED = "tool_started"
-
-    #: A tool call completed (success or failure).
-    TOOL_COMPLETED = "tool_completed"
-
-    #: A project edit happened as a result of a tool.
-    PROJECT_EDIT = "project_edit"
-
-    #: The model asked a question the user must answer.
-    QUESTION = "question"
-
-    #: The model is waiting for user input.
-    WAITING_FOR_USER = "waiting_for_user"
-
-    #: Visual QA (frame inspection) started.
-    VISUAL_QA_STARTED = "visual_qa_started"
-
-    #: Visual QA produced a result.
-    VISUAL_QA_RESULT = "visual_qa_result"
-
-    #: Validation (graph) completed.
-    VALIDATION_RESULT = "validation_result"
-
-    #: Task completed successfully.
-    TASK_COMPLETED = "task_completed"
-
-    #: Task failed.
-    TASK_FAILED = "task_failed"
-
-    #: Generic status line that the UI should echo (e.g. "Applying grade…").
-    STATUS = "status"
-
-    #: A stream of assistant text arriving.
-    TEXT = "text"
-
-    #: An error the user should see.
-    ERROR = "error"
-
-    #: Turn finished (with or without error).
-    DONE = "done"
-
 
 class AgentEventKindError(ValueError):
     pass
@@ -275,6 +217,13 @@ class AgentEvent:
     kind: AgentEventKind
     payload: Any = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    tool_call: Any = None
+    tool_result: Any = None
+
+    @property
+    def text(self) -> str:
+        """Compatibility view for the Qt-free event contract."""
+        return self.payload if isinstance(self.payload, str) else ""
 
     def __post_init__(self) -> None:
         self.kind = _coerce_kind(self.kind)

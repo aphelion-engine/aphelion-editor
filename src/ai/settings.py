@@ -81,8 +81,14 @@ class ProviderConfig:
     def credential_key(self) -> str:
         return self.credential_ref or f"ai.{self.provider_id}"
 
-    def capabilities(self) -> ProviderCapabilities:
-        """Return declared capabilities, using conservative defaults."""
+    def capabilities(self, model: str | None = None) -> ProviderCapabilities:
+        """Return declared capabilities for an optional model name.
+
+        ``ProviderConfig`` is data, not a provider implementation.  The model
+        argument is accepted so configuration and provider capability lookups
+        share one stable signature; provider-specific detection remains in the
+        live adapter.
+        """
         return ProviderCapabilities(
             supports_tools=bool(self.supports_tools),
             supports_vision=bool(self.supports_vision),

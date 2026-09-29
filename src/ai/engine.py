@@ -74,7 +74,7 @@ from ai.permissions import PermissionPolicy
 from ai.platform.event_bus import (AgentEvent, AgentEventKind, AgentEventKindError,
                                    PlanPayload, StepPayload, ThinkingPayload,
                                    ToolPayload, VisualQAPayload,
-                                   VisualQAPayload, ValidationResultPayload)
+                                   ValidationResultPayload, EventPublisher)
 from ai.summary import AgentCompletionSummary, build_summary
 from ai.task import AgentTask, TaskStatus, is_narration
 from ai.task import plan_titles as _plan_titles
@@ -91,8 +91,25 @@ def _compact(history: list[ChatMessage]) -> list[ChatMessage]:
     """
     if len(history) <= _MIN_KEEP_MESSAGES + 1:
         return history
-    # Keep the system payload and the last few turns; drop the middle.
-    return history[:2] + history[-(_MIN_KEEP_MESSAGES + 1):]
+    head = history[:1]
+    tail = history[-_MIN_KEEP_MESSAGES:]
+    summaries: list[str] = []
+    node_ids: list[str] = []
+    for message in history[1:-_MIN_KEEP_MESSAGES]:
+        if message.role == "tool":
+            try:
+                payload = json.loads(message.content or "{}")
+            except json.JSONDecodeError:
+                continue
+            if payload.get("summary"):
+                summaries.append(str(payload["summary"])[:160])
+            node_ids.extend(str(value) for value in payload.get("changed_node_ids", []) or [])
+    note = ChatMessage(
+        role="user",
+        content="Conversation compacted. Earlier actions: " + "; ".join(summaries[-12:])
+        + ("\nNode ids changed: " + ", ".join(dict.fromkeys(node_ids)) if node_ids else ""),
+    )
+    return head + [note] + tail
 
 
 def _maybe_compact(
@@ -117,8 +134,10 @@ from ai.task import compute_parent_plan
 from ai.permissions import PermissionPolicy
 from ai.transaction import AIEditTransaction
 from ai.types import (AgentEvent as _AgentEvent, AgentEventKind as _AgentEventKind,
-                      AgentMode, ChatMessage, EditPolicy, Permission, ToolCall,
-                      ToolResult, Usage)
+                      AgentMode, ChatMessage, EditPolicy, Permission,
+                      PendingChanges, ProviderCapabilities, ToolCall, ToolResult,
+                      Usage)
+from ai.tools.base import ToolContext
 from ai.validation import validate_project
 from ai.workflows import WorkflowPlan
 from ai.task import AgentTask, TaskStatus, is_narration
@@ -140,6 +159,42 @@ _MAX_PROTOCOL_RETRIES: int = 2
 #: How many times the engine may attempt a continuation after a non-final
 #: reply (bounded so a misbehaving model cannot run forever).
 _MAX_CONTINUATION_RETRIES: int = 4
+
+
+def _parse_structured_reply(content: str) -> dict[str, Any] | None:
+    text = (content or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[A-Za-z]*\n?", "", text)
+        text = re.sub(r"\n?```$", "", text).strip()
+    candidates = [text]
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if match:
+        candidates.append(match.group(0))
+    for candidate in candidates:
+        try:
+            decoded = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(decoded, dict):
+            continue
+        kind = str(decoded.get("type", "")).lower()
+        if kind == "final":
+            return {"kind": "final", "text": str(decoded.get("text", ""))}
+        if kind == "tool_call":
+            arguments = decoded.get("arguments", decoded.get("args", {}))
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError:
+                    continue
+            if isinstance(arguments, dict) and decoded.get("tool"):
+                return {
+                    "kind": "tool_call",
+                    "call": ToolCall(
+                        name=str(decoded["tool"]), arguments=arguments, call_id="structured"
+                    ),
+                }
+    return None
 
 
 EventCallback = Callable[[AgentEvent], None]
@@ -535,10 +590,9 @@ class AgentEngine:
     # -- capabilities ------------------------------------------------------
 
     def _capabilities(self) -> ProviderCapabilities:
-        try:
-            return self.provider.capabilities(self.model)
-        except Exception:  # noqa: BLE001
+        if self.provider is None:
             return ProviderCapabilities()
+        return self.provider.capabilities(self.model)
 
     @property
     def uses_native_tools(self) -> bool:
@@ -554,6 +608,8 @@ class AgentEngine:
     def _publish(self, event: AgentEvent) -> None:
         if self._publisher is not None:
             self._publisher.publish(event)
+        elif getattr(self, "_emit_callback", None) is not None:
+            self._emit_callback(event)
 
     # -- task/scheduling ---------------------------------------------------
 
@@ -565,6 +621,218 @@ class AgentEngine:
 
     def _task_tags(self, objective: str, effort: AgentEffort) -> dict[str, Any]:
         return compute_task_tags(objective, effort)
+
+    def _detect_workflow(self, objective: str) -> WorkflowPlan | None:
+        if _QUESTION_START.match(objective or ""):
+            return None
+        try:
+            return workflows.resolve_request(objective)
+        except Exception:
+            _LOG.exception("Workflow resolution failed")
+            return None
+
+    # -- prompt and tool contracts -----------------------------------------
+
+    def _exposed_tools(self) -> list[Any]:
+        specs = self.registry.available(mode=self.config.mode, permissions=self.permissions)
+        if not self.capabilities.supports_vision:
+            specs = [spec for spec in specs if spec.permission is not Permission.ACCESS_VISION]
+        return specs
+
+    def _system_prompt(self, specs: list[Any]) -> str:
+        parts = [self.config.system_prompt]
+        parts.append(
+            "Execution contract: planning and narration are progress, not completion. "
+            "Continue using tools until the objective is finished."
+        )
+        parts.append("Current objective: " + self.task.objective)
+        if self.workflow_plan is not None:
+            parts.append(self.workflow_plan.describe())
+        if self.context_block:
+            parts.append("\n## Current project context\n" + self.context_block)
+        if not self.uses_native_tools:
+            parts.append(STRUCTURED_PROTOCOL_PROMPT)
+            parts.append(self._tool_manifest(specs))
+        return "\n".join(part for part in parts if part)
+
+    @staticmethod
+    def _tool_manifest(specs: list[Any]) -> str:
+        return "\n## Available tools\n" + "\n".join(
+            f"- {spec.name}: {spec.description} Parameters: {json.dumps(spec.parameters)}"
+            for spec in specs
+        )
+
+    def _generate(
+        self, history: list[ChatMessage], system: str,
+        tool_schemas: list[dict[str, Any]], emit: EventCallback,
+        stopped: StopCallback, native: bool,
+    ) -> Any:
+        from ai.providers.base import ChatRequest
+
+        if stopped():
+            raise CancelledError("Stopped before the next model call.")
+        wire_messages = history
+        if not native:
+            wire_messages = [
+                ChatMessage(
+                    role="user" if message.role == "tool" else message.role,
+                    content=(f"Tool result ({message.name}): {message.content}"
+                             if message.role == "tool" else message.content),
+                    images=list(message.images),
+                )
+                for message in history
+            ]
+        response = self.provider.generate(
+            ChatRequest(
+                model=self.model, messages=wire_messages, system=system,
+                tools=tool_schemas if native else [],
+                temperature=self.config.temperature,
+                max_tokens=self.config.max_output_tokens,
+                json_mode=not native and self.capabilities.supports_json,
+            ),
+            on_token=None,
+            should_stop=stopped,
+        )
+        return response
+
+    def _run_tool(
+        self, call: ToolCall, transaction: AIEditTransaction,
+        confirm: ConfirmCallback | None, emit: EventCallback,
+    ) -> tuple[ToolResult, bool]:
+        spec = self.registry.get(call.name)
+        emit(AgentEvent(AgentEventKind.TOOL_START, call.name, tool_call=call))
+        if spec is None:
+            outcome = ToolResult.failure("UNKNOWN_TOOL", f"There is no tool named '{call.name}'.")
+            emit(AgentEvent(AgentEventKind.TOOL_RESULT, outcome.summary, tool_result=outcome))
+            return outcome, False
+        if call.name not in getattr(self, "_exposed_names", {call.name}):
+            detail = (
+                f"Tool '{call.name}' is not available in Ask mode; Ask mode cannot change the project."
+                if spec.mutates and self.config.mode is AgentMode.ASK
+                else f"Tool '{call.name}' is not available."
+            )
+            outcome = ToolResult.failure("TOOL_NOT_AVAILABLE", detail)
+            emit(AgentEvent(AgentEventKind.TOOL_RESULT, outcome.summary, tool_result=outcome))
+            return outcome, False
+        if spec.destructive and confirm is not None and self.config.edit_policy is not EditPolicy.FULL_AGENT:
+            pending = PendingChanges(
+                label=f"AI: {call.name.replace('.', ' ')}",
+                actions=[f"! {spec.description.splitlines()[0]}"],
+                destructive=True,
+            )
+            if not confirm(pending, transaction):
+                outcome = ToolResult.failure("USER_DECLINED", "The user declined this destructive action.")
+                emit(AgentEvent(AgentEventKind.TOOL_RESULT, outcome.summary, tool_result=outcome))
+                return outcome, False
+        context = ToolContext(
+            host=self.host, args=dict(call.arguments), permissions=self.permissions,
+            transaction=transaction if spec.mutates else None, state=self.tool_state,
+        )
+        cacheable = call.name in ("node.list_types", "node.describe_type")
+        cache_key = call.name + ":" + json.dumps(call.arguments, sort_keys=True)
+        outcome = self.task.discovery_cache.get(cache_key) if cacheable else None
+        if outcome is None:
+            outcome = self.registry.execute(call.name, call.arguments, context)
+            if cacheable and outcome.ok:
+                self.task.discovery_cache[cache_key] = outcome
+                self.task.discovered_nodes[cache_key] = outcome.to_model_payload(limit=4000)
+        if outcome.ok and spec.destructive:
+            self._destructive_seen = True
+        if outcome.ok and outcome.changed_node_ids:
+            self.host.highlight_nodes(outcome.changed_node_ids, label="AI changed this node")
+        emit(AgentEvent(AgentEventKind.TOOL_RESULT, outcome.summary, tool_result=outcome))
+        return outcome, bool(outcome.ok and spec.mutates)
+
+    def _auto_layout_new_nodes(self, transaction, initial_node_ids, result, stopped) -> bool:
+        if result.error or result.cancelled or stopped() or not transaction.is_open:
+            return False
+        project = self.host.project
+        created = set(project.nodes) - initial_node_ids
+        if not created:
+            return False
+        try:
+            moves = layout_new_nodes(project, created)
+            before = {node_id: (float(project.nodes[node_id].x), float(project.nodes[node_id].y))
+                      for node_id in moves if node_id in project.nodes}
+            return bool(before and transaction.apply(
+                project, MoveNodesCommand(before, moves),
+                action=f"~ Arrange {len(moves)} node(s)", changed_node_ids=list(moves)))
+        except Exception:  # layout is a best-effort refinement, not task failure
+            _LOG.exception("Automatic layout failed")
+            return False
+
+    def _finish(self, transaction, result, confirm, emit, stopped) -> None:
+        result.actions = transaction.actions
+        result.changed_node_ids = transaction.changed_node_ids
+        if stopped():
+            result.cancelled = True
+        if result.error or result.cancelled or self.task.status is TaskStatus.WAITING_FOR_USER:
+            if not transaction.is_empty:
+                transaction.rollback(self.host.project)
+                result.rolled_back = True
+            if result.error:
+                result.text = ""
+            elif not result.text:
+                result.text = "Stopped. Incomplete changes were rolled back."
+            return
+        if transaction.is_empty:
+            return
+        report = self.host.invoke_project(lambda: validate_project(self.host.project))
+        result.validation = report.to_dict()
+        if not report.ok:
+            transaction.rollback(self.host.project)
+            result.rolled_back = True
+            result.error = "Graph validation failed. Changes were rolled back."
+            return
+        needs_confirmation = (
+            self.config.mode is AgentMode.ASSIST
+            or self.config.edit_policy is EditPolicy.ASK_BEFORE_CHANGES
+            or self._destructive_seen
+        )
+        if needs_confirmation:
+            if confirm is None:
+                transaction.rollback(self.host.project)
+                result.rolled_back = True
+                result.error = "Changes require approval, but no confirmation handler is available."
+                return
+            pending = PendingChanges(
+                label=transaction.label, actions=transaction.actions,
+                changed_node_ids=transaction.changed_node_ids,
+                destructive=self._destructive_seen,
+            )
+            emit(AgentEvent(AgentEventKind.PENDING_CHANGES, payload={"actions": pending.actions}))
+            if not confirm(pending, transaction):
+                transaction.rollback(self.host.project)
+                result.rolled_back = True
+                result.text = "Changes were declined and rolled back."
+                return
+        if transaction.commit(self.host.history):
+            result.committed = True
+
+    def _build_summary(self, result, *, request_input):
+        unmet = [] if result.error or request_input else self.task.unfinished()
+        return build_summary(
+            task=self.task.objective, actions=result.actions,
+            validation=result.validation, errors=list(self.task.errors), unmet=unmet,
+            cancelled=result.cancelled, rolled_back=result.rolled_back,
+            committed=result.committed, error=result.error,
+            workflow=self.task.workflow_key, workflow_title=self.task.workflow_title,
+            because=self.task.workflow_rationale,
+            unsupported_stages=list(self.task.unsupported_stages),
+            plan=self.task.todos.to_dict(),
+        )
+
+    def _compose_final_text(self, result, summary, request_input) -> str:
+        if result.error:
+            return result.text
+        if request_input:
+            return result.text or f"I need one thing before I continue: {request_input}"
+        if not summary.has_changes():
+            return result.text
+        base = (result.text or "").strip() or summary.to_text()
+        if result.text:
+            base += "\n\nApplied changes:\n" + "\n".join(result.actions)
+        return base
 
     # -- main run ----------------------------------------------------------
 
@@ -579,6 +847,7 @@ class AgentEngine:
     ) -> RunResult:
         """Execute one assistant turn."""
         emit = on_event or (lambda _event: None)
+        self._emit_callback = emit
         stopped = should_stop or (lambda: False)
         objective = next((m.content for m in reversed(messages) if m.role == "user"), "")
         self.task.begin(objective)
@@ -1048,7 +1317,10 @@ class AgentEngine:
             self.task.completion_reason = "USER_INPUT_REQUIRED"
             final_text = request_input
 
-        self.task.status = TaskStatus.COMPLETED if not (result.error or result.cancelled) else (TaskStatus.CANCELLED if result.cancelled else TaskStatus.FAILED)
+        if request_input:
+            self.task.status = TaskStatus.WAITING_FOR_USER
+        else:
+            self.task.status = TaskStatus.COMPLETED if not (result.error or result.cancelled) else (TaskStatus.CANCELLED if result.cancelled else TaskStatus.FAILED)
         self.task.completion_reason = self.task.completion_reason or ("OBJECTIVE_COMPLETED" if not result.error and not result.cancelled else "EXECUTION_FAILED")
 
         # Layout runs before the transaction resolves, so the arrangement is part
@@ -1070,10 +1342,12 @@ class AgentEngine:
         result.summary = summary
         result.text = self._compose_final_text(result, summary, request_input)
 
+        if result.text and not result.error and not request_input:
+            emit(AgentEvent(AgentEventKind.TEXT, result.text))
+
         if self.config.emit_progress:
             self._publish(AgentEvent(
                 AgentEventKind.SUMMARY,
-                summary.status.label,
                 payload=summary.to_dict(),
             ))
 

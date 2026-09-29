@@ -93,10 +93,11 @@ class AgentWorker(QThread):
         source_context = session._build_source_context(None)
         context_block = session._with_architecture(context_block, source_context)
 
+        provider = session.build_provider() if callable(getattr(session, "build_provider", None)) else session.active_provider_config()
         self.engine = AgentEngine(
             host=session.host,
             registry=session.registry,
-            provider=session.active_provider_config(),
+            provider=provider,
             config=self._build_config(settings, task),
             permissions=permissions,
             model=session.active_model(),
@@ -155,6 +156,8 @@ class AgentWorker(QThread):
 
             bus = AgentEventBus()
             self.engine.event_bus = bus
+            self.engine._event_bus = bus
+            self.engine._publisher = self.engine._bind_publisher()
             # Queued connection: events are delivered on the GUI thread,
             # where the panel's slots update widgets.
             bus.event_received.connect(self.event_received.emit)
