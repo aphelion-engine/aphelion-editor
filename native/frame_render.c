@@ -5,6 +5,10 @@
 #include <stddef.h>
 #include <string.h>
 #include <stdint.h>
+#if defined(__SSE2__) || defined(_M_X64)
+#include <emmintrin.h>
+#define APHELION_SSE2 1
+#endif
 
 #include "frame_render.h"
 
@@ -120,7 +124,28 @@ aphelion_quantize_f32_u8(PyObject *self, PyObject *args)
     input = (const float *)src.buf; output = (unsigned char *)dst.buf;
     count = width * height * 3;
     Py_BEGIN_ALLOW_THREADS
-    for (index = 0; index < count; ++index) {
+    index = 0;
+#ifdef APHELION_SSE2
+    /* SSE2 is baseline on x86-64. Double arithmetic matches the scalar
+       rounding contract, including values adjacent to half-integer ties. */
+    {
+        const __m128 zero = _mm_setzero_ps(), one = _mm_set1_ps(1.0f);
+        const __m128d scale = _mm_set1_pd(255.0), half = _mm_set1_pd(0.5);
+        for (; index + 4 <= count; index += 4) {
+            __m128 values = _mm_loadu_ps(input + index);
+            __m128i lo, hi, packed;
+            unsigned int bytes;
+            values = _mm_min_ps(_mm_max_ps(values, zero), one);
+            lo = _mm_cvttpd_epi32(_mm_add_pd(_mm_mul_pd(_mm_cvtps_pd(values), scale), half));
+            hi = _mm_cvttpd_epi32(_mm_add_pd(_mm_mul_pd(_mm_cvtps_pd(_mm_movehl_ps(values, values)), scale), half));
+            packed = _mm_packs_epi32(_mm_unpacklo_epi64(lo, hi), _mm_setzero_si128());
+            packed = _mm_packus_epi16(packed, _mm_setzero_si128());
+            bytes = (unsigned int)_mm_cvtsi128_si32(packed);
+            memcpy(output + index, &bytes, sizeof(bytes));
+        }
+    }
+#endif
+    for (; index < count; ++index) {
         double value = input[index];
         if (!(value > 0.0)) value = 0.0;
         if (value >= 1.0) value = 1.0;

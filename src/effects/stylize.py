@@ -45,6 +45,9 @@ def film_grain(
         noise = _grain_field(rng, height, width, scale, channels=3)
 
     sigma: np.float32 = np.float32(amount * _GRAIN_SIGMA)
+    from effects.native_fx import reference_mode, extended
+    if not reference_mode():
+        return extended(3, source, noise, (float(sigma),))
     return np.clip(source + noise * sigma, 0.0, 1.0).astype(np.float32, copy=False)
 
 
@@ -84,27 +87,34 @@ def scanlines(
     source: np.ndarray = ensure_rgb_f32(frame)
     if intensity <= 1e-6:
         return source
-    height: int = source.shape[0]
+    from effects.native_fx import pointwise_effect
     step: int = max(2, spacing)
-    offset: int = int(scroll * step + frame_num) % step
     width: int = max(1, min(step - 1, int(line_width)))
-
+    offset: int = int(scroll * step + frame_num) % step
     level: float = float(intensity)
     if flicker > 1e-6:
-        # Deterministic 0-1 hash of the frame number; avoids RNG state and
-        # keeps repeated renders of the same range identical.
         hashed: float = math.sin(frame_num * 12.9898) * 43758.5453
         hashed -= math.floor(hashed)
         level *= 1.0 + float(flicker) * (hashed * 2.0 - 1.0)
+    parameters = (float(step), float(width), float(offset), float(frame_num),
+                  1.0 - float(np.clip(level, 0.0, 1.0)))
+    return pointwise_effect("scanlines", source, parameters,
+        lambda: _scanlines_python(source, intensity=intensity, spacing=spacing, scroll=scroll,
+                                  frame_num=frame_num, line_width=line_width, flicker=flicker))
 
-    rows: np.ndarray = np.arange(height)
-    phase: np.ndarray = (rows - offset) % step
-    mask: np.ndarray = np.where(
-        phase < width,
-        1.0 - np.clip(level, 0.0, 1.0),
-        1.0,
-    ).astype(np.float32)[:, None, None]
-    return np.clip(source * mask, 0.0, 1.0).astype(np.float32, copy=False)
+
+def _scanlines_python(frame: np.ndarray, *, intensity: float, spacing: int, scroll: float,
+                      frame_num: int, line_width: int, flicker: float) -> np.ndarray:
+    """NumPy reference implementation of scanline modulation."""
+    source=ensure_rgb_f32(frame);height=source.shape[0];step=max(2,spacing)
+    offset=int(scroll*step+frame_num)%step;width=max(1,min(step-1,int(line_width)))
+    level=float(intensity)
+    if flicker>1e-6:
+        hashed=math.sin(frame_num*12.9898)*43758.5453;hashed-=math.floor(hashed)
+        level*=1.0+float(flicker)*(hashed*2.0-1.0)
+    rows=np.arange(height);phase=(rows-offset)%step
+    mask=np.where(phase<width,1.0-np.clip(level,0.0,1.0),1.0).astype(np.float32)[:,None,None]
+    return np.clip(source*mask,0.0,1.0).astype(np.float32,copy=False)
 
 
 def bloom(
@@ -125,6 +135,17 @@ def bloom(
     source: np.ndarray = ensure_rgb_f32(frame)
     if intensity <= 1e-6:
         return source
+    from effects.native_fx import reference_mode, pointwise_effect, extended
+    if not reference_mode():
+        highlights = pointwise_effect('highlights', source,
+                                     (float(threshold), max(1e-4, float(softness)) if softness > 1e-6 else 1.0),
+                                     lambda: source)
+        # Retain the optimized native Gaussian kernel; fuse thresholding and
+        # the final color mix in C without large NumPy intermediate arrays.
+        bright = highlights[:, :, 0]
+        glow = cv2.GaussianBlur(bright, (0, 0), sigmaX=max(1, radius))
+        return extended(2, source, glow,
+                        (1.0, *tuple(float(intensity)*float(v)/255.0 for v in tint)))
     luminance: np.ndarray = cv2.cvtColor(source, cv2.COLOR_RGB2GRAY)
     if softness > 1e-6:
         # Linear roll-off above the threshold: fully bright by one knee

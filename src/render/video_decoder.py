@@ -277,6 +277,7 @@ class VideoDecoder:
         #: Explicit cap on decoded width (``0`` = none).
         self._decode_width_cap: int = 0
         self._decode_threads: int = 0
+        self._export_limits = False
         #: Set when the decoder's own notion of its position is stale —
         #: after a size change, the stream is reshaped and the next read
         #: must re-seek instead of trusting ``_next_index``.
@@ -404,6 +405,15 @@ class VideoDecoder:
         self._quality_scale = quality
         self._decode_width_cap = cap
         self._decode_threads = max(0, int(threads))
+        if self._export_limits:
+            from render.resource_limits import codec_threads
+            self._decode_threads = min(self._decode_threads or codec_threads(), codec_threads())
+
+    def set_export_limits(self, enabled: bool) -> None:
+        """Keep decoder retention and internal threads inside an export's budget."""
+        with self._lock:
+            self._export_limits = bool(enabled)
+            self._frame_cache.clear()
 
     def set_audio_enabled(self, enabled: bool) -> None:
         """Skip audio setup entirely for video-only render jobs."""
@@ -899,8 +909,10 @@ class VideoDecoder:
         self._frame_cache[key] = rgb
         self._frame_cache.move_to_end(key)
         retained = sum(frame.nbytes for frame in self._frame_cache.values())
-        while (len(self._frame_cache) > max(1, _DECODE_CACHE_FRAMES)
-               or retained > _DECODE_CACHE_BYTES):
+        frame_limit = min(2, _DECODE_CACHE_FRAMES) if self._export_limits else _DECODE_CACHE_FRAMES
+        byte_limit = min(32 * 1024 * 1024, _DECODE_CACHE_BYTES) if self._export_limits else _DECODE_CACHE_BYTES
+        while (len(self._frame_cache) > max(1, frame_limit)
+               or retained > byte_limit):
             retained -= next(iter(self._frame_cache.values())).nbytes
             self._frame_cache.popitem(last=False)
 

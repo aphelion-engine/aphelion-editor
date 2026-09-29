@@ -158,6 +158,9 @@ def main() -> int:
     Returns:
         Process exit code.
     """
+    if len(sys.argv) == 3 and sys.argv[1] == '--export-child':
+        from render.export_process import child_main
+        return child_main(sys.argv[2])
     args = _build_parser().parse_args()
 
     if args.command in {"graph", "nodes", "tutorial"}:

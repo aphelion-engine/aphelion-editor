@@ -32,7 +32,7 @@ import imageio_ffmpeg
 import numpy as np
 from core.audio import AudioData, FrameWithAudio
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
-from render.video_writer import ExportQuality, Mp4VideoWriter
+from render.video_writer import ExportQuality, Mp4VideoWriter, VideoEncoder
 from utils.logging_setup import get_logger
 
 if TYPE_CHECKING:
@@ -71,6 +71,7 @@ class ExportRequest:
     # Whole-file packet copy preserves source codec and quality, so it must
     # never silently override a normal render request.
     allow_stream_copy: bool = False
+    encoder: VideoEncoder = VideoEncoder.AUTO
 
 
 _PROGRESS_UPDATE_SECONDS: float = 0.1
@@ -125,6 +126,7 @@ class ExportWorker(QThread):
     ) -> None:
         super().__init__(parent)
         self._project = project
+        self._document = project.to_dict()
         self._request = request
         self._cancelled = False
         self._skipped_frames: int = 0
@@ -139,21 +141,36 @@ class ExportWorker(QThread):
         self._cancelled = True
         self.requestInterruption()
         writer = self._active_writer
-        if writer is not None and writer._process.poll() is None:
+        if writer is not None:
             # Killing the owned child unblocks the encoder pipe. Cleanup stays
             # on the export thread, which exclusively owns the writer.
-            writer._process.kill()
+            writer.cancel_pending()
 
     def stop(self) -> None:
         """Block until the export thread exits."""
         self.cancel()
-        self.wait()
+        if not self.wait(30000):
+            _LOG.warning("Export cancellation is waiting for the current native operation")
 
     def run(self) -> None:
+        """Supervise an isolated render; pixels remain entirely in the child."""
+        try:
+            from render.export_process import supervise
+            supervise(self)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+    def _run_local(self, *, project_isolated: bool = False) -> None:
         from core.native import require_available
 
         try:
             require_available()
+            from core.project import Project
+            released = self._project.release_cached_frames()
+            _LOG.info('Export released %.1f MiB of regenerable preview cache',
+                      released / (1024 * 1024))
+            if not project_isolated:
+                self._project = Project.from_dict(self._document)
         except Exception as exc:  # noqa: BLE001
             self.failed.emit(str(exc))
             return
@@ -172,7 +189,12 @@ class ExportWorker(QThread):
         for node in self._project.nodes.values():
             node.exception_log.clear()
         try:
-            self._export()
+            from render.resource_limits import export_thread_budget
+            _LOG.info('Export starting: encoder=%s frames=%d..%d project=%dx%d',
+                      self._request.encoder.name,self._request.start_frame,self._request.end_frame,
+                      self._project.width,self._project.height)
+            with export_thread_budget():
+                self._export()
             if self._frames_rendered:
                 _LOG.info(
                     "Export stages: frames=%d render_fps=%.2f render_seconds=%.3f "
@@ -188,6 +210,7 @@ class ExportWorker(QThread):
             self._project.set_export_mode(False)
             self._project.set_export_audio_enabled(True)
             self._project.set_full_resolution_override(False)
+            self._project.close()
 
     def _export(self) -> None:
         request = self._request
@@ -310,6 +333,8 @@ class ExportWorker(QThread):
             Audio may be None if no audio is available.
         """
         started = time.perf_counter()
+        if self._frames_rendered < 3 or self._frames_rendered % 30 == 0:
+            _LOG.info('Rendering export frame %d',frame_num)
         result = self._project.evaluate_node(self._request.viewer_id, frame_num)
         self._render_seconds += time.perf_counter() - started
         self._frames_rendered += 1
@@ -373,7 +398,8 @@ class ExportWorker(QThread):
     def _encode_workers(self) -> int:
         """Resolve the encoder thread count for this job."""
         requested = int(self._request.encode_workers)
-        return requested if requested > 0 else _default_encode_workers()
+        from render.resource_limits import codec_threads
+        return min(codec_threads(), requested if requested > 0 else _default_encode_workers())
 
     def _export_png_sequence(self, start: int, end: int, total: int) -> None:
         out_dir = self._request.output_path
@@ -396,8 +422,9 @@ class ExportWorker(QThread):
             """Collect ``count`` completed encodes, returning successes."""
             completed = 0
             while in_flight and count > 0:
-                if in_flight[0].result():
-                    completed += 1
+                if not in_flight[0].result():
+                    raise OSError('PNG encoder could not write a frame')
+                completed += 1
                 in_flight.popleft()
                 count -= 1
             return completed
@@ -414,7 +441,12 @@ class ExportWorker(QThread):
                     return
 
                 frame, _ = evaluate(frame_num)
+                if frame is None:
+                    raise RuntimeError(f'Failed to render frame {frame_num}')
                 if frame is not None:
+                    from render.resource_limits import queue_capacity
+                    backlog = queue_capacity(frame.nbytes, workers * 2,
+                                             self._request.render_memory_budget_bytes)
                     # Colour-convert on the producer thread so each queued
                     # task holds one frame buffer instead of two.
                     bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
@@ -432,7 +464,7 @@ class ExportWorker(QThread):
                 # This keeps memory bounded while still giving every worker
                 # something to chew on.
                 if len(in_flight) >= backlog:
-                    written += drain(len(in_flight) - workers + 1)
+                    written += drain(max(1, len(in_flight) - backlog + 1))
 
                 now = time.monotonic()
                 if now - last_progress >= _PROGRESS_UPDATE_SECONDS or index + 1 == total:
@@ -493,6 +525,7 @@ class ExportWorker(QThread):
                             audio_channels=audio_channels,
                             include_audio=include_audio,
                             quality=self._request.export_quality,
+                            encoder=self._request.encoder,
                         )
                     except (OSError, RuntimeError) as exc:
                         self.failed.emit(f"Could not open the video writer: {exc}")
@@ -517,13 +550,13 @@ class ExportWorker(QThread):
                     self.progress.emit(index + 1, total)
                     last_progress = now
         finally:
-            self._active_writer = None
             if writer is not None:
                 import sys
                 if self._cancelled or self.isInterruptionRequested() or sys.exc_info()[0] is not None:
                     writer.abort()
                 else:
                     writer.close()
+            self._active_writer = None
 
         if written == 0:
             self.failed.emit(self._no_frames_message("written"))
@@ -549,10 +582,18 @@ class ExportWorker(QThread):
         document = self._project.to_dict()
         # Account conservatively for float intermediates per worker as well as
         # completed RGB results. The writer has its own separate byte budget.
-        frame_bytes = max(1, self._project.width * self._project.height * 3)
-        budget = max(frame_bytes, self._request.render_memory_budget_bytes)
-        capacity = max(1, min(8, budget // (frame_bytes * 6)))
-        workers = min(capacity, max(1, min(4, os.cpu_count() or 1)))
+        first_frame, _ = self._evaluate_frame_rgb(start)
+        if first_frame is None:
+            raise RuntimeError(f"Failed to render frame {start}")
+        frame_bytes = first_frame.nbytes
+        from render.resource_limits import available_export_bytes, codec_threads
+        budget = available_export_bytes(self._request.render_memory_budget_bytes)
+        # Float scratch frames, source decode retention, and completed output.
+        worker_bytes = frame_bytes * max(8, len(plan.nodes) * 4) + 32 * 1024 * 1024
+        capacity = max(1, min(4, budget // worker_bytes))
+        workers = min(capacity, codec_threads())
+        if budget < frame_bytes * 2:
+            raise MemoryError('Insufficient free memory to start the render pipeline')
         local = threading.local()
         clones = []
         clone_lock = threading.Lock()
@@ -561,6 +602,8 @@ class ExportWorker(QThread):
         def render(frame_num):
             if cancelled():
                 return None
+            if frame_num == start:
+                return first_frame
             if not hasattr(local, "worker"):
                 clone = Project.from_dict(document)
                 clone.set_full_resolution_override(True)
@@ -587,7 +630,7 @@ class ExportWorker(QThread):
                     height, width = frame.shape[:2]
                     writer = Mp4VideoWriter(self._request.output_path, fps=self._request.fps,
                                             width=width, height=height, include_audio=False,
-                                            quality=self._request.export_quality)
+                                            quality=self._request.export_quality, encoder=self._request.encoder)
                     self._active_writer = writer
                 elif frame.shape[:2] != (height, width):
                     frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)

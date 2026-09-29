@@ -18,6 +18,12 @@ def channel_mask(
     invert: bool,
 ) -> np.ndarray:
     """Extract, range-map, and optionally invert a frame channel."""
+    from effects.native_fx import reference_mode, pointwise_effect
+    if not reference_mode():
+        lo = max(0.0, min(254.0, float(low))) / 255.0
+        hi = max(lo + 1.0/255.0, min(1.0, float(high)/255.0))
+        index = {MaskChannel.Red: 0, MaskChannel.Green: 1, MaskChannel.Blue: 2}.get(channel, -1)
+        return pointwise_effect('channel_mask', frame, (float(index), lo, 1.0/(hi-lo), float(invert)), lambda: frame)
     source: np.ndarray = ensure_rgb_f32(frame)
     values: np.ndarray = _extract_channel(source, channel)
     low_value: float = max(0.0, min(254.0, float(low))) / 255.0
@@ -31,7 +37,8 @@ def channel_mask(
 
 def invert_mask(mask: np.ndarray) -> np.ndarray:
     """Invert a mask frame."""
-    return 1.0 - ensure_rgb_f32(mask)
+    from effects.native_fx import invert
+    return invert(mask)
 
 
 def _extract_channel(source: np.ndarray, channel: MaskChannel) -> np.ndarray:

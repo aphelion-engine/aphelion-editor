@@ -206,6 +206,13 @@ def mix_frames(
     if mix <= 0.0:
         return source
     foreground: np.ndarray = resize_like(effected, source)
+    from effects.native_fx import reference_mode, blend
+    if not reference_mode() and source.dtype == np.float32 and foreground.dtype == np.float32:
+        if mask is None and mix >= 1.0:
+            return foreground
+        from core.nodes.enums import BlendMode
+        return blend(source, foreground, mode=BlendMode.Normal, opacity=mix, mask=mask,
+                     reference=lambda: _masked_mix(source, foreground, mix, mask))
     if mask is None:
         if mix >= 1.0:
             return foreground

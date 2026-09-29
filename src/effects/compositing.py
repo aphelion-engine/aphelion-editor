@@ -17,6 +17,20 @@ def blend_frames(
     mask: np.ndarray | None = None,
 ) -> np.ndarray:
     """Blend foreground over background with optional luma mask."""
+    from effects.native_fx import blend
+    amount = float(np.clip(opacity, 0.0, 1.0))
+    if amount <= 0.0:
+        return ensure_rgb_f32(background)
+    if mode == BlendMode.Normal and mask is None and amount >= 1.0:
+        bg = ensure_rgb_f32(background)
+        return resize_like(ensure_rgb_f32(foreground), bg)
+    return blend(background, foreground, mode=mode, opacity=amount, mask=mask,
+                 reference=lambda: _blend_frames_python(background, foreground, mode=mode,
+                                                          opacity=amount, mask=mask))
+
+
+def _blend_frames_python(background, foreground, *, mode, opacity, mask=None):
+    """Reference arithmetic retained for parity tests and native fallback."""
     bg: np.ndarray = ensure_rgb_f32(background)
     fg: np.ndarray = resize_like(ensure_rgb_f32(foreground), bg)
     amount: float = float(np.clip(opacity, 0.0, 1.0))

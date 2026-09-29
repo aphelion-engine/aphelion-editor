@@ -57,6 +57,9 @@ def unsharp_mask(
     """Sharpen edges via an unsharp mask with noise thresholding."""
     source: np.ndarray = ensure_rgb_f32(frame)
     blur: np.ndarray = gaussian_blur(source, radius=max(1, radius), sigma=0.0)
+    from effects.native_fx import reference_mode, extended
+    if not reference_mode():
+        return extended(1, source, blur, (float(amount), float(threshold)/255.0, 0.0))
     sharpened: np.ndarray = source * np.float32(1.0 + amount) + blur * np.float32(-amount)
     if threshold <= 0:
         return sharpened
@@ -164,23 +167,25 @@ def vignette(
     ``roundness`` shapes the falloff ellipse (negative is taller, positive
     is wider) and the center offsets let the darkened region sit off-axis.
     """
+    from effects.native_fx import pointwise_effect
+    parameters = (float(np.clip(amount, 0.0, 1.0)), float(np.clip(softness, 0.05, 1.0)),
+                  float(np.clip(roundness, -0.95, 1.0)), float(center_x), float(center_y),
+                  *(float(value)/255.0 for value in color[:3]))
+    return pointwise_effect("vignette", frame, parameters,
+        lambda: _vignette_python(frame, amount=amount, softness=softness, color=color,
+                                 roundness=roundness, center_x=center_x, center_y=center_y))
+
+
+def _vignette_python(frame: np.ndarray, *, amount: float, softness: float, color: ColorRgb,
+                     roundness: float, center_x: float, center_y: float) -> np.ndarray:
+    """NumPy reference for the radial color blend."""
     source: np.ndarray = ensure_rgb_f32(frame)
-    height: int
-    width: int
     height, width = source.shape[:2]
-    mask: np.ndarray = _vignette_mask(
-        height,
-        width,
-        round(softness, 2),
-        round(roundness, 2),
-        round(center_x, 3),
-        round(center_y, 3),
-    )
-    alpha: np.ndarray = mask * np.float32(np.clip(amount, 0.0, 1.0))
-    output: np.ndarray = source.copy()
-    color_array: np.ndarray = color01(color).reshape(1, 1, 3)
-    output *= 1.0 - alpha
-    output += color_array * alpha
+    mask = _vignette_mask(height, width, round(softness,2), round(roundness,2),
+                          round(center_x,3), round(center_y,3))
+    alpha=mask*np.float32(np.clip(amount,0.0,1.0));output=source.copy()
+    color_array=color01(color).reshape(1,1,3)
+    output*=1.0-alpha;output+=color_array*alpha
     return output
 
 

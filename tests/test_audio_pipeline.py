@@ -201,6 +201,7 @@ def test_export_writes_silence_and_exact_fractional_frame_durations(monkeypatch)
     writer._audio_buffer_bytes=0
     writer._audio_flush_bytes=10**9
     monkeypatch.setattr(Mp4VideoWriter,"_prepare_frame",lambda self, frame: frame)
+    monkeypatch.setattr(Mp4VideoWriter,"_enqueue",lambda self, frame: None)
     frame=np.zeros((2,2,3),np.uint8)
     for index in range(30):
         audio=None if index<10 else AudioData(np.full(2000,.25,np.float32),44100)

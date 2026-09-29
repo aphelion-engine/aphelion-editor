@@ -39,6 +39,11 @@ def depth_of_field(
     cheap, stable approximation of a lens' bokeh.
     """
     source: np.ndarray = ensure_rgb_f32(frame)
+    from effects.native_fx import reference_mode, extended
+    if not reference_mode():
+        blurred = gaussian_blur(source, radius=max(1, int(round(max_blur))), sigma=0.0)
+        return extended(5, source, resize_like(ensure_rgb_f32(depth), source),
+                        (float(focus), max(_EPSILON, float(focus_range)), float(invert)), blurred)
     depths: np.ndarray = depth_channel(depth, source)
     if invert:
         depths = 1.0 - depths
@@ -63,6 +68,12 @@ def depth_haze(
 ) -> np.ndarray:
     """Fade distant pixels toward an atmospheric color."""
     source: np.ndarray = ensure_rgb_f32(frame)
+    from effects.native_fx import reference_mode, extended
+    if not reference_mode():
+        return extended(4, source, resize_like(ensure_rgb_f32(depth), source),
+                        (float(near), max(_EPSILON, float(far)-float(near)),
+                         float(np.clip(density, 0, 1)), float(invert),
+                         *tuple(float(v)/255.0 for v in color)))
     depths: np.ndarray = depth_channel(depth, source)
     if invert:
         depths = 1.0 - depths
@@ -97,6 +108,12 @@ def depth_relight(
     gradient_x: np.ndarray = cv2.Sobel(depths, cv2.CV_32F, 1, 0, ksize=3)
     gradient_y: np.ndarray = cv2.Sobel(depths, cv2.CV_32F, 0, 1, ksize=3)
     slope: float = float(np.clip(relief, 0.05, 20.0))
+    from effects.native_fx import reference_mode, extended
+    if not reference_mode():
+        lx = float(np.clip(light_x, -1, 1)); ly = float(np.clip(light_y, -1, 1))
+        lz = float(np.sqrt(max(.05, 1-lx*lx-ly*ly)))
+        return extended(6, source, gradient_x,
+                        (slope, lx, ly, lz, (1-float(np.clip(ambient, 0, 1)))*float(strength)), gradient_y)
     normal_z: np.ndarray = np.full_like(depths, 1.0)
     normal: np.ndarray = np.dstack(
         [-gradient_x * slope, -gradient_y * slope, normal_z]
@@ -132,6 +149,11 @@ def anaglyph(
 ) -> np.ndarray:
     """Build a red/cyan style stereo anaglyph from a depth pass."""
     source: np.ndarray = ensure_rgb_f32(frame)
+    from effects.native_fx import reference_mode, extended
+    if not reference_mode():
+        channel_mode = 1 if mode == AnaglyphMode.GreenMagenta else 2 if mode == AnaglyphMode.AmberBlue else 0
+        return extended(7, source, resize_like(ensure_rgb_f32(depth), source),
+                        (float(separation), float(channel_mode), float(invert)))
     depths: np.ndarray = depth_channel(depth, source)
     if invert:
         depths = 1.0 - depths
@@ -180,6 +202,11 @@ def depth_slice(
 ) -> np.ndarray:
     """Return a soft RGB matte selecting the depth range ``[near, far]``."""
     source: np.ndarray = ensure_rgb_f32(depth)
+    from effects.native_fx import reference_mode, pointwise_effect
+    if not reference_mode():
+        return pointwise_effect('depth_slice', source,
+                                (min(float(near), float(far)), max(float(near), float(far)),
+                                 max(_EPSILON, float(softness)), float(invert)), lambda: source)
     depths: np.ndarray = cv2.cvtColor(source, cv2.COLOR_RGB2GRAY)
     low: float = float(near)
     high: float = float(far)

@@ -11,6 +11,7 @@ from typing import Any
 from config.constants import (DEFAULT_DURATION, DEFAULT_FPS, DEFAULT_HEIGHT,
                               DEFAULT_WIDTH, FRAME_CACHE_MAX_MB)
 from core.audio import FrameWithAudio
+import numpy as np
 from core.cache import FrameCache
 from core.events import Connection, ObserverEvent
 from core.graph import DependencyGraph
@@ -148,12 +149,13 @@ class Project:
         # --------------------------------------------------------------
 
         self._export_mode = False
+        self._last_memory_pressure_check = 0.0
         self._export_audio_enabled = True
         self._export_frame_cache: dict[
             tuple[str, int, str],
             Any,
         ] = {}
-        self._export_static_cache: dict[str, Any] = {}
+        self._export_static_cache: dict[tuple[str, str], Any] = {}
         self._export_static_nodes: set[str] = set()
 
         # Pre-bound resolvers: created once here instead of allocating a
@@ -318,7 +320,17 @@ class Project:
             comfortably below budget, which is the common case.
         """
         cache = self._frame_cache
-
+        now = time.monotonic()
+        if now - self._last_memory_pressure_check >= .5:
+            self._last_memory_pressure_check = now
+            from core.perf.capabilities import _physical_memory_mb
+            total, available = _physical_memory_mb()
+            reserve = max(512, min(2048, total // 8))
+            if available < reserve:
+                # User cache preference is a ceiling, not permission to force
+                # Windows into paging. Reclaim cold frames before evaluating.
+                target_mb = max(0.0, cache.size_mb - (reserve - available) - 256)
+                return cache.trim_to_fraction(target_mb / max(1, cache.max_mb))
         if cache.utilization < 0.90:
             return 0
 
@@ -332,6 +344,14 @@ class Project:
 
     def clear_cache(self) -> None:
         self.dependency_graph.clear_cache()
+
+    def release_cached_frames(self) -> int:
+        """Release regenerable preview frames before a separate export graph.
+
+        The cache owns its lock; displayed frames and temporal node state keep
+        their own references and remain valid. Preview can refill the cache.
+        """
+        return self._frame_cache.trim_to_fraction(0.0)
 
     def invalidate_cache(
         self,
@@ -939,6 +959,7 @@ class Project:
         self,
         frame_num: int,
     ) -> None:
+        self.relieve_memory_pressure()
         self._eval_context_frame = (
             frame_num
         )
@@ -949,6 +970,10 @@ class Project:
         # set instead of the multi-gigabyte interactive LRU budget.
         if self._export_mode:
             self._export_frame_cache.clear()
+            # Input sockets otherwise pin every previous frame's intermediate
+            # until that node is revisited, overlapping two entire render trees.
+            for node in self.nodes.values():
+                node.clear_input_values()
 
         # Resolve preview settings once.
         self._eval_context_settings = (
@@ -974,6 +999,10 @@ class Project:
         )
 
     def _end_eval_context(self) -> None:
+        if self._export_mode:
+            self._export_frame_cache.clear()
+            for node in self.nodes.values():
+                node.clear_input_values()
         self._eval_context_frame = None
         self._eval_context_settings = None
         self._eval_context_cache_width = None
@@ -1010,6 +1039,9 @@ class Project:
             return
 
         self._export_mode = enabled
+        for node in self.nodes.values():
+            if isinstance(node, VideoInputNode):
+                node._decoder.set_export_limits(enabled)
         self._export_frame_cache.clear()
         self._export_static_cache.clear()
         self._export_static_nodes = self._compute_export_static_nodes() if enabled else set()
@@ -1017,16 +1049,18 @@ class Project:
     def _compute_export_static_nodes(self) -> set[str]:
         """Find explicitly static nodes with only static frame inputs."""
         static: set[str] = set()
+        driven = {property_drive_target_id(self, node_id)
+                  for node_id, node in self.nodes.items() if node.node_type == 'Property Drive'}
         changed = True
         while changed:
             changed = False
             for node_id, node in self.nodes.items():
-                if node_id in static or not getattr(node, "is_static_output", False):
+                if (node_id in static or not getattr(node, "is_static_output", False)
+                        or node.animated_properties or node_id in driven):
                     continue
                 inputs = [
                     connection.output_node_id
                     for connection in self.dependency_graph.get_input_connections(node_id)
-                    if connection.input_slot == "frame"
                 ]
                 if all(source_id in static for source_id in inputs):
                     static.add(node_id)
@@ -1106,7 +1140,7 @@ class Project:
         export_cache = self._export_frame_cache if self._export_mode else None
 
         if export_cache is not None and node_id in self._export_static_nodes:
-            static_result = self._export_static_cache.get(node_id, _CACHE_MISS)
+            static_result = self._export_static_cache.get((node_id, output_slot), _CACHE_MISS)
             if static_result is not _CACHE_MISS:
                 return static_result
 
@@ -1282,6 +1316,16 @@ class Project:
         # Evaluate
         # --------------------------------------------------------------
 
+        if self._export_mode:
+            from render.resource_limits import require_working_memory
+            largest = self.width * self.height * 3 * 4
+            for value in node._input_values.values():
+                frame = value.frame if isinstance(value, FrameWithAudio) else value
+                if isinstance(frame, np.ndarray):
+                    largest = max(largest, int(frame.size) * 4)
+            # Color/distortion effects can allocate several float temporaries.
+            require_working_memory(largest * 8)
+
         try:
             # Per-node-type timing is only paid for when diagnostics are on;
             # the f-string is built conditionally so the disabled path never
@@ -1308,14 +1352,21 @@ class Project:
             for slot,value in values.items():
                 if export_cache is not None:
                     export_cache[(node_id,frame_num,slot)] = value
+                    if node_id in self._export_static_nodes:
+                        self._export_static_cache[(node_id, slot)] = value
                 else:
                     self._frame_cache.set_fast((node_id,frame_num,f"{slot}@{settings.max_width}"),value)
 
-            if export_cache is not None and node_id in self._export_static_nodes:
-                self._export_static_cache[node_id] = result
-
             return result
 
+        except MemoryError as exc:
+            # Allocation failure must unwind the entire export, including
+            # its buffers; substituting None can let downstream nodes allocate
+            # fallback frames while Windows is already under memory pressure.
+            if self._export_mode:
+                raise MemoryError(f'{node.node_type}: {exc}') from exc
+            node.log_exception(exc)
+            return None
         except Exception as exc:  # noqa: BLE001
             node.log_exception(exc)
             return None

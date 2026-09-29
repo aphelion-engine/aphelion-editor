@@ -118,6 +118,10 @@ def probe(refresh: bool = False) -> KernelProbe:
                 "rgb_to_luma",
                 "render_rgb_u8",
                 "quantize_f32_u8",
+                "fx_apply",
+                "fx_geometry",
+                "fx_blend",
+                "fx_extended",
             )
             missing = [name for name in required if not hasattr(aphelion_native, name)]
             if missing:

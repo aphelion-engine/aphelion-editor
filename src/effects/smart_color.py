@@ -101,6 +101,9 @@ def shot_match(
 
 def _transfer_statistics(source: np.ndarray, reference: np.ndarray) -> np.ndarray:
     """Rescale each channel of ``source`` toward ``reference`` mean/std."""
+    from effects.native_fx import reference_mode, extended
+    if not reference_mode():
+        return extended(8, source, reference, ())
     output: np.ndarray = source.astype(np.float32, copy=True)
     channels: int = output.shape[2]
     for channel in range(channels):
@@ -126,4 +129,5 @@ def _blend(source: np.ndarray, corrected: np.ndarray, strength: float) -> np.nda
         return source
     if amount >= 1.0:
         return corrected
-    return source * np.float32(1.0 - amount) + corrected * np.float32(amount)
+    from effects.frame_ops import mix_frames
+    return mix_frames(source, corrected, amount)

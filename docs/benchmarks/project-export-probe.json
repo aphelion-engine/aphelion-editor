@@ -1,0 +1,12 @@
+{
+  "frames_requested": 3,
+  "start_frame": 0,
+  "encoder": "CPU",
+  "result": "ok",
+  "seconds": 16.84454949999963,
+  "frames_decoded": 3,
+  "size": [
+    3840,
+    2160
+  ]
+}

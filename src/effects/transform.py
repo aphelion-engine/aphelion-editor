@@ -128,6 +128,11 @@ def luma_key_mask(
     invert: bool,
 ) -> np.ndarray:
     """Generate a soft grayscale mask from luminance range."""
+    from effects.native_fx import reference_mode, pointwise_effect
+    if not reference_mode():
+        lo = max(0.0, min(254.0, float(low))) / 255.0
+        hi = max(lo + 1.0/255.0, min(1.0, float(high)/255.0))
+        return pointwise_effect('channel_mask', frame, (-1.0, lo, 1.0/(hi-lo), float(invert)), lambda: frame)
     source: np.ndarray = ensure_rgb_f32(frame)
     gray: np.ndarray = cv2.cvtColor(source, cv2.COLOR_RGB2GRAY)
     low_value: float = max(0.0, min(254.0, float(low))) / 255.0

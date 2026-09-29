@@ -60,29 +60,32 @@ def kaleidoscope(
     center_y: float,
 ) -> np.ndarray:
     """Mirror segments around a radial center."""
+    count: int = max(2, min(segments, 24))
+    params = (float(count), float(rotation_degrees), float(np.clip(center_x, 0.0, 1.0)),
+              float(np.clip(center_y, 0.0, 1.0)))
+    from effects.native_fx import geometry_effect
+    return geometry_effect("kaleidoscope", frame, params,
+                           lambda: _kaleidoscope_python(frame, segments=segments,
+                               rotation_degrees=rotation_degrees, center_x=center_x, center_y=center_y))
+
+
+def _kaleidoscope_python(frame: np.ndarray, *, segments: int, rotation_degrees: float,
+                         center_x: float, center_y: float) -> np.ndarray:
+    """NumPy/OpenCV reference for radial segment reflection."""
     source: np.ndarray = ensure_rgb_f32(frame)
-    height: int
-    width: int
     height, width = source.shape[:2]
     count: int = max(2, min(segments, 24))
     cx: float = float(np.clip(center_x, 0.0, 1.0)) * width
     cy: float = float(np.clip(center_y, 0.0, 1.0)) * height
     yy, xx = np.mgrid[0:height, 0:width].astype(np.float32)
-    dx: np.ndarray = xx - cx
-    dy: np.ndarray = yy - cy
-    angle: np.ndarray = np.arctan2(dy, dx) + math.radians(rotation_degrees)
-    radius: np.ndarray = np.sqrt(dx * dx + dy * dy)
-    wedge: float = (2.0 * math.pi) / float(count)
-    angle = np.abs(((angle + wedge * 0.5) % wedge) - wedge * 0.5)
-    map_x: np.ndarray = (cx + radius * np.cos(angle)).astype(np.float32)
-    map_y: np.ndarray = (cy + radius * np.sin(angle)).astype(np.float32)
-    return cv2.remap(
-        source,
-        map_x,
-        map_y,
-        interpolation=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_REFLECT_101,
-    )
+    dx, dy = xx-cx, yy-cy
+    angle = np.arctan2(dy, dx) + math.radians(rotation_degrees)
+    radius = np.sqrt(dx*dx+dy*dy)
+    wedge = (2.0*math.pi)/float(count)
+    angle = np.abs(((angle+wedge*.5)%wedge)-wedge*.5)
+    return cv2.remap(source, (cx+radius*np.cos(angle)).astype(np.float32),
+                     (cy+radius*np.sin(angle)).astype(np.float32),
+                     interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101)
 
 
 def mirror(
@@ -92,23 +95,25 @@ def mirror(
     offset: float,
 ) -> np.ndarray:
     """Mirror half the frame across a movable axis."""
+    axis_id = 0 if axis == MirrorAxis.Horizontal else 1
+    from effects.native_fx import geometry_effect
+    return geometry_effect("mirror", frame, (float(axis_id), float(np.clip(offset, 0.0, 1.0))),
+                           lambda: _mirror_python(frame, axis=axis, offset=offset))
+
+
+def _mirror_python(frame: np.ndarray, *, axis: MirrorAxis, offset: float) -> np.ndarray:
+    """OpenCV reference for a movable half-frame mirror."""
     source: np.ndarray = ensure_rgb_f32(frame)
-    height: int
-    width: int
     height, width = source.shape[:2]
     offset_clamped: float = float(np.clip(offset, 0.0, 1.0))
     if axis == MirrorAxis.Horizontal:
         split: int = max(1, min(width - 1, round(width * offset_clamped)))
-        left: np.ndarray = source[:, :split]
-        mirrored: np.ndarray = np.fliplr(left)
         output: np.ndarray = source.copy()
-        output[:, split:] = cv2.resize(mirrored, (width - split, height))
+        output[:, split:] = cv2.resize(np.fliplr(source[:, :split]), (width-split, height))
         return output
     split_row: int = max(1, min(height - 1, round(height * offset_clamped)))
-    top: np.ndarray = source[:split_row, :]
-    mirrored_rows: np.ndarray = np.flipud(top)
     output = source.copy()
-    output[split_row:, :] = cv2.resize(mirrored_rows, (width, height - split_row))
+    output[split_row:, :] = cv2.resize(np.flipud(source[:split_row, :]), (width, height-split_row))
     return output
 
 
@@ -148,26 +153,25 @@ def chromatic_aberration(
     ``radial`` blends in a scale-based fringe, which is how real lens
     dispersion behaves: negligible in the center, strongest at the edges.
     """
+    from effects.native_fx import geometry_effect
+    params = (float(amount), float(angle_degrees), float(radial))
+    return geometry_effect("chromatic_aberration", frame, params,
+        lambda: _chromatic_aberration_python(frame, amount=amount,
+                                              angle_degrees=angle_degrees, radial=radial))
+
+
+def _chromatic_aberration_python(frame: np.ndarray, *, amount: float,
+                                 angle_degrees: float, radial: float) -> np.ndarray:
+    """OpenCV reference implementation of chromatic channel separation."""
     source: np.ndarray = ensure_rgb_f32(frame)
-    height: int
-    width: int
-    height, width = source.shape[:2]
-    radians: float = math.radians(angle_degrees)
-    shift_x: float = math.cos(radians) * amount * width * 0.02
-    shift_y: float = math.sin(radians) * amount * height * 0.02
-    red: np.ndarray = _shift_channel(source[:, :, 0], shift_x, shift_y)
-    blue: np.ndarray = _shift_channel(source[:, :, 2], -shift_x, -shift_y)
-
-    radial_amount: float = float(radial)
-    if abs(radial_amount) > 1e-6:
-        center: tuple[float, float] = (width * 0.5, height * 0.5)
-        spread: float = 1.0 + radial_amount * 0.02
-        red = _scale_channel(red, center, spread, (width, height))
-        blue = _scale_channel(blue, center, 1.0 / max(1e-3, spread), (width, height))
-
-    merged: np.ndarray = source.copy()
-    merged[:, :, 0] = red
-    merged[:, :, 2] = blue
+    height,width=source.shape[:2];radians=math.radians(angle_degrees)
+    shift_x=math.cos(radians)*amount*width*.02;shift_y=math.sin(radians)*amount*height*.02
+    red=_shift_channel(source[:,:,0],shift_x,shift_y);blue=_shift_channel(source[:,:,2],-shift_x,-shift_y)
+    if abs(radial)>1e-6:
+        center=(width*.5,height*.5);spread=1.0+radial*.02
+        red=_scale_channel(red,center,spread,(width,height))
+        blue=_scale_channel(blue,center,1.0/max(1e-3,spread),(width,height))
+    merged=source.copy();merged[:,:,0]=red;merged[:,:,2]=blue
     return merged
 
 
@@ -199,18 +203,20 @@ def rgb_split(
     blue_y: float,
 ) -> np.ndarray:
     """Offset each RGB channel independently."""
-    source: np.ndarray = ensure_rgb_f32(frame)
-    height: int
-    width: int
-    height, width = source.shape[:2]
-    output: np.ndarray = source.copy()
-    output[:, :, 0] = _shift_channel(source[:, :, 0], red_x * width * 0.02, red_y * height * 0.02)
-    output[:, :, 1] = _shift_channel(
-        source[:, :, 1], green_x * width * 0.02, green_y * height * 0.02
-    )
-    output[:, :, 2] = _shift_channel(
-        source[:, :, 2], blue_x * width * 0.02, blue_y * height * 0.02
-    )
+    from effects.native_fx import geometry_effect
+    params=(float(red_x),float(red_y),float(green_x),float(green_y),float(blue_x),float(blue_y))
+    return geometry_effect("rgb_split",frame,params,
+        lambda: _rgb_split_python(frame,red_x=red_x,red_y=red_y,green_x=green_x,
+                                  green_y=green_y,blue_x=blue_x,blue_y=blue_y))
+
+
+def _rgb_split_python(frame: np.ndarray, *, red_x: float,red_y: float,green_x: float,
+                      green_y: float,blue_x: float,blue_y: float) -> np.ndarray:
+    """OpenCV reference implementation of independent RGB translations."""
+    source=ensure_rgb_f32(frame);height,width=source.shape[:2];output=source.copy()
+    output[:,:,0]=_shift_channel(source[:,:,0],red_x*width*.02,red_y*height*.02)
+    output[:,:,1]=_shift_channel(source[:,:,1],green_x*width*.02,green_y*height*.02)
+    output[:,:,2]=_shift_channel(source[:,:,2],blue_x*width*.02,blue_y*height*.02)
     return output
 
 
@@ -255,25 +261,24 @@ def ripple(
     frame_num: int,
 ) -> np.ndarray:
     """Apply a sinusoidal displacement field."""
+    from effects.native_fx import geometry_effect
+    params = (float(amplitude), float(frequency), float(phase), float(frame_num))
+    return geometry_effect("ripple", frame, params,
+        lambda: _ripple_python(frame, amplitude=amplitude, frequency=frequency,
+                               phase=phase, frame_num=frame_num))
+
+
+def _ripple_python(frame: np.ndarray, *, amplitude: float, frequency: float,
+                   phase: float, frame_num: int) -> np.ndarray:
+    """OpenCV reference implementation of ripple displacement."""
     source: np.ndarray = ensure_rgb_f32(frame)
-    height: int
-    width: int
     height, width = source.shape[:2]
     yy, xx = np.mgrid[0:height, 0:width].astype(np.float32)
-    wave: np.ndarray = np.sin(
-        (yy / max(1.0, height)) * frequency * math.tau
-        + phase
-        + frame_num * 0.15
-    )
+    wave: np.ndarray = np.sin((yy / max(1.0, height)) * frequency * math.tau + phase + frame_num * 0.15)
     map_x: np.ndarray = xx + wave * amplitude * width * 0.04
     map_y: np.ndarray = yy + wave * amplitude * height * 0.02
-    return cv2.remap(
-        source,
-        map_x.astype(np.float32),
-        map_y.astype(np.float32),
-        interpolation=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_REFLECT_101,
-    )
+    return cv2.remap(source, map_x.astype(np.float32), map_y.astype(np.float32),
+                     interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101)
 
 
 def _shift_channel(channel: np.ndarray, shift_x: float, shift_y: float) -> np.ndarray:
@@ -345,6 +350,10 @@ def pixel_sort(
     """
     source: np.ndarray = ensure_rgb_f32(frame)
     keys: np.ndarray = _pixel_sort_keys(source, mode)
+    from effects.native_fx import reference_mode, extended
+    if not reference_mode():
+        return extended(9, source, keys, (float(np.clip(threshold, 0, 1)),
+                                         float(max(2, min(source.shape[1], int(max_length)))), float(reverse)))
     height: int
     width: int
     height, width = source.shape[:2]
@@ -424,6 +433,13 @@ def duotone(
     light: ColorRgb,
 ) -> np.ndarray:
     """Map the frame's luminance between two colors."""
+    from effects.native_fx import duotone as dispatch
+    return dispatch(frame, dark=dark, light=light,
+                    reference=lambda: _duotone_python(frame, dark=dark, light=light))
+
+
+def _duotone_python(frame: np.ndarray, *, dark: ColorRgb, light: ColorRgb) -> np.ndarray:
+    """NumPy/OpenCV reference implementation of duotone."""
     source: np.ndarray = ensure_rgb_f32(frame)
     luma: np.ndarray = cv2.cvtColor(source, cv2.COLOR_RGB2GRAY)[:, :, None]
     dark_rgb: np.ndarray = color01(dark).reshape(1, 1, 3)
@@ -451,6 +467,11 @@ def neon_glow(
     if radius > 0.0:
         edge_f32 = cv2.GaussianBlur(edge_f32, (0, 0), float(radius))
     tint: np.ndarray = color01(color).reshape(1, 1, 3)
+    from effects.native_fx import reference_mode, extended
+    if not reference_mode():
+        return extended(2, source, edge_f32,
+                        (max(0.0, float(background)),
+                         *tuple(float(v) * max(0.0, float(intensity)) for v in tint.ravel())))
     base: np.ndarray = source * np.float32(max(0.0, background))
     glow: np.ndarray = edge_f32[:, :, None] * \
         tint * np.float32(max(0.0, intensity))
@@ -467,31 +488,29 @@ def shockwave(
     center_y: float,
 ) -> np.ndarray:
     """Push pixels outward within an expanding radial ring."""
+    from effects.native_fx import geometry_effect
+    params = (float(progress), float(amplitude), float(wavelength),
+              float(np.clip(center_x, 0.0, 1.0)), float(np.clip(center_y, 0.0, 1.0)))
+    return geometry_effect("shockwave", frame, params,
+        lambda: _shockwave_python(frame, progress=progress, amplitude=amplitude,
+                                  wavelength=wavelength, center_x=center_x, center_y=center_y))
+
+
+def _shockwave_python(frame: np.ndarray, *, progress: float, amplitude: float,
+                      wavelength: float, center_x: float, center_y: float) -> np.ndarray:
+    """OpenCV reference implementation of radial shockwave displacement."""
     source: np.ndarray = ensure_rgb_f32(frame)
-    height: int
-    width: int
     height, width = source.shape[:2]
-    cx: float = float(np.clip(center_x, 0.0, 1.0)) * width
-    cy: float = float(np.clip(center_y, 0.0, 1.0)) * height
-    yy, xx = np.mgrid[0:height, 0:width].astype(np.float32)
-    dx: np.ndarray = xx - cx
-    dy: np.ndarray = yy - cy
-    distance: np.ndarray = np.sqrt(dx * dx + dy * dy)
-    max_radius: float = max(1.0, 0.5 * math.hypot(width, height))
-    ring_radius: float = float(np.clip(progress, 0.0, 1.0)) * max_radius
-    band: float = max(1.0, float(wavelength) * max_radius * 0.25)
-    ring: np.ndarray = np.exp(-((distance - ring_radius)
-                              ** 2) / (2.0 * band * band))
-    fade: np.ndarray = np.clip(1.0 - distance / max_radius, 0.0, 1.0)
-    magnitude: float = float(amplitude) * min(width, height) * 0.25
-    displacement: np.ndarray = ring * fade * magnitude
-    safe_distance: np.ndarray = np.where(distance > 1e-3, distance, 1.0)
-    map_x: np.ndarray = xx - (dx / safe_distance) * displacement
-    map_y: np.ndarray = yy - (dy / safe_distance) * displacement
-    return cv2.remap(
-        source,
-        map_x.astype(np.float32),
-        map_y.astype(np.float32),
-        interpolation=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_REFLECT_101,
-    )
+    cx=float(np.clip(center_x,0.0,1.0))*width;cy=float(np.clip(center_y,0.0,1.0))*height
+    yy,xx=np.mgrid[0:height,0:width].astype(np.float32);dx,dy=xx-cx,yy-cy
+    distance=np.sqrt(dx*dx+dy*dy);max_radius=max(1.0,.5*math.hypot(width,height))
+    ring_radius=float(np.clip(progress,0.0,1.0))*max_radius
+    band=max(1.0,float(wavelength)*max_radius*.25)
+    ring=np.exp(-((distance-ring_radius)**2)/(2.0*band*band))
+    fade=np.clip(1.0-distance/max_radius,0.0,1.0)
+    magnitude=float(amplitude)*min(width,height)*.25
+    displacement=ring*fade*magnitude
+    safe=np.where(distance>1e-3,distance,1.0)
+    return cv2.remap(source,(xx-dx/safe*displacement).astype(np.float32),
+                     (yy-dy/safe*displacement).astype(np.float32),
+                     interpolation=cv2.INTER_LINEAR,borderMode=cv2.BORDER_REFLECT_101)

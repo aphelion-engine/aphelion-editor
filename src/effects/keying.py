@@ -32,6 +32,19 @@ def chroma_key_mask(
     Returns:
         Float32 RGB mask where 0 means "keyed out" and 1 means "kept".
     """
+    from effects.native_fx import chroma_key as dispatch
+    return dispatch(
+        frame, key_color=key_color, tolerance=tolerance, softness=softness,
+        reference=lambda: _chroma_key_mask_python(
+            frame, key_color=key_color, tolerance=tolerance, softness=softness,
+        ),
+    )
+
+
+def _chroma_key_mask_python(
+    frame: np.ndarray, *, key_color: ColorRgb, tolerance: float, softness: float,
+) -> np.ndarray:
+    """NumPy/OpenCV reference implementation of chroma keying."""
     source: np.ndarray = ensure_rgb_f32(frame)
     key: np.ndarray = color01(key_color).reshape(1, 1, 3)
     diff: np.ndarray = source - key
@@ -53,19 +66,26 @@ def suppress_spill(
     Generalizes the classic green/blue-screen despill (``G = min(G, max(R, B))``)
     to an arbitrary key color by suppressing whichever channel dominates it.
     """
+    from effects.native_fx import suppress_spill as dispatch
+    return dispatch(
+        frame, key_color=key_color, amount=amount,
+        reference=lambda: _suppress_spill_python(frame, key_color=key_color, amount=amount),
+    )
+
+
+def _suppress_spill_python(
+    frame: np.ndarray, *, key_color: ColorRgb, amount: float,
+) -> np.ndarray:
+    """NumPy reference implementation of spill suppression."""
     source: np.ndarray = ensure_rgb_f32(frame)
     key: np.ndarray = color01(key_color)
     dominant: int = int(np.argmax(key))
     other_a, other_b = (i for i in range(3) if i != dominant)
-
     dominant_channel: np.ndarray = source[:, :, dominant]
     other_max: np.ndarray = np.maximum(source[:, :, other_a], source[:, :, other_b])
     spill: np.ndarray = np.clip(dominant_channel - other_max, 0.0, None)
-
     output: np.ndarray = source.copy()
-    output[:, :, dominant] = dominant_channel - spill * np.float32(
-        np.clip(amount, 0.0, 1.0)
-    )
+    output[:, :, dominant] = dominant_channel - spill * np.float32(np.clip(amount, 0.0, 1.0))
     return output
 
 

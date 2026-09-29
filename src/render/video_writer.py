@@ -25,6 +25,7 @@ import queue
 import subprocess
 import tempfile
 import threading
+import time
 import wave
 from enum import Enum, auto
 from pathlib import Path
@@ -33,7 +34,12 @@ from types import TracebackType
 import imageio_ffmpeg
 import numpy as np
 from core.audio import AudioData, convert_audio, frame_sample_bounds
+
 from render.audio_playback import _resample_audio
+from render.resource_limits import codec_threads, queue_capacity
+from utils.logging_setup import get_logger
+
+_LOG = get_logger('render.encoder')
 
 # ============================================================================
 # Export quality
@@ -160,10 +166,28 @@ def _detect_encoders(
                     continue
                 try:
                     trial = subprocess.run(
-                        [ffmpeg_exe, '-v', 'error', '-nostdin', '-f', 'lavfi',
-                         '-i', 'color=size=128x128:rate=30', '-frames:v', '1',
-                         '-c:v', encoder, '-pix_fmt', 'yuv420p', '-f', 'null', '-'],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=10,
+                        [
+                            ffmpeg_exe,
+                            "-v",
+                            "error",
+                            "-nostdin",
+                            "-f",
+                            "lavfi",
+                            "-i",
+                            "color=size=128x128:rate=30",
+                            "-frames:v",
+                            "1",
+                            "-c:v",
+                            encoder,
+                            "-pix_fmt",
+                            "yuv420p",
+                            "-f",
+                            "null",
+                            "-",
+                        ],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.PIPE,
+                        timeout=10,
                     )
                     result[encoder] = trial.returncode == 0
                 except (OSError, subprocess.TimeoutExpired):
@@ -192,8 +216,7 @@ def _select_encoder(
     if requested == VideoEncoder.INTEL_QSV:
         if not encoders["h264_qsv"]:
             raise RuntimeError(
-                "Intel QSV H.264 encoder is unavailable "
-                "in the bundled FFmpeg."
+                "Intel QSV H.264 encoder is unavailable in the bundled FFmpeg."
             )
 
         return "h264_qsv"
@@ -201,8 +224,7 @@ def _select_encoder(
     if requested == VideoEncoder.NVIDIA_NVENC:
         if not encoders["h264_nvenc"]:
             raise RuntimeError(
-                "NVIDIA NVENC H.264 encoder is unavailable "
-                "in the bundled FFmpeg."
+                "NVIDIA NVENC H.264 encoder is unavailable in the bundled FFmpeg."
             )
 
         return "h264_nvenc"
@@ -210,8 +232,7 @@ def _select_encoder(
     if requested == VideoEncoder.AMD_AMF:
         if not encoders["h264_amf"]:
             raise RuntimeError(
-                "AMD AMF H.264 encoder is unavailable "
-                "in the bundled FFmpeg."
+                "AMD AMF H.264 encoder is unavailable in the bundled FFmpeg."
             )
 
         return "h264_amf"
@@ -255,34 +276,38 @@ class Mp4VideoWriter:
     """Ultra-high-throughput RGB -> H.264 MP4 writer."""
 
     __slots__ = (
-        "_output_path",
-        "_width",
-        "_height",
-        "_fps",
-        "_pad_right",
-        "_pad_bottom",
-        "_encoded_width",
-        "_encoded_height",
-        "_audio_sample_rate",
-        "_audio_channels",
-        "_include_audio",
-        "_quality",
-        "_encoder",
-        "_closed",
-        "_frame_count",
-        "_write_error",
-        "_audio_wav_path",
-        "_audio_wave",
-        "_audio_lock",
         "_audio_buffer",
         "_audio_buffer_bytes",
+        "_audio_channels",
         "_audio_flush_bytes",
-        "_temp_video_path",
-        "_ffmpeg_exe",
-        "_process",
-        "_stderr_file",
-        "_frame_queue",
+        "_audio_lock",
+        "_audio_sample_rate",
+        "_audio_wav_path",
+        "_audio_wave",
+        "_closed",
+        "_encoded_height",
+        "_encoded_width",
+        "_encoder",
         "_encoder_thread",
+        "_ffmpeg_exe",
+        "_fps",
+        "_frame_count",
+        "_frame_queue",
+        "_height",
+        "_include_audio",
+        "_native_encoder",
+        "_pipe_write_started",
+        "_watchdog_stop",
+        "_watchdog_thread",
+        "_output_path",
+        "_pad_bottom",
+        "_pad_right",
+        "_process",
+        "_quality",
+        "_stderr_file",
+        "_temp_video_path",
+        "_width",
+        "_write_error",
     )
 
     def __init__(
@@ -298,7 +323,8 @@ class Mp4VideoWriter:
         quality: ExportQuality = ExportQuality.FAST,
         queue_size: int = _DEFAULT_QUEUE_SIZE,
         encoder: VideoEncoder = VideoEncoder.AUTO,
-        memory_budget_bytes: int = 128 * 1024 * 1024,
+        memory_budget_bytes: int = 64 * 1024 * 1024,
+        backend: str = "auto",
     ) -> None:
         from core.native import require_available
 
@@ -310,15 +336,12 @@ class Mp4VideoWriter:
         fps = float(fps)
 
         if width <= 0 or height <= 0:
-            raise ValueError(
-                f"Video dimensions must be positive, "
-                f"got {width}x{height}"
-            )
+            raise ValueError(f"Video dimensions must be positive, got {width}x{height}")
 
         if not np.isfinite(fps) or fps <= 0.0:
-            raise ValueError(
-                f"FPS must be positive, got {fps!r}"
-            )
+            raise ValueError(f"FPS must be positive, got {fps!r}")
+        if backend not in ("auto", "pipe", "libav"):
+            raise ValueError(f"Unknown encoder backend: {backend}")
 
         self._output_path = output_path
 
@@ -332,6 +355,8 @@ class Mp4VideoWriter:
 
         self._encoded_width = width + self._pad_right
         self._encoded_height = height + self._pad_bottom
+        capacity = queue_capacity(self._encoded_width * self._encoded_height * 3,
+                                  queue_size, memory_budget_bytes)
 
         self._audio_sample_rate = max(
             1,
@@ -339,13 +364,9 @@ class Mp4VideoWriter:
         )
 
         channels = int(audio_channels)
-        self._audio_channels = (
-            1 if channels == 1 else 2
-        )
+        self._audio_channels = 1 if channels == 1 else 2
 
-        self._include_audio = bool(
-            include_audio
-        )
+        self._include_audio = bool(include_audio)
 
         self._quality = quality
 
@@ -376,11 +397,7 @@ class Mp4VideoWriter:
         # Temporary video
         # ==================================================================
 
-        self._temp_video_path = self._make_temp_video_path()
-
-        self._ffmpeg_exe = (
-            imageio_ffmpeg.get_ffmpeg_exe()
-        )
+        self._ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
 
         # ==================================================================
         # Encoder selection
@@ -390,12 +407,13 @@ class Mp4VideoWriter:
             self._ffmpeg_exe,
             encoder,
         )
+        self._temp_video_path = self._make_temp_video_path()
+        _LOG.info('Opening encoder=%s resolution=%dx%d fps=%g queue=%d threads=%d',
+                  self._encoder,self._encoded_width,self._encoded_height,self._fps,capacity,codec_threads())
 
         preset, crf = _EXPORT_PROFILE_SETTINGS.get(
             quality,
-            _EXPORT_PROFILE_SETTINGS[
-                ExportQuality.FAST
-            ],
+            _EXPORT_PROFILE_SETTINGS[ExportQuality.FAST],
         )
 
         # ==================================================================
@@ -404,39 +422,30 @@ class Mp4VideoWriter:
 
         cmd = [
             self._ffmpeg_exe,
-
             "-hide_banner",
             "-loglevel",
             "error",
             "-nostdin",
             "-y",
-
+            "-filter_threads",
+            str(codec_threads()),
             # --------------------------------------------------------------
             # Raw RGB input
             # --------------------------------------------------------------
-
             "-f",
             "rawvideo",
-
             "-pixel_format",
             "rgb24",
-
             "-video_size",
-            f"{self._encoded_width}x"
-            f"{self._encoded_height}",
-
+            f"{self._encoded_width}x{self._encoded_height}",
             "-framerate",
             f"{self._fps:.12g}",
-
             "-i",
             "-",
-
             # --------------------------------------------------------------
             # Video only
             # --------------------------------------------------------------
-
             "-an",
-
             "-c:v",
             self._encoder,
         ]
@@ -450,13 +459,11 @@ class Mp4VideoWriter:
                 (
                     "-preset",
                     preset,
-
                     "-crf",
                     str(crf),
-
                     # Let x264 determine optimal thread count.
                     "-threads",
-                    "0",
+                    str(codec_threads()),
                 )
             )
 
@@ -478,6 +485,8 @@ class Mp4VideoWriter:
             # CQP is extremely fast and predictable.
             cmd.extend(
                 (
+                    "-async_depth",
+                    "1",
                     "-preset",
                     _hw_preset(self._encoder, quality, "veryfast"),
                     "-global_quality",
@@ -503,6 +512,10 @@ class Mp4VideoWriter:
             )
             cmd.extend(
                 (
+                    "-surfaces",
+                    "4",
+                    "-delay",
+                    "0",
                     "-preset",
                     _hw_preset(self._encoder, quality, "p3"),
                     "-rc",
@@ -544,7 +557,7 @@ class Mp4VideoWriter:
             (
                 # Broad MP4 compatibility.
                 "-pix_fmt",
-                "yuv420p",
+                "yuv420p" if self._encoder == "libx264" else "nv12",
             )
         )
 
@@ -570,22 +583,39 @@ class Mp4VideoWriter:
         self._stderr_file = tempfile.TemporaryFile(
             mode="w+b",
         )
-
+        self._native_encoder = None
+        self._process = None
         try:
-            self._process = subprocess.Popen(
-                cmd,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
-                stderr=self._stderr_file,
-                bufsize=0,
-            )
+            if backend != "pipe" and self._encoder == "libx264":
+                try:
+                    from render.libav_encoder import LibavEncoder
+
+                    self._native_encoder = LibavEncoder(
+                        self._temp_video_path,
+                        width=self._encoded_width,
+                        height=self._encoded_height,
+                        fps=self._fps,
+                        preset=preset,
+                        crf=crf,
+                    )
+                except ImportError:
+                    if backend == "libav":
+                        raise
+            if self._native_encoder is None:
+                self._process = subprocess.Popen(
+                    cmd,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL,
+                    stderr=self._stderr_file,
+                    bufsize=0,
+                )
 
         except Exception:
             self._stderr_file.close()
             self._cleanup_temp_video()
             raise
 
-        if self._process.stdin is None:
+        if self._process is not None and self._process.stdin is None:
             try:
                 self._process.kill()
             except Exception:
@@ -594,19 +624,14 @@ class Mp4VideoWriter:
             self._stderr_file.close()
             self._cleanup_temp_video()
 
-            raise RuntimeError(
-                "Failed to open FFmpeg stdin"
-            )
+            raise RuntimeError("Failed to open FFmpeg stdin")
 
         # ==================================================================
         # Frame queue
         # ==================================================================
 
-        self._frame_queue: queue.Queue[
-            np.ndarray | _EndOfFrames
-        ] = queue.Queue(
-            maxsize=max(1, min(int(queue_size), max(1, int(memory_budget_bytes)) //
-                               (self._encoded_width * self._encoded_height * 3)))
+        self._frame_queue: queue.Queue[np.ndarray | _EndOfFrames] = queue.Queue(
+            maxsize=capacity
         )
 
         self._encoder_thread = threading.Thread(
@@ -615,7 +640,25 @@ class Mp4VideoWriter:
             daemon=True,
         )
 
+        self._pipe_write_started = 0.0
+        self._watchdog_stop = threading.Event()
+        self._watchdog_thread = None
+        if self._process is not None:
+            self._watchdog_thread = threading.Thread(target=self._watch_encoder,
+                                                     name='EncoderWatchdog',daemon=True)
+            self._watchdog_thread.start()
+
         self._encoder_thread.start()
+
+    def _watch_encoder(self) -> None:
+        while not self._watchdog_stop.wait(.25):
+            started = self._pipe_write_started
+            if started and time.monotonic() - started > 15:
+                _LOG.error('Encoder stalled: backend=%s resolution=%dx%d; stopping child process',
+                           self._encoder,self._encoded_width,self._encoded_height)
+                self._write_error = TimeoutError('Encoder stopped accepting frames for 15 seconds')
+                self.cancel_pending()
+                return
 
     # ======================================================================
     # Temporary files
@@ -643,10 +686,7 @@ class Mp4VideoWriter:
         return Path(path)
 
     def _cleanup_temp_video(self) -> None:
-        if (
-            self._temp_video_path
-            != self._output_path
-        ):
+        if self._temp_video_path != self._output_path:
             self._temp_video_path.unlink(
                 missing_ok=True,
             )
@@ -691,10 +731,7 @@ class Mp4VideoWriter:
 
         # Fast validation.
         if frame.dtype != np.uint8:
-            raise TypeError(
-                f"Video frames must be uint8, "
-                f"got {frame.dtype}"
-            )
+            raise TypeError(f"Video frames must be uint8, got {frame.dtype}")
 
         if (
             frame.ndim != 3
@@ -715,17 +752,13 @@ class Mp4VideoWriter:
         # This should be the overwhelmingly common case.
         # ==============================================================
 
-        if (
-            not self._pad_right
-            and not self._pad_bottom
-            and frame.flags.c_contiguous
-        ):
-            return frame
+        if not self._pad_right and not self._pad_bottom and frame.flags.c_contiguous:
+            # An SDK node may reuse its output array on the next evaluation.
+            # The asynchronous queue must own a stable snapshot; libav still
+            # reads this owned NumPy buffer directly without another RGB copy.
+            return frame.copy()
 
-        if (
-            not self._pad_right
-            and not self._pad_bottom
-        ):
+        if not self._pad_right and not self._pad_bottom:
             return np.ascontiguousarray(
                 frame,
             )
@@ -744,14 +777,14 @@ class Mp4VideoWriter:
         )
 
         padded[
-            :self._height,
-            :self._width,
+            : self._height,
+            : self._width,
         ] = frame
 
         if self._pad_right:
             padded[
-                :self._height,
-                self._width:,
+                : self._height,
+                self._width :,
             ] = frame[
                 :,
                 -1:,
@@ -760,10 +793,10 @@ class Mp4VideoWriter:
 
         if self._pad_bottom:
             padded[
-                self._height:,
+                self._height :,
                 :,
             ] = padded[
-                self._height - 1:self._height,
+                self._height - 1 : self._height,
                 :,
             ]
 
@@ -776,14 +809,16 @@ class Mp4VideoWriter:
     def _encoder_worker(self) -> None:
         """Continuously feed frames into FFmpeg."""
 
+        if self._native_encoder is not None:
+            self._libav_worker()
+            return
+
         process = self._process
         stdin = process.stdin
         frame_queue = self._frame_queue
 
         if stdin is None:
-            self._write_error = RuntimeError(
-                "FFmpeg stdin is unavailable"
-            )
+            self._write_error = RuntimeError("FFmpeg stdin is unavailable")
             return
 
         # Local bindings eliminate repeated attribute lookups.
@@ -800,28 +835,25 @@ class Mp4VideoWriter:
                         return
 
                     # Direct view over NumPy memory.
-                    view = memoryview(item).cast('B')
+                    view = memoryview(item).cast("B")
 
                     # Usually one write is sufficient, but FileIO is allowed
                     # to perform partial writes.
                     while view:
+                        self._pipe_write_started = time.monotonic()
                         written = write(view)
+                        self._pipe_write_started = 0.0
 
                         if written is None:
-                            raise BrokenPipeError(
-                                "FFmpeg stdin write returned None"
-                            )
+                            raise BrokenPipeError("FFmpeg stdin write returned None")
 
                         if written <= 0:
-                            raise BrokenPipeError(
-                                "FFmpeg stdin closed"
-                            )
+                            raise BrokenPipeError("FFmpeg stdin closed")
 
-                        view = view[
-                            written:
-                        ]
+                        view = view[written:]
 
                 finally:
+                    self._pipe_write_started = 0.0
                     task_done()
 
         except (
@@ -831,12 +863,7 @@ class Mp4VideoWriter:
             error = self._read_ffmpeg_error()
 
             self._write_error = RuntimeError(
-                "FFmpeg stopped accepting frames"
-                + (
-                    f": {error}"
-                    if error
-                    else ""
-                )
+                "FFmpeg stopped accepting frames" + (f": {error}" if error else "")
             )
 
             self._write_error.__cause__ = exc
@@ -911,11 +938,7 @@ class Mp4VideoWriter:
         audio_wave = self._ensure_audio_writer()
 
         # memoryview avoids an intermediate bytes copy.
-        audio_wave.writeframes(
-            memoryview(
-                self._audio_buffer
-            )
-        )
+        audio_wave.writeframes(memoryview(self._audio_buffer))
 
         self._audio_buffer.clear()
         self._audio_buffer_bytes = 0
@@ -944,10 +967,7 @@ class Mp4VideoWriter:
             )
 
         elif source.ndim != 2:
-            raise ValueError(
-                "Audio samples must be 1D or 2D, "
-                f"got {source.shape}"
-            )
+            raise ValueError(f"Audio samples must be 1D or 2D, got {source.shape}")
 
         samples = source.astype(
             np.float32,
@@ -963,14 +983,11 @@ class Mp4VideoWriter:
         if channels > self._audio_channels:
             samples = samples[
                 :,
-                :self._audio_channels,
+                : self._audio_channels,
             ]
 
         elif channels < self._audio_channels:
-            if (
-                channels == 1
-                and self._audio_channels == 2
-            ):
+            if channels == 1 and self._audio_channels == 2:
                 samples = np.repeat(
                     samples,
                     2,
@@ -981,8 +998,7 @@ class Mp4VideoWriter:
                 padding = np.zeros(
                     (
                         samples.shape[0],
-                        self._audio_channels
-                        - channels,
+                        self._audio_channels - channels,
                     ),
                     dtype=np.float32,
                 )
@@ -1004,15 +1020,9 @@ class Mp4VideoWriter:
         )
 
         if source_rate <= 0:
-            raise ValueError(
-                f"Invalid audio sample rate: "
-                f"{source_rate}"
-            )
+            raise ValueError(f"Invalid audio sample rate: {source_rate}")
 
-        if (
-            source_rate
-            != self._audio_sample_rate
-        ):
+        if source_rate != self._audio_sample_rate:
             samples = _resample_audio(
                 samples,
                 source_rate,
@@ -1062,16 +1072,12 @@ class Mp4VideoWriter:
         audio: AudioData | None = None,
     ) -> None:
         if self._closed:
-            raise RuntimeError(
-                "Cannot write to a closed Mp4VideoWriter"
-            )
+            raise RuntimeError("Cannot write to a closed Mp4VideoWriter")
 
         write_error = self._write_error
 
         if write_error is not None:
-            raise RuntimeError(
-                "FFmpeg encoder failed"
-            ) from write_error
+            raise RuntimeError("FFmpeg encoder failed") from write_error
 
         # ==============================================================
         # VIDEO
@@ -1081,7 +1087,7 @@ class Mp4VideoWriter:
             frame_rgb,
         )
 
-        # Borrowed storage: the caller must not mutate a submitted frame.
+        # Prepared storage belongs to the queue; callers may reuse their array.
         # Polling also observes an encoder that dies while backpressure applies.
         self._enqueue(frame)
 
@@ -1093,28 +1099,23 @@ class Mp4VideoWriter:
         # ==============================================================
 
         if self._include_audio:
-            first, last = frame_sample_bounds(self._frame_count, self._fps, self._audio_sample_rate)
-            block = convert_audio(audio, self._audio_sample_rate, self._audio_channels, last - first)
+            first, last = frame_sample_bounds(
+                self._frame_count, self._fps, self._audio_sample_rate
+            )
+            block = convert_audio(
+                audio, self._audio_sample_rate, self._audio_channels, last - first
+            )
             audio_pcm = self._prepare_audio(block)
 
             if audio_pcm.size:
                 with self._audio_lock:
                     # Extend from the NumPy buffer without calling
                     # .tobytes() explicitly.
-                    self._audio_buffer.extend(
-                        memoryview(
-                            audio_pcm
-                        ).cast("B")
-                    )
+                    self._audio_buffer.extend(memoryview(audio_pcm).cast("B"))
 
-                    self._audio_buffer_bytes = (
-                        len(self._audio_buffer)
-                    )
+                    self._audio_buffer_bytes = len(self._audio_buffer)
 
-                    if (
-                        self._audio_buffer_bytes
-                        >= self._audio_flush_bytes
-                    ):
+                    if self._audio_buffer_bytes >= self._audio_flush_bytes:
                         self._flush_audio_buffer_locked()
 
         self._frame_count += 1
@@ -1130,7 +1131,7 @@ class Mp4VideoWriter:
     def _enqueue(self, item: np.ndarray | _EndOfFrames) -> None:
         while True:
             if self._write_error is not None or not self._encoder_thread.is_alive():
-                raise RuntimeError('FFmpeg encoder stopped') from self._write_error
+                raise RuntimeError("FFmpeg encoder stopped") from self._write_error
             try:
                 self._frame_queue.put(item, timeout=0.05)
                 return
@@ -1142,23 +1143,37 @@ class Mp4VideoWriter:
         if self._closed:
             return
         self._closed = True
-        if self._process.poll() is None:
-            self._process.kill()
-        self._process.wait(timeout=5)
+        self.cancel_pending()
+        self._watchdog_stop.set()
+        if self._process is not None:
+            self._process.wait(timeout=5)
         # Wake an encoder waiting for a frame rather than inside write().
         try:
             self._frame_queue.put_nowait(_END)
         except queue.Full:
             pass
         self._encoder_thread.join(timeout=5)
-        if self._process.stdin is not None:
-            self._process.stdin.close()
+        if self._process is not None and self._process.stdin is not None:
+            try:
+                self._process.stdin.close()
+            except (BrokenPipeError, OSError):
+                pass
         if self._audio_wave is not None:
             self._audio_wave.close()
             self._audio_wave = None
         self._cleanup_audio()
         self._stderr_file.close()
         self._cleanup_temp_video()
+
+    def cancel_pending(self) -> None:
+        """Thread-safe request; resource cleanup remains on the owner thread."""
+        if self._native_encoder is not None:
+            self._native_encoder.cancelled.set()
+        if self._process is not None and self._process.poll() is None:
+            try:
+                self._process.kill()
+            except OSError:
+                pass
 
     # ======================================================================
     # Close
@@ -1180,13 +1195,13 @@ class Mp4VideoWriter:
             # but before the producer inserts the end marker.
             self._encoder_thread.join(timeout=300)
             if self._encoder_thread.is_alive():
-                raise TimeoutError('FFmpeg frame submission timed out')
+                raise TimeoutError("FFmpeg frame submission timed out")
 
             # ==============================================================
             # Close FFmpeg stdin.
             # ==============================================================
 
-            stdin = self._process.stdin
+            stdin = self._process.stdin if self._process is not None else None
 
             if stdin is not None:
                 try:
@@ -1201,31 +1216,25 @@ class Mp4VideoWriter:
             # Wait for encode.
             # ==============================================================
 
-            return_code = self._process.wait(
-                timeout=300,
+            return_code = (
+                self._process.wait(
+                    timeout=300,
+                )
+                if self._process is not None
+                else 0
             )
 
             stderr = self._read_ffmpeg_error()
 
             if self._write_error is not None:
                 raise RuntimeError(
-                    "FFmpeg encoding failed"
-                    + (
-                        f": {stderr}"
-                        if stderr
-                        else ""
-                    )
+                    "FFmpeg encoding failed" + (f": {stderr}" if stderr else "")
                 ) from self._write_error
 
             if return_code != 0:
                 raise RuntimeError(
                     "FFmpeg video encode failed "
-                    f"({return_code})"
-                    + (
-                        f": {stderr}"
-                        if stderr
-                        else ""
-                    )
+                    f"({return_code})" + (f": {stderr}" if stderr else "")
                 )
 
             # ==============================================================
@@ -1245,22 +1254,17 @@ class Mp4VideoWriter:
             # Mux.
             # ==============================================================
 
-            if (
-                self._include_audio
-                and self._audio_wav_path is not None
-            ):
+            if self._include_audio and self._audio_wav_path is not None:
                 self._mux_audio()
 
-            elif (
-                self._temp_video_path
-                != self._output_path
-            ):
+            elif self._temp_video_path != self._output_path:
                 os.replace(
                     self._temp_video_path,
                     self._output_path,
                 )
 
         finally:
+            self._watchdog_stop.set()
             self._cleanup_audio()
 
             try:
@@ -1268,7 +1272,7 @@ class Mp4VideoWriter:
             except Exception:
                 pass
 
-            if self._process.poll() is None:
+            if self._process is not None and self._process.poll() is None:
                 try:
                     self._process.kill()
                     self._process.wait(
@@ -1313,41 +1317,30 @@ class Mp4VideoWriter:
         try:
             cmd = [
                 self._ffmpeg_exe,
-
                 "-hide_banner",
                 "-loglevel",
                 "error",
                 "-nostdin",
                 "-y",
-
                 "-i",
                 str(self._temp_video_path),
-
                 "-i",
                 audio_path,
-
                 "-map",
                 "0:v:0",
-
                 "-map",
                 "1:a:0",
-
                 # Zero video re-encoding.
                 "-c:v",
                 "copy",
-
                 "-c:a",
                 "aac",
-
                 "-ar",
                 str(self._audio_sample_rate),
-
                 "-ac",
                 str(self._audio_channels),
-
                 "-movflags",
                 "+faststart",
-
                 str(temp_output),
             ]
 
@@ -1363,19 +1356,18 @@ class Mp4VideoWriter:
                 stderr_file.flush()
                 stderr_file.seek(0)
 
-                error = stderr_file.read().decode(
-                    "utf-8",
-                    errors="replace",
-                ).strip()
+                error = (
+                    stderr_file.read()
+                    .decode(
+                        "utf-8",
+                        errors="replace",
+                    )
+                    .strip()
+                )
 
                 raise RuntimeError(
                     "FFmpeg audio mux failed "
-                    f"({result.returncode})"
-                    + (
-                        f": {error}"
-                        if error
-                        else ""
-                    )
+                    f"({result.returncode})" + (f": {error}" if error else "")
                 )
 
             os.replace(
@@ -1431,3 +1423,25 @@ class Mp4VideoWriter:
             self.abort()
         else:
             self.close()
+
+    def _libav_worker(self) -> None:
+        backend = self._native_encoder
+        try:
+            while True:
+                item = self._frame_queue.get()
+                try:
+                    if item is _END:
+                        backend.close()
+                        return
+                    backend.write(item)
+                finally:
+                    self._frame_queue.task_done()
+        except BaseException as exc:
+            self._write_error = exc
+            backend.close(flush=False)
+            while True:
+                try:
+                    self._frame_queue.get_nowait()
+                except queue.Empty:
+                    break
+                self._frame_queue.task_done()

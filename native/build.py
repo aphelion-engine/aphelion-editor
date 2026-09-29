@@ -40,6 +40,10 @@ EDITOR_ROOT = NATIVE_DIR.parent
 SRC_DIR = EDITOR_ROOT / "src"
 SOURCE = NATIVE_DIR / "aphelion_native.c"
 FRAME_RENDER_SOURCE = NATIVE_DIR / "frame_render.c"
+FX_COLOR_SOURCE = NATIVE_DIR / "fx_color.c"
+FX_BINDING_SOURCE = NATIVE_DIR / "fx_binding.c"
+FX_GEOMETRY_SOURCE = NATIVE_DIR / "fx_geometry.c"
+FX_EXTENDED_SOURCE = NATIVE_DIR / "fx_extended.c"
 MODULE_NAME = "aphelion_native"
 
 #: The name the extension is *installed* under, without the ABI tag.
@@ -154,7 +158,8 @@ def _extension():
     """Return a configured ``Extension`` for the kernels."""
     return _extension_class()(
         MODULE_NAME,
-        sources=[str(SOURCE), str(FRAME_RENDER_SOURCE)],
+        sources=[str(SOURCE), str(FRAME_RENDER_SOURCE), str(FX_COLOR_SOURCE),
+                 str(FX_BINDING_SOURCE), str(FX_GEOMETRY_SOURCE), str(FX_EXTENDED_SOURCE)],
         include_dirs=[],
         extra_compile_args=_EXTRA_COMPILE_ARGS[_compiler_family()],
     )

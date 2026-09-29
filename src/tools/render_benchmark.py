@@ -21,11 +21,29 @@ import numpy as np
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--output', type=Path)
+    parser.add_argument('--compare', type=Path, nargs=2, metavar=('BEFORE','AFTER'))
+    parser.add_argument('--regression-threshold', type=float, default=.3)
     parser.add_argument('--work', type=Path, default=Path('benchmarks/media'))
     parser.add_argument('--frames', type=int, default=48)
     parser.add_argument('--repeats', type=int, default=3)
     args = parser.parse_args()
+    if args.compare:
+        before, after = [json.loads(path.read_text()) for path in args.compare]
+        previous = {row['case']: row['median'] for row in before['results']}
+        regressions = []
+        for row in after['results']:
+            if row['case'] not in previous:
+                continue
+            for key, value in row['median'].items():
+                old = previous[row['case']][key]
+                change = value / old - 1 if old else 0
+                print(f"{row['case']} {key}: {old:.2f} -> {value:.2f} ({change:+.1%})")
+                if change < -args.regression_threshold:
+                    regressions.append((row['case'],key))
+        raise SystemExit(1 if regressions else 0)
+    if args.output is None:
+        parser.error('--output is required unless --compare is used')
     from core.native import kernels, probe
     from render.video_writer import Mp4VideoWriter, VideoEncoder
     from render.video_decoder import VideoDecoder
@@ -34,6 +52,13 @@ def main() -> None:
     report = {'machine': platform.platform(), 'python': platform.python_version(),
               'cpu_count': os.cpu_count(), 'native': probe().to_dict(),
               'frames': args.frames, 'repeats': args.repeats, 'results': []}
+    import hashlib
+    import av
+    report['av_version'] = av.__version__
+    report['native_sha256'] = hashlib.sha256(Path(probe().module_path).read_bytes()).hexdigest()
+    report['ffmpeg'] = imageio_ffmpeg.get_ffmpeg_version()
+    report['fixture'] = 'FFmpeg testsrc2, ultrafast, yuv420p; Viewer exposure 120%; CPU FAST export'
+    report['preview_note'] = 'Graph throughput, default preview width; excludes Qt presentation and audio'
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
     for width, height, fps, codec in [(1920,1080,30,'h264'), (1920,1080,60,'h264'),
                                      (3840,2160,30,'h264'), (3840,2160,60,'h264'),

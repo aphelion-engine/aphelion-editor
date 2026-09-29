@@ -47,6 +47,7 @@
 #include <string.h>
 
 #include "frame_render.h"
+#include "fx_binding.h"
 
 /* ---------------------------------------------------------------------- */
 /* Geometry helpers                                                        */
@@ -755,6 +756,23 @@ static PyMethodDef aphelion_methods[] = {
      "render_rgb_u8(src, dst, width, height, exposure, flip_h, flip_v) -> None"},
     {"quantize_f32_u8", aphelion_quantize_f32_u8, METH_VARARGS,
      "quantize_f32_u8(src, dst, width, height) -> None"},
+    {"fx_cube", aphelion_fx_cube_binding, METH_VARARGS, "Apply a trilinear 3D LUT with bounded scratch."},
+    {"fx_extended", aphelion_fx_extended_binding, METH_VARARGS, "Execute a fused multi-input effect."},
+    {"fx_blend", aphelion_fx_blend_binding, METH_VARARGS, "Fuse RGB blend, mask and opacity into caller output."},
+    {"fx_apply", aphelion_fx_apply_binding, METH_VARARGS,
+     "Apply a registered native effect to caller-owned float32 RGB buffers."},
+    {"fx_geometry", aphelion_fx_geometry_binding, METH_VARARGS,
+     "Apply a registered coordinate effect using a native resampling loop."},
+    {"fx_exposure_contrast", aphelion_fx_exposure_contrast, METH_VARARGS,
+     "Apply fused exposure/contrast to float RGB frames."},
+    {"fx_invert", aphelion_fx_invert, METH_VARARGS,
+     "Invert float RGB channels."},
+    {"fx_posterize", aphelion_fx_posterize, METH_VARARGS,
+     "Posterize float RGB channels."},
+    {"fx_monochrome", aphelion_fx_monochrome, METH_VARARGS,
+     "Convert float RGB to weighted monochrome."},
+    {"fx_threshold", aphelion_fx_threshold, METH_VARARGS,
+     "Apply an RGB luminance threshold."},
     {NULL, NULL, 0, NULL}
 };
 
@@ -791,7 +809,7 @@ PyInit_aphelion_native(void)
         return NULL;
     }
 
-    if (PyModule_AddIntConstant(module, "APHELION_NATIVE_VERSION", 2) < 0) {
+    if (PyModule_AddIntConstant(module, "APHELION_NATIVE_VERSION", 4) < 0) {
         Py_DECREF(module);
         return NULL;
     }

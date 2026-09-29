@@ -60,6 +60,28 @@ def apply_color_grade(
     ):
         return np.ascontiguousarray(frame)
 
+    from effects.native_fx import color_grade as dispatch
+    parameters = _native_grade_parameters(
+        exposure=exposure, contrast=contrast, saturation=saturation,
+        temperature=temperature, tint=tint, lift_rgb=lift_rgb,
+        gamma_rgb=gamma_rgb, gain_rgb=gain_rgb, amount=amount_f,
+    )
+    return dispatch(
+        frame, parameters=parameters,
+        reference=lambda: _apply_color_grade_python(
+            frame, exposure=exposure, contrast=contrast, saturation=saturation,
+            temperature=temperature, tint=tint, lift_rgb=lift_rgb,
+            gamma_rgb=gamma_rgb, gain_rgb=gain_rgb, amount=amount_f,
+        ),
+    )
+
+
+def _apply_color_grade_python(
+    frame: np.ndarray, *, exposure: float, contrast: float, saturation: float,
+    temperature: float, tint: float, lift_rgb: tuple[int, int, int],
+    gamma_rgb: tuple[int, int, int], gain_rgb: tuple[int, int, int], amount: float,
+) -> np.ndarray:
+    """NumPy reference implementation retained for fallback and equivalence tests."""
     scale = np.float32((2.0 ** float(exposure)) * float(contrast))
     bias = np.float32(0.5 - 0.5 * float(contrast))
     sat = np.float32(saturation)
@@ -109,9 +131,9 @@ def apply_color_grade(
 
     np.clip(work, 0.0, 1.0, out=work)
 
-    if amount_f < 1.0 - _EPS:
-        mix = np.float32(amount_f)
-        inv = np.float32(1.0 - amount_f)
+    if amount < 1.0 - _EPS:
+        mix = np.float32(amount)
+        inv = np.float32(1.0 - amount)
         work *= mix
         work += src * inv
 
@@ -120,6 +142,36 @@ def apply_color_grade(
     if frame.shape[2] > 3:
         out[:, :, 3:] = frame[:, :, 3:]
     return np.ascontiguousarray(out)
+
+
+def _native_grade_parameters(
+    *, exposure: float, contrast: float, saturation: float, temperature: float,
+    tint: float, lift_rgb: tuple[int, int, int], gamma_rgb: tuple[int, int, int],
+    gain_rgb: tuple[int, int, int], amount: float,
+) -> tuple[float, ...]:
+    """Pack color-grade controls for the C registry.
+
+    Layout: scale, bias, saturation, temperature channel offsets RGB, lift,
+    gamma and gain RGB offsets, amount mix, whether LGG is active.
+    """
+    temp = float(np.clip(temperature, -1.0, 1.0))
+    green_magenta = float(np.clip(tint, -1.0, 1.0))
+    lift = _offset(lift_rgb).reshape(3)
+    gamma = _offset(gamma_rgb).reshape(3)
+    gain = _offset(gain_rgb).reshape(3)
+    return (
+        float((2.0 ** float(exposure)) * float(contrast)),
+        float(0.5 - 0.5 * float(contrast)),
+        float(saturation),
+        temp * 0.08 - green_magenta * 0.03,
+        green_magenta * 0.06,
+        -temp * 0.08 - green_magenta * 0.03,
+        *(float(value) for value in lift),
+        *(float(value) for value in gamma),
+        *(float(value) for value in gain),
+        float(amount),
+        1.0 if not _is_neutral_rgb(lift_rgb, gamma_rgb, gain_rgb) else 0.0,
+    )
 
 
 def _is_neutral_rgb(

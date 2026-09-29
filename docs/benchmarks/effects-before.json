@@ -1,0 +1,514 @@
+{
+  "platform": "Windows-11-10.0.26200-SP0",
+  "backend": "python",
+  "repeats": 3,
+  "results": [
+    {
+      "effect": "exposure_contrast",
+      "width": 1280,
+      "height": 720,
+      "median_ms": 14.566200086846948,
+      "samples_ms": [
+        14.64119995944202,
+        11.770599987357855,
+        14.566200086846948
+      ],
+      "cpu_ms": 15.625,
+      "python_numpy_peak_bytes": 22118764
+    },
+    {
+      "effect": "posterize",
+      "width": 1280,
+      "height": 720,
+      "median_ms": 21.53959998395294,
+      "samples_ms": [
+        19.197799963876605,
+        21.722899982705712,
+        21.53959998395294
+      ],
+      "cpu_ms": 31.25,
+      "python_numpy_peak_bytes": 22118740
+    },
+    {
+      "effect": "threshold",
+      "width": 1280,
+      "height": 720,
+      "median_ms": 100.1485000597313,
+      "samples_ms": [
+        105.99389998242259,
+        85.22180002182722,
+        100.1485000597313
+      ],
+      "cpu_ms": 125.0,
+      "python_numpy_peak_bytes": 25757516
+    },
+    {
+      "effect": "levels",
+      "width": 1280,
+      "height": 720,
+      "median_ms": 100.2588999690488,
+      "samples_ms": [
+        112.94229992199689,
+        100.2588999690488,
+        96.30209999158978
+      ],
+      "cpu_ms": 78.125,
+      "python_numpy_peak_bytes": 44238412
+    },
+    {
+      "effect": "shadows_highlights",
+      "width": 1280,
+      "height": 720,
+      "median_ms": 79.78929998353124,
+      "samples_ms": [
+        74.64840007014573,
+        81.64980006404221,
+        79.78929998353124
+      ],
+      "cpu_ms": 78.125,
+      "python_numpy_peak_bytes": 33178856
+    },
+    {
+      "effect": "color_balance",
+      "width": 1280,
+      "height": 720,
+      "median_ms": 72.49390007928014,
+      "samples_ms": [
+        84.8194999853149,
+        72.07260001450777,
+        72.49390007928014
+      ],
+      "cpu_ms": 78.125,
+      "python_numpy_peak_bytes": 33178580
+    },
+    {
+      "effect": "color_grade",
+      "width": 1280,
+      "height": 720,
+      "median_ms": 224.58000003825873,
+      "samples_ms": [
+        222.86980005446821,
+        231.06929997447878,
+        224.58000003825873
+      ],
+      "cpu_ms": 203.125,
+      "python_numpy_peak_bytes": 44239048
+    },
+    {
+      "effect": "overlay",
+      "width": 1280,
+      "height": 720,
+      "median_ms": 117.11120000109076,
+      "samples_ms": [
+        113.67240000981838,
+        117.11120000109076,
+        119.24100003670901
+      ],
+      "cpu_ms": 109.375,
+      "python_numpy_peak_bytes": 47923944
+    },
+    {
+      "effect": "chroma_key",
+      "width": 1280,
+      "height": 720,
+      "median_ms": 57.31050006579608,
+      "samples_ms": [
+        56.09990004450083,
+        57.31050006579608,
+        61.61540001630783
+      ],
+      "cpu_ms": 46.875,
+      "python_numpy_peak_bytes": 29491908
+    },
+    {
+      "effect": "spill",
+      "width": 1280,
+      "height": 720,
+      "median_ms": 17.17810006812215,
+      "samples_ms": [
+        19.641300081275403,
+        16.722499975003302,
+        17.17810006812215
+      ],
+      "cpu_ms": 15.625,
+      "python_numpy_peak_bytes": 25806868
+    },
+    {
+      "effect": "gaussian_blur",
+      "width": 1280,
+      "height": 720,
+      "median_ms": 12.677100021392107,
+      "samples_ms": [
+        13.78050004132092,
+        12.677100021392107,
+        11.663899989798665
+      ],
+      "cpu_ms": 15.625,
+      "python_numpy_peak_bytes": 11059296
+    },
+    {
+      "effect": "transform",
+      "width": 1280,
+      "height": 720,
+      "median_ms": 6.169699947349727,
+      "samples_ms": [
+        7.901500095613301,
+        6.169699947349727,
+        5.590900080278516
+      ],
+      "cpu_ms": 0.0,
+      "python_numpy_peak_bytes": 11059488
+    },
+    {
+      "effect": "exposure_contrast",
+      "width": 1920,
+      "height": 1080,
+      "median_ms": 20.5914000980556,
+      "samples_ms": [
+        20.5914000980556,
+        20.05169994663447,
+        22.59149996098131
+      ],
+      "cpu_ms": 31.25,
+      "python_numpy_peak_bytes": 49766764
+    },
+    {
+      "effect": "posterize",
+      "width": 1920,
+      "height": 1080,
+      "median_ms": 31.31370001938194,
+      "samples_ms": [
+        31.31370001938194,
+        35.489900037646294,
+        31.045799958519638
+      ],
+      "cpu_ms": 31.25,
+      "python_numpy_peak_bytes": 49766740
+    },
+    {
+      "effect": "threshold",
+      "width": 1920,
+      "height": 1080,
+      "median_ms": 136.07839995529503,
+      "samples_ms": [
+        99.28320010658354,
+        136.07839995529503,
+        195.26730000507087
+      ],
+      "cpu_ms": 140.625,
+      "python_numpy_peak_bytes": 57939404
+    },
+    {
+      "effect": "levels",
+      "width": 1920,
+      "height": 1080,
+      "median_ms": 325.720899971202,
+      "samples_ms": [
+        335.1130000082776,
+        318.9775999635458,
+        325.720899971202
+      ],
+      "cpu_ms": 312.5,
+      "python_numpy_peak_bytes": 99533572
+    },
+    {
+      "effect": "shadows_highlights",
+      "width": 1920,
+      "height": 1080,
+      "median_ms": 386.3984999479726,
+      "samples_ms": [
+        314.97310008853674,
+        401.23429999221116,
+        386.3984999479726
+      ],
+      "cpu_ms": 234.375,
+      "python_numpy_peak_bytes": 74650736
+    },
+    {
+      "effect": "color_balance",
+      "width": 1920,
+      "height": 1080,
+      "median_ms": 303.0866999179125,
+      "samples_ms": [
+        316.51230005081743,
+        300.625600037165,
+        303.0866999179125
+      ],
+      "cpu_ms": 250.0,
+      "python_numpy_peak_bytes": 74650580
+    },
+    {
+      "effect": "color_grade",
+      "width": 1920,
+      "height": 1080,
+      "median_ms": 995.9093999350443,
+      "samples_ms": [
+        995.9093999350443,
+        1001.3555999612436,
+        971.2016000412405
+      ],
+      "cpu_ms": 796.875,
+      "python_numpy_peak_bytes": 99535048
+    },
+    {
+      "effect": "overlay",
+      "width": 1920,
+      "height": 1080,
+      "median_ms": 502.2333998931572,
+      "samples_ms": [
+        592.6804000046104,
+        475.273699965328,
+        502.2333998931572
+      ],
+      "cpu_ms": 390.625,
+      "python_numpy_peak_bytes": 107827944
+    },
+    {
+      "effect": "chroma_key",
+      "width": 1920,
+      "height": 1080,
+      "median_ms": 272.84360001794994,
+      "samples_ms": [
+        364.6135999588296,
+        269.4958000211045,
+        272.84360001794994
+      ],
+      "cpu_ms": 250.0,
+      "python_numpy_peak_bytes": 66355908
+    },
+    {
+      "effect": "spill",
+      "width": 1920,
+      "height": 1080,
+      "median_ms": 48.977299942635,
+      "samples_ms": [
+        46.84939992148429,
+        52.232999936677516,
+        48.977299942635
+      ],
+      "cpu_ms": 46.875,
+      "python_numpy_peak_bytes": 58062868
+    },
+    {
+      "effect": "gaussian_blur",
+      "width": 1920,
+      "height": 1080,
+      "median_ms": 22.88930001668632,
+      "samples_ms": [
+        17.407799954526126,
+        22.88930001668632,
+        24.118199944496155
+      ],
+      "cpu_ms": 93.75,
+      "python_numpy_peak_bytes": 24883296
+    },
+    {
+      "effect": "transform",
+      "width": 1920,
+      "height": 1080,
+      "median_ms": 15.79990005120635,
+      "samples_ms": [
+        16.461699968203902,
+        13.27980007044971,
+        15.79990005120635
+      ],
+      "cpu_ms": 0.0,
+      "python_numpy_peak_bytes": 24883488
+    },
+    {
+      "effect": "exposure_contrast",
+      "width": 2560,
+      "height": 1440,
+      "median_ms": 61.18490011431277,
+      "samples_ms": [
+        49.17729995213449,
+        61.18490011431277,
+        86.98849997017533
+      ],
+      "cpu_ms": 62.5,
+      "python_numpy_peak_bytes": 88473964
+    },
+    {
+      "effect": "posterize",
+      "width": 2560,
+      "height": 1440,
+      "median_ms": 86.83549996931106,
+      "samples_ms": [
+        92.47069992125034,
+        86.83549996931106,
+        81.2281999969855
+      ],
+      "cpu_ms": 78.125,
+      "python_numpy_peak_bytes": 88473940
+    },
+    {
+      "effect": "threshold",
+      "width": 2560,
+      "height": 1440,
+      "median_ms": 403.1134999822825,
+      "samples_ms": [
+        403.1134999822825,
+        425.9683999698609,
+        386.5316999144852
+      ],
+      "cpu_ms": 343.75,
+      "python_numpy_peak_bytes": 102983756
+    },
+    {
+      "effect": "levels",
+      "width": 2560,
+      "height": 1440,
+      "median_ms": 750.6378999678418,
+      "samples_ms": [
+        770.0066999532282,
+        750.6378999678418,
+        686.3488000817597
+      ],
+      "cpu_ms": 671.875,
+      "python_numpy_peak_bytes": 176947972
+    },
+    {
+      "effect": "shadows_highlights",
+      "width": 2560,
+      "height": 1440,
+      "median_ms": 756.9853999884799,
+      "samples_ms": [
+        528.4567000344396,
+        879.8690000548959,
+        756.9853999884799
+      ],
+      "cpu_ms": 375.0,
+      "python_numpy_peak_bytes": 132711536
+    },
+    {
+      "effect": "color_balance",
+      "width": 2560,
+      "height": 1440,
+      "median_ms": 556.0688000405207,
+      "samples_ms": [
+        354.38489995431155,
+        1056.71550007537,
+        556.0688000405207
+      ],
+      "cpu_ms": 359.375,
+      "python_numpy_peak_bytes": 132711380
+    },
+    {
+      "effect": "color_grade",
+      "width": 2560,
+      "height": 1440,
+      "median_ms": 1436.6224000696093,
+      "samples_ms": [
+        1265.1112000457942,
+        1436.6224000696093,
+        1582.304900046438
+      ],
+      "cpu_ms": 1343.75,
+      "python_numpy_peak_bytes": 176949448
+    },
+    {
+      "effect": "overlay",
+      "width": 2560,
+      "height": 1440,
+      "median_ms": 426.20449990499765,
+      "samples_ms": [
+        618.7401000643149,
+        426.20449990499765,
+        425.5634000292048
+      ],
+      "cpu_ms": 437.5,
+      "python_numpy_peak_bytes": 191693544
+    },
+    {
+      "effect": "chroma_key",
+      "width": 2560,
+      "height": 1440,
+      "median_ms": 297.6075999904424,
+      "samples_ms": [
+        296.8959999270737,
+        297.6075999904424,
+        302.5748999789357
+      ],
+      "cpu_ms": 328.125,
+      "python_numpy_peak_bytes": 117965508
+    },
+    {
+      "effect": "spill",
+      "width": 2560,
+      "height": 1440,
+      "median_ms": 99.95900001376867,
+      "samples_ms": [
+        106.9383000722155,
+        99.95900001376867,
+        99.92569999303669
+      ],
+      "cpu_ms": 93.75,
+      "python_numpy_peak_bytes": 103221268
+    },
+    {
+      "effect": "gaussian_blur",
+      "width": 2560,
+      "height": 1440,
+      "median_ms": 34.57160003017634,
+      "samples_ms": [
+        34.57160003017634,
+        38.75379997771233,
+        27.477100025862455
+      ],
+      "cpu_ms": 93.75,
+      "python_numpy_peak_bytes": 44236896
+    },
+    {
+      "effect": "transform",
+      "width": 2560,
+      "height": 1440,
+      "median_ms": 23.086900007911026,
+      "samples_ms": [
+        23.086900007911026,
+        28.321400051936507,
+        19.21469997614622
+      ],
+      "cpu_ms": 93.75,
+      "python_numpy_peak_bytes": 44237088
+    },
+    {
+      "effect": "exposure_contrast",
+      "width": 3840,
+      "height": 2160,
+      "median_ms": 131.42649992369115,
+      "samples_ms": [
+        129.4188000028953,
+        131.42649992369115,
+        147.93790003750473
+      ],
+      "cpu_ms": 125.0,
+      "python_numpy_peak_bytes": 199065964
+    },
+    {
+      "effect": "posterize",
+      "width": 3840,
+      "height": 2160,
+      "median_ms": 218.0543999420479,
+      "samples_ms": [
+        216.81140002328902,
+        218.0543999420479,
+        220.29679990373552
+      ],
+      "cpu_ms": 203.125,
+      "python_numpy_peak_bytes": 199065940
+    },
+    {
+      "effect": "threshold",
+      "width": 3840,
+      "height": 2160,
+      "median_ms": 768.1758000981063,
+      "samples_ms": [
+        768.1758000981063,
+        708.80619995296,
+        889.6070999326184
+      ],
+      "cpu_ms": 718.75,
+      "python_numpy_peak_bytes": 231722188
+    }
+  ]
+}

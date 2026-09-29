@@ -8,6 +8,7 @@ visually connected to the same dialog the whole time the export runs.
 from __future__ import annotations
 
 from pathlib import Path
+import time
 
 from PyQt6.QtGui import QCloseEvent
 from PyQt6.QtWidgets import (
@@ -32,7 +33,7 @@ from PyQt6.QtWidgets import (
 from config.theme import EXPORT_DIALOG_STYLE
 from core.project import Project
 from render.export_worker import ExportFormat, ExportRequest, ExportWorker
-from render.video_writer import ExportQuality
+from render.video_writer import ExportQuality, VideoEncoder
 
 
 class ExportDialog(QDialog):
@@ -53,6 +54,8 @@ class ExportDialog(QDialog):
         self._worker: ExportWorker | None = None
         self._output_path: Path | None = None
         self._cancel_requested: bool = False
+        self._export_started = 0.0
+        self._pending_result: tuple[bool, str] | None = None
 
         self.setObjectName("ExportDialog")
         self.setWindowTitle("Export")
@@ -114,6 +117,13 @@ class ExportDialog(QDialog):
             "Draft is fastest. Higher quality presets encode slower but compress better."
         )
         output_form.addRow("Speed / Quality", self._export_quality)
+        self._encoder = QComboBox()
+        self._encoder.addItem("Auto (verified hardware, software fallback)", VideoEncoder.AUTO)
+        self._encoder.addItem("Software (direct libav)", VideoEncoder.CPU)
+        self._encoder.addItem("Intel Quick Sync", VideoEncoder.INTEL_QSV)
+        self._encoder.addItem("NVIDIA NVENC", VideoEncoder.NVIDIA_NVENC)
+        self._encoder.addItem("AMD AMF", VideoEncoder.AMD_AMF)
+        output_form.addRow("Encoder", self._encoder)
         root.addWidget(output)
 
         self._status_label = QLabel()
@@ -180,10 +190,12 @@ class ExportDialog(QDialog):
 
     def _set_form_enabled(self, enabled: bool) -> None:
         """Lock the format/path/fps/quality inputs while a job is running."""
-        for widget in (self._format, self._path, self._fps, self._full_resolution, self._export_quality):
+        for widget in (self._format, self._path, self._fps, self._export_quality, self._encoder):
             widget.setEnabled(enabled)
 
     def _start_export(self) -> None:
+        if self._worker is not None:
+            return
         viewer_id = self._project.active_viewer
         if viewer_id is None:
             self._show_status("Select an active Viewer before exporting.")
@@ -218,6 +230,7 @@ class ExportDialog(QDialog):
             export_sample_rate=48000 if audio_prefs is None else int(audio_prefs.export_sample_rate),
             export_channels=2 if audio_prefs is None else int(audio_prefs.export_channels),
             export_quality=self._export_quality.currentData(),
+            encoder=self._encoder.currentData(),
         )
 
         self._cancel_requested = False
@@ -235,6 +248,7 @@ class ExportDialog(QDialog):
         worker.failed.connect(self._on_failed)
         worker.finished.connect(self._on_worker_finished)
         self._worker = worker
+        self._export_started = time.monotonic()
         worker.start()
 
     def _wait_worker(self) -> None:
@@ -242,9 +256,8 @@ class ExportDialog(QDialog):
         worker = self._worker
         if worker is None:
             return
-        if worker.isRunning() and not worker.wait(30000):
-            worker.terminate()
-            worker.wait(1000)
+        if worker.isRunning():
+            worker.cancel()
 
     def _on_worker_finished(self) -> None:
         """Qt thread finished hook; safe point to release the worker object."""
@@ -253,6 +266,14 @@ class ExportDialog(QDialog):
             return
         worker.deleteLater()
         self._worker = None
+        result = self._pending_result
+        self._pending_result = None
+        if result is not None:
+            succeeded, value = result
+            if succeeded:
+                self._finish_success(value)
+            else:
+                self._finish_failure(value)
 
     def _on_cancel_clicked(self) -> None:
         worker = self._worker
@@ -269,9 +290,16 @@ class ExportDialog(QDialog):
     def _on_progress(self, current: int, total: int) -> None:
         self._progress.setRange(0, total)
         self._progress.setValue(current)
-        self._show_status(f"Exporting frame {current} of {total}…")
+        elapsed = max(.001, time.monotonic() - self._export_started)
+        rate = current / elapsed
+        remaining = (total - current) / rate if rate > 0 else 0
+        self._show_status(f"Submitted {current} / {total} frames · {rate:.1f} FPS · "
+                          f"{elapsed:.0f}s elapsed · ~{remaining:.0f}s to submit remaining frames")
 
     def _on_finished(self, path: str) -> None:
+        self._pending_result = (True, path)
+
+    def _finish_success(self, path: str) -> None:
         self._output_path = Path(path)
         self._progress.setRange(0, 1)
         self._progress.setValue(1)
@@ -284,6 +312,9 @@ class ExportDialog(QDialog):
         self.accept()
 
     def _on_failed(self, message: str) -> None:
+        self._pending_result = (False, message)
+
+    def _finish_failure(self, message: str) -> None:
         self._wait_worker()
         self._set_form_enabled(True)
         if self._ok_button is not None:
@@ -305,6 +336,7 @@ class ExportDialog(QDialog):
         """Block closing while a worker is actively running."""
         worker = self._worker
         if worker is not None and worker.isRunning():
+            self._on_cancel_clicked()
             return
         self._wait_worker()
         super().reject()
@@ -313,7 +345,10 @@ class ExportDialog(QDialog):
         """Stop any running worker before the dialog window closes."""
         worker = self._worker
         if worker is not None and worker.isRunning():
-            worker.stop()
+            self._on_cancel_clicked()
+            if a0 is not None:
+                a0.ignore()
+            return
         else:
             self._wait_worker()
         super().closeEvent(a0)

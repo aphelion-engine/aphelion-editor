@@ -1,0 +1,146 @@
+{
+  "machine": "Windows-11-10.0.26200-SP0",
+  "python": "3.14.5",
+  "cpu_count": 8,
+  "native": {
+    "available": true,
+    "backend": "native",
+    "version": 2,
+    "module_path": "C:\\Users\\jackw\\OneDrive\\Desktop\\git-projects\\aphelion-engine\\aphelion-editor\\src\\aphelion_native.pyd",
+    "error": ""
+  },
+  "frames": 48,
+  "repeats": 3,
+  "results": [
+    {
+      "case": "1920x1080-30-h264",
+      "samples": {
+        "decode_fps": [
+          49.701429020300345,
+          29.257802689051008,
+          36.42414182969458
+        ],
+        "preview_graph_fps": [
+          35.72752669481742,
+          39.9238220191897,
+          37.92599484875248
+        ],
+        "export_cpu_fps": [
+          15.80876609933302,
+          15.13671385338838,
+          14.810883073815525
+        ]
+      },
+      "median": {
+        "decode_fps": 36.42414182969458,
+        "preview_graph_fps": 37.92599484875248,
+        "export_cpu_fps": 15.13671385338838
+      }
+    },
+    {
+      "case": "1920x1080-60-h264",
+      "samples": {
+        "decode_fps": [
+          31.063093607981454,
+          24.263309068997422,
+          36.875224225800174
+        ],
+        "preview_graph_fps": [
+          20.92807374128957,
+          15.735846024504504,
+          21.734315023057388
+        ],
+        "export_cpu_fps": [
+          18.458416148984803,
+          20.237047498676127,
+          26.6573632460502
+        ]
+      },
+      "median": {
+        "decode_fps": 31.063093607981454,
+        "preview_graph_fps": 20.92807374128957,
+        "export_cpu_fps": 20.237047498676127
+      }
+    },
+    {
+      "case": "3840x2160-30-h264",
+      "samples": {
+        "decode_fps": [
+          14.432671961097093,
+          15.390409972554616,
+          12.700246506672748
+        ],
+        "preview_graph_fps": [
+          32.521162467099195,
+          36.93659855852537,
+          27.219531647025647
+        ],
+        "export_cpu_fps": [
+          9.136248589632263,
+          5.303873322572539,
+          5.180374152489196
+        ]
+      },
+      "median": {
+        "decode_fps": 14.432671961097093,
+        "preview_graph_fps": 32.521162467099195,
+        "export_cpu_fps": 5.303873322572539
+      }
+    },
+    {
+      "case": "3840x2160-60-h264",
+      "samples": {
+        "decode_fps": [
+          11.629110454361612,
+          13.1504730827705,
+          11.34350352448813
+        ],
+        "preview_graph_fps": [
+          11.966156120653086,
+          8.259794490056636,
+          8.741838537662932
+        ],
+        "export_cpu_fps": [
+          6.165815662073661,
+          4.732932313972438,
+          7.106331866062505
+        ]
+      },
+      "median": {
+        "decode_fps": 11.629110454361612,
+        "preview_graph_fps": 8.741838537662932,
+        "export_cpu_fps": 6.165815662073661
+      }
+    },
+    {
+      "case": "3840x2160-30-hevc",
+      "samples": {
+        "decode_fps": [
+          27.105838473631934,
+          11.165381066339059,
+          17.05716014237521
+        ],
+        "preview_graph_fps": [
+          41.775609625681476,
+          33.41759440514484,
+          28.775636245042218
+        ],
+        "export_cpu_fps": [
+          4.332976302100238,
+          5.520799883865502,
+          5.779207543013189
+        ]
+      },
+      "median": {
+        "decode_fps": 17.05716014237521,
+        "preview_graph_fps": 33.41759440514484,
+        "export_cpu_fps": 5.520799883865502
+      }
+    }
+  ],
+  "av_version": "18.1.0",
+  "native_sha256": "858ee0f5488dca08792e75ccdb3901e9b40f5bf0a6e26be8b8f4af100be60c9f",
+  "ffmpeg": "7.1-essentials_build-www.gyan.dev",
+  "fixture": "FFmpeg testsrc2, ultrafast, yuv420p; Viewer exposure 120%; CPU FAST export",
+  "preview_note": "Graph throughput, default preview width; excludes Qt presentation and audio"
+}

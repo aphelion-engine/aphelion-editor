@@ -17,15 +17,17 @@ def exposure_contrast(
     contrast: float,
 ) -> np.ndarray:
     """Adjust exposure stops, brightness offset, and midpoint contrast."""
-    if abs(exposure) <= 1e-12 and abs(brightness) <= 1e-12 and abs(contrast - 1.0) <= 1e-12:
-        return frame if frame.dtype == np.float32 else ensure_rgb_f32(frame)
+    from effects.native_fx import exposure_contrast as dispatch
+    return dispatch(frame, exposure=exposure, brightness=brightness, contrast=contrast)
+
+
+def _exposure_contrast_python(frame: np.ndarray, *, gain: float, offset: float) -> np.ndarray:
+    """Reference implementation for native dispatch and equivalence tests."""
     source: np.ndarray = ensure_rgb_f32(frame)
-    gain: float = (2.0**exposure) * contrast
-    offset: float = brightness * 0.01 + 0.5 * (1.0 - contrast)
     return source * np.float32(gain) + np.float32(offset)
 
 
-def hue_saturation(
+def _hue_saturation_python(
     frame: np.ndarray,
     *,
     hue_degrees: float,
@@ -44,6 +46,20 @@ def hue_saturation(
     if abs(lightness) <= 1e-6:
         return adjusted
     return adjusted + np.float32(lightness * 0.01)
+
+
+def hue_saturation(frame, *, hue_degrees, saturation, lightness):
+    from effects.native_fx import reference_mode, pointwise_effect
+    if reference_mode():
+        return _hue_saturation_python(frame, hue_degrees=hue_degrees, saturation=saturation, lightness=lightness)
+    if abs(hue_degrees) <= 1e-12 and abs(saturation-1) <= 1e-12 and abs(lightness) <= 1e-12:
+        return ensure_rgb_f32(frame)
+    hsv = cv2.cvtColor(ensure_rgb_f32(frame), cv2.COLOR_RGB2HSV)
+    adjusted = pointwise_effect('hsv_adjust', hsv, (float(hue_degrees), float(saturation)), lambda: hsv)
+    output = cv2.cvtColor(adjusted, cv2.COLOR_HSV2RGB)
+    if abs(lightness) <= 1e-6:
+        return output
+    return pointwise_effect('exposure_contrast', output, (1.0, float(lightness)*.01), lambda: output)
 
 
 def white_balance(
@@ -69,6 +85,12 @@ def white_balance(
 
 def invert(frame: np.ndarray) -> np.ndarray:
     """Invert every RGB channel."""
+    from effects.native_fx import invert as dispatch
+    return dispatch(frame)
+
+
+def _invert_python(frame: np.ndarray) -> np.ndarray:
+    """Reference implementation for native dispatch and equivalence tests."""
     return 1.0 - ensure_rgb_f32(frame)
 
 
@@ -80,10 +102,16 @@ def monochrome(
     blue_weight: float,
 ) -> np.ndarray:
     """Convert to monochrome with normalized custom channel weights."""
+    from effects.native_fx import monochrome as dispatch
+    return dispatch(frame, red_weight=red_weight, green_weight=green_weight,
+                    blue_weight=blue_weight)
+
+
+def _monochrome_python(frame: np.ndarray, *, red_weight: float, green_weight: float,
+                       blue_weight: float) -> np.ndarray:
+    """Reference implementation for native dispatch and equivalence tests."""
     source: np.ndarray = ensure_rgb_f32(frame)
-    weights: np.ndarray = np.asarray(
-        (red_weight, green_weight, blue_weight), dtype=np.float32
-    )
+    weights: np.ndarray = np.asarray((red_weight, green_weight, blue_weight), dtype=np.float32)
     total: float = float(np.sum(weights))
     if total <= 1e-6:
         weights = np.asarray((0.2126, 0.7152, 0.0722), dtype=np.float32)
@@ -101,6 +129,13 @@ def threshold(
     high_color: ColorRgb,
 ) -> np.ndarray:
     """Map luminance below/above ``level`` to two configurable colors."""
+    from effects.native_fx import threshold as dispatch
+    return dispatch(frame, level=level, low_color=low_color, high_color=high_color)
+
+
+def _threshold_python(frame: np.ndarray, *, level: int, low_color: ColorRgb,
+                      high_color: ColorRgb) -> np.ndarray:
+    """Reference implementation for native dispatch and equivalence tests."""
     source: np.ndarray = ensure_rgb_f32(frame)
     gray: np.ndarray = cv2.cvtColor(source, cv2.COLOR_RGB2GRAY)
     high_mask: np.ndarray = gray >= np.float32(max(0, min(255, level)) / 255.0)
@@ -112,6 +147,12 @@ def threshold(
 
 def posterize(frame: np.ndarray, *, levels: int) -> np.ndarray:
     """Quantize each channel to ``levels`` evenly spaced values."""
+    from effects.native_fx import posterize as dispatch
+    return dispatch(frame, levels=levels)
+
+
+def _posterize_python(frame: np.ndarray, *, levels: int) -> np.ndarray:
+    """Reference implementation for native dispatch and equivalence tests."""
     source: np.ndarray = ensure_rgb_f32(frame)
     count: int = max(2, min(32, levels))
     step: float = 1.0 / float(count - 1)
@@ -120,6 +161,14 @@ def posterize(frame: np.ndarray, *, levels: int) -> np.ndarray:
 
 def channel_mixer(frame: np.ndarray, matrix: np.ndarray) -> np.ndarray:
     """Transform RGB channels using a 3x3 float32 matrix."""
+    from effects.native_fx import channel_mixer as dispatch
+    return dispatch(
+        frame, matrix, reference=lambda: _channel_mixer_python(frame, matrix),
+    )
+
+
+def _channel_mixer_python(frame: np.ndarray, matrix: np.ndarray) -> np.ndarray:
+    """OpenCV reference implementation of the channel matrix."""
     source: np.ndarray = ensure_rgb_f32(frame)
     normalized: np.ndarray = np.asarray(matrix, dtype=np.float32).reshape(3, 3)
     return cv2.transform(source, normalized)

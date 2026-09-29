@@ -220,8 +220,7 @@ class ViewerNode(Node):
         # uint8 path. This avoids Python slicing, float promotion, and a
         # second Python/OpenCV pass for exposure and mirroring.
         if (
-            getattr(self, "_emit_u8_allowed", False)
-            and frame.dtype == np.uint8
+            frame.dtype == np.uint8
             and frame.ndim == 3
             and frame.shape[2] == 3
         ):

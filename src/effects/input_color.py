@@ -33,6 +33,23 @@ def load_cube(path: str) -> tuple[np.ndarray, int] | None:
 
 def apply_cube(frame: np.ndarray, lut: tuple[np.ndarray, int], strength: float) -> np.ndarray:
     """Apply a 3D LUT with trilinear interpolation and adjustable mix."""
+    from effects.native_fx import reference_mode, _native_module
+    if not reference_mode():
+        table, size = lut
+        if table.shape != (size, size, size, 3):
+            raise ValueError('LUT dimensions do not match its declared size')
+        source = np.ascontiguousarray(frame, dtype=np.float32)
+        if source.ndim != 3 or source.shape[2] != 3:
+            raise ValueError('LUT input must be an RGB frame')
+        output = np.empty_like(source)
+        _native_module().fx_cube(source, output, np.ascontiguousarray(table, dtype=np.float32),
+                                 source.shape[1], source.shape[0], size, float(strength))
+        return output
+    return _apply_cube_python(frame, lut, strength)
+
+
+def _apply_cube_python(frame: np.ndarray, lut: tuple[np.ndarray, int], strength: float) -> np.ndarray:
+    """Diagnostic reference for LUT interpolation."""
     table, size = lut
     rgb = np.clip(np.asarray(frame, dtype=np.float32), 0.0, 1.0)
     scale = np.float32(size - 1)
@@ -71,6 +88,14 @@ def apply_input_color(
     """Convert an input frame to the editor's normalized working space."""
     result = np.asarray(frame, dtype=np.float32)
     mode = str(color_space).lower().replace(" ", "_")
+    from effects.native_fx import reference_mode, pointwise_effect
+    if not reference_mode():
+        transform = 1 if mode in {'linear', 'linear_rgb'} else 2 if mode in {'log_c', 'logc', 'arri_logc3'} else 0
+        if transform:
+            result = pointwise_effect('input_color', result, (float(transform),), lambda: result)
+        if lut is not None:
+            result = apply_cube(result, lut, lut_strength)
+        return pointwise_effect('clip_affine', result, (1.0, 0.0), lambda: result)
     if mode in {"linear", "linear_rgb"}:
         result = np.where(
             result <= 0.04045,

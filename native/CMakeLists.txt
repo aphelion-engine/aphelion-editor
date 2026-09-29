@@ -33,9 +33,20 @@ endif()
 
 message(STATUS "aphelion_native: building against Python ${Python_VERSION}")
 
-add_library(aphelion_native MODULE aphelion_native.c frame_render.c)
+add_library(aphelion_native MODULE
+    aphelion_native.c
+    frame_render.c
+    fx_color.c
+    fx_binding.c
+    fx_geometry.c
+    fx_extended.c
+)
 
-target_include_directories(aphelion_native PRIVATE ${Python_INCLUDE_DIRS})
+target_include_directories(aphelion_native PRIVATE
+    ${Python_INCLUDE_DIRS}
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
 
 # A MODULE library is a plugin: no "lib" prefix, matching the name CPython
 # expects for the import to resolve.
@@ -57,6 +68,7 @@ else()
         -Wall
         -Wextra
         -Wno-unused-parameter
+        -Wno-missing-field-initializers
     )
 endif()
 
