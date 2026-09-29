@@ -753,17 +753,23 @@ class AgentEngine:
     def _auto_layout_new_nodes(self, transaction, initial_node_ids, result, stopped) -> bool:
         if result.error or result.cancelled or stopped() or not transaction.is_open:
             return False
-        project = self.host.project
-        created = set(project.nodes) - initial_node_ids
-        if not created:
-            return False
         try:
-            moves = layout_new_nodes(project, created)
-            before = {node_id: (float(project.nodes[node_id].x), float(project.nodes[node_id].y))
-                      for node_id in moves if node_id in project.nodes}
-            return bool(before and transaction.apply(
-                project, MoveNodesCommand(before, moves),
-                action=f"~ Arrange {len(moves)} node(s)", changed_node_ids=list(moves)))
+            def arrange() -> bool:
+                project = self.host.project
+                created = set(project.nodes) - initial_node_ids
+                if not created:
+                    return False
+                moves = layout_new_nodes(project, created)
+                before = {
+                    node_id: (float(project.nodes[node_id].x), float(project.nodes[node_id].y))
+                    for node_id in moves if node_id in project.nodes
+                }
+                return bool(before and transaction.apply(
+                    project, MoveNodesCommand(before, moves),
+                    action=f"~ Arrange {len(moves)} node(s)",
+                    changed_node_ids=list(moves),
+                ))
+            return bool(self.host.invoke_project(arrange))
         except Exception:  # layout is a best-effort refinement, not task failure
             _LOG.exception("Automatic layout failed")
             return False
@@ -775,7 +781,7 @@ class AgentEngine:
             result.cancelled = True
         if result.error or result.cancelled or self.task.status is TaskStatus.WAITING_FOR_USER:
             if not transaction.is_empty:
-                transaction.rollback(self.host.project)
+                self.host.invoke_project(lambda: transaction.rollback(self.host.project))
                 result.rolled_back = True
             if result.error:
                 result.text = ""
@@ -787,7 +793,7 @@ class AgentEngine:
         report = self.host.invoke_project(lambda: validate_project(self.host.project))
         result.validation = report.to_dict()
         if not report.ok:
-            transaction.rollback(self.host.project)
+            self.host.invoke_project(lambda: transaction.rollback(self.host.project))
             result.rolled_back = True
             result.error = "Graph validation failed. Changes were rolled back."
             return
@@ -798,7 +804,7 @@ class AgentEngine:
         )
         if needs_confirmation:
             if confirm is None:
-                transaction.rollback(self.host.project)
+                self.host.invoke_project(lambda: transaction.rollback(self.host.project))
                 result.rolled_back = True
                 result.error = "Changes require approval, but no confirmation handler is available."
                 return
@@ -809,11 +815,11 @@ class AgentEngine:
             )
             emit(AgentEvent(AgentEventKind.PENDING_CHANGES, payload={"actions": pending.actions}))
             if not confirm(pending, transaction):
-                transaction.rollback(self.host.project)
+                self.host.invoke_project(lambda: transaction.rollback(self.host.project))
                 result.rolled_back = True
                 result.text = "Changes were declined and rolled back."
                 return
-        if transaction.commit(self.host.history):
+        if self.host.invoke_project(lambda: transaction.commit(self.host.history)):
             result.committed = True
 
     def _build_summary(self, result, *, request_input):

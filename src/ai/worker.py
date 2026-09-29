@@ -79,7 +79,10 @@ class AgentWorker(QThread):
         self.on_event = on_event
         self.on_finished = on_finished
         self.confirm = confirm
-        self.mode = mode
+        if isinstance(mode, AgentMode):
+            self.mode = mode
+        else:
+            self.mode = AgentMode(mode or AgentMode.ASSIST.value)
         self.retry = retry
 
         settings = session.settings

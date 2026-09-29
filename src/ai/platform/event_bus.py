@@ -271,7 +271,7 @@ class AgentEventBus(QObject):
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         # QueuedConnection guarantees the GUI thread receives and dispatches.
-        self._event.connect(self._on_event, type=self._event)
+        self._event.connect(self._on_event, type=Qt.ConnectionType.QueuedConnection)
 
     # -- public API ---------------------------------------------------------
 
@@ -301,7 +301,7 @@ class AgentEventBus(QObject):
         # Wire a temporary slot on the receiving thread.  The connection is
         # queued, so _collect runs after the GUI event loop has processed the
         # event, and the lock guarantees the slot is wired before we send.
-        self.event_received.connect(_collect, type=self.event_received)
+        self.event_received.connect(_collect, type=Qt.ConnectionType.QueuedConnection)
         self._event.emit(event)
         ev.wait()
 

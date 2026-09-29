@@ -482,6 +482,10 @@ class AssistantSession:
         self._stop_requested = True
         self.state.cancelled = True
 
+    def should_stop(self) -> bool:
+        """Return whether the active worker has been asked to cancel."""
+        return self._stop_requested
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
@@ -493,6 +497,8 @@ class AssistantSession:
         if self.settings.source_access is not SourceAccess.OFF:
             policy = policy.with_permission(Permission.READ_SOURCE, True)
         active_mode = mode or self.settings.agent_mode
+        if not isinstance(active_mode, AgentMode):
+            active_mode = AgentMode(str(active_mode))
         if active_mode is AgentMode.ASK:
             return policy.without_all_edits()
         return policy

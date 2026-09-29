@@ -74,6 +74,9 @@ from PyQt6.QtWidgets import (
     QMenu,
     QPlainTextEdit,
     QPushButton,
+    QListWidget,
+    QListWidgetItem,
+    QSplitter,
     QTextBrowser,
     QToolButton,
     QVBoxLayout,
@@ -150,6 +153,26 @@ class PromptEdit(QPlainTextEdit):
 
     send_requested = pyqtSignal()
 
+    def keyPressEvent(self, event: Any) -> None:
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                super().keyPressEvent(event)
+            else:
+                self.send_requested.emit()
+            return
+        super().keyPressEvent(event)
+
+    def text_after_mention(self) -> str | None:
+        text = self.toPlainText()
+        position = self.textCursor().position()
+        start = text.rfind("@", 0, position)
+        if start < 0 or (start > 0 and not text[start - 1].isspace()):
+            return None
+        fragment = text[start + 1:position]
+        if "\n" in fragment or " " in fragment:
+            return None
+        return fragment
+
 
 class EffortPicker(QComboBox):
     """A compact dropdown chip in the composer header showing the selected effort."""
@@ -162,7 +185,8 @@ class EffortPicker(QComboBox):
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
 
-        self.addItems([_EFFORT_LABELS[e] for e in AgentEffort])
+        for effort in AgentEffort:
+            self.addItem(_EFFORT_LABELS[effort], effort.value)
         self.setMinimumWidth(96)
         self.setStyleSheet("""
             QComboBox {
@@ -288,6 +312,9 @@ class AIPanel(QWidget):
 
         self._model_cache: list[Any] | None = None
 
+        self._live_steps: list[str] = []
+        self._history_visible = True
+
         self._build_ui()
 
         self._connect_signals()
@@ -312,27 +339,39 @@ class AIPanel(QWidget):
         self._drain_timer.timeout.connect(self._drain)
 
         self._drain_timer.start()
+        self._thinking_phase = 0
+        self._thinking_timer = QTimer(self)
+        self._thinking_timer.setInterval(420)
+        self._thinking_timer.timeout.connect(self._animate_thinking)
 
     # -- UI construction ---------------------------------------------------
 
     def _build_ui(self) -> None:
 
-        root = QVBoxLayout(self)
+        root = QHBoxLayout(self)
 
         root.setContentsMargins(10, 8, 10, 8)
 
-        root.setSpacing(6)
+        root.setSpacing(0)
 
-        root.addLayout(self._build_header())
+        main = QWidget()
+        main_layout = QVBoxLayout(main)
+        main_layout.setContentsMargins(18, 14, 18, 14)
+        main_layout.setSpacing(10)
 
-        root.addWidget(self._build_banner())
+        main_layout.addLayout(self._build_header())
+
+        main_layout.addWidget(self._build_banner())
 
         self._controls = self._build_controls()
-        root.addWidget(self._controls)
+        main_layout.addWidget(self._controls)
+
+        self._live_card = self._build_live_card()
+        main_layout.addWidget(self._live_card)
 
         self._transcript = QTextBrowser()
 
-        root.addWidget(self._transcript)
+        main_layout.addWidget(self._transcript)
 
         self._transcript.setObjectName("AITranscript")
 
@@ -341,11 +380,11 @@ class AIPanel(QWidget):
 
         self._transcript.setMinimumHeight(140)
 
-        root.addWidget(self._transcript, 1)
+        main_layout.addWidget(self._transcript, 1)
 
         self._activity_section = self._build_activity_section()
 
-        root.addWidget(self._activity_section)
+        main_layout.addWidget(self._activity_section)
 
         self._selection_context = QLabel()
 
@@ -355,13 +394,70 @@ class AIPanel(QWidget):
 
         self._selection_context.setVisible(False)
 
-        root.addWidget(self._selection_context)
+        main_layout.addWidget(self._selection_context)
 
         self._input = self._build_input()
 
-        root.addWidget(self._input)
+        composer = QFrame()
+        composer.setObjectName("AIComposer")
+        composer_layout = QVBoxLayout(composer)
+        composer_layout.setContentsMargins(0, 0, 0, 0)
+        composer_layout.addWidget(self._input)
+        main_layout.addWidget(composer)
 
-        root.addLayout(self._build_footer())
+        main_layout.addLayout(self._build_footer())
+        self._history_sidebar = self._build_history_sidebar()
+        root.addWidget(self._history_sidebar)
+        root.addWidget(main, 1)
+        self._apply_panel_style()
+        self._show_empty_state()
+
+    def _build_live_card(self) -> QFrame:
+        card = QFrame()
+        card.setObjectName("AILiveCard")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setSpacing(4)
+        self._live_title = QLabel("Thinking…")
+        self._live_title.setObjectName("AILiveTitle")
+        layout.addWidget(self._live_title)
+        self._live_detail = QLabel("Understanding your request")
+        self._live_detail.setObjectName("AILiveDetail")
+        layout.addWidget(self._live_detail)
+        self._live_steps_label = QLabel("")
+        self._live_steps_label.setObjectName("AILiveSteps")
+        self._live_steps_label.setWordWrap(True)
+        layout.addWidget(self._live_steps_label)
+        card.setVisible(False)
+        return card
+
+    def _show_empty_state(self) -> None:
+        self._append_html(
+            '<div id="ai-empty-state" style="padding:42px 18px 34px;text-align:center;">'
+            '<div style="font-size:22pt;font-weight:600;color:#eef2f7;">Aphelion AI</div>'
+            '<div style="margin-top:8px;color:#9aa6b5;font-size:12pt;">Your creative co-editor for nodes, tracking, animation, and effects.</div>'
+            '<div style="margin-top:24px;color:#cbd4df;font-size:11pt;">What do you want to create?</div>'
+            '<div style="margin-top:16px;color:#8dc9ff;line-height:2.1;">'
+            'Create an effect&nbsp;&nbsp; · &nbsp;&nbsp;Track an object&nbsp;&nbsp; · &nbsp;&nbsp;Make this cinematic<br>'
+            'Explain my graph&nbsp;&nbsp; · &nbsp;&nbsp;Organize my graph</div></div>'
+        )
+
+    def _apply_panel_style(self) -> None:
+        self.setStyleSheet("""
+            AIPanel { background: #12161c; color: #e9eef5; }
+            QFrame#AILiveCard { background: #1b2530; border: 1px solid #293747; border-radius: 14px; }
+            QLabel#AILiveTitle { color: #eef6ff; font-size: 11pt; font-weight: 600; }
+            QLabel#AILiveDetail { color: #9fc8eb; font-size: 10pt; }
+            QLabel#AILiveSteps { color: #aab7c6; font-size: 9pt; }
+            QTextBrowser#AITranscript { background: #12161c; border: 0; padding: 8px; color: #e9eef5; }
+            QPlainTextEdit { background: #1b2028; border: 1px solid #334151; border-radius: 14px; padding: 12px; color: #eef2f7; selection-background-color: #31597b; }
+            QPlainTextEdit:focus { border: 1px solid #6ea8d8; }
+            QPushButton#AISendButton { background: #d7ebff; color: #162333; border: 0; border-radius: 16px; padding: 8px 15px; font-weight: 600; }
+            QPushButton#AISendButton:hover { background: #eef7ff; }
+            QPushButton#AIStopButton { background: #2a333e; color: #e8edf4; border: 1px solid #405062; border-radius: 16px; padding: 8px 15px; }
+            QComboBox, QToolButton { background: transparent; color: #b8c5d4; border: 0; padding: 5px 7px; }
+            QComboBox:hover, QToolButton:hover { background: #202b37; border-radius: 8px; }
+        """)
 
     def _build_header(self) -> QHBoxLayout:
 
@@ -624,6 +720,7 @@ class AIPanel(QWidget):
         footer.addWidget(self._overflow)
 
         self._stop_button = QPushButton("Stop")
+        self._stop_button.setObjectName("AIStopButton")
 
         self._stop_button.setEnabled(False)
 
@@ -633,15 +730,23 @@ class AIPanel(QWidget):
 
         footer.addWidget(self._stop_button)
 
-        self._send_button = QPushButton("Send")
+        self._send_button = QPushButton("↑")
+        self._send_button.setObjectName("AISendButton")
+        self._send_button.setToolTip("Send message")
 
         self._send_button.setDefault(True)
 
-        self._send_button.clicked.connect(self.send_message)
+        self._send_button.clicked.connect(self._send_or_stop)
 
         footer.addWidget(self._send_button)
 
         return footer
+
+    def _send_or_stop(self) -> None:
+        if self._worker is not None:
+            self.stop()
+        else:
+            self.send_message()
 
     # -- threading / signals ----------------------------------------------
 
@@ -898,7 +1003,9 @@ class AIPanel(QWidget):
 
         self.session.state.busy = busy
 
-        self._send_button.setEnabled(not busy and self.settings_store.settings.enabled)
+        self._send_button.setEnabled(self.settings_store.settings.enabled)
+        self._send_button.setText("■" if busy else "↑")
+        self._send_button.setToolTip("Stop assistant" if busy else "Send message")
 
         self._stop_button.setEnabled(busy)
 
@@ -909,7 +1016,24 @@ class AIPanel(QWidget):
         self._input.setEnabled(not busy and self.settings_store.settings.enabled)
 
         if busy:
-            self._status.setText("Working…")
+            self._status.setText("Thinking…")
+            self._live_steps = ["● Understanding request", "○ Inspecting graph", "○ Applying changes", "○ Validating"]
+            self._live_title.setText("Thinking…")
+            self._live_detail.setText("Understanding your request")
+            self._live_steps_label.setText("\n".join(self._live_steps))
+            self._live_card.setVisible(True)
+            self._thinking_timer.start()
+        else:
+            self._live_card.setVisible(False)
+            self._thinking_timer.stop()
+
+    def _animate_thinking(self) -> None:
+        if self._worker is None and not self.session.state.busy:
+            return
+        self._thinking_phase = (self._thinking_phase + 1) % 4
+        dots = "." * self._thinking_phase
+        if self._live_title.text().startswith("Thinking"):
+            self._live_title.setText(f"Thinking{dots}")
 
     def _can_retry(self) -> bool:
 
@@ -922,7 +1046,6 @@ class AIPanel(QWidget):
         self._streaming_block = False
         self._pending_call.clear()
         self._action_times.clear()
-        self._append_user(self._input.toPlainText().strip())
 
     def _end_turn(self) -> None:
         """Finalize a turn after the agent run completes."""
@@ -1081,7 +1204,7 @@ class AIPanel(QWidget):
         self._refresh_undo_action()
 
         if getattr(result, "error", ""):
-            self._append_system_note(f"Error: {result.error}")
+            self._append_error_card(str(result.error))
 
             self._status.setText("Failed — see the note above")
 
@@ -1128,7 +1251,10 @@ class AIPanel(QWidget):
         if kind is AgentEventKind.STATUS:
             self._flush_stream()
 
-            self._status.setText(str(event.payload) if event.payload else "Working…")
+            status = str(event.payload) if event.payload else "Working…"
+            self._status.setText(status)
+            self._live_detail.setText(status)
+            self._live_title.setText(self._friendly_status(status))
 
             self.activity.add_status(str(event.payload) if event.payload else "")
 
@@ -1145,7 +1271,10 @@ class AIPanel(QWidget):
             self._flush_stream()
 
             if event.payload:
-                self._status.setText(str(event.payload).get("headline", "Working…"))
+                headline = event.payload.get("headline", "Planning")
+                self._status.setText(headline)
+                self._live_title.setText("Planning")
+                self._live_detail.setText(headline)
 
             return
 
@@ -1194,6 +1323,8 @@ class AIPanel(QWidget):
             self._pending_call[event.tool_call.call_id or event.tool_call.name] = (
                 event.tool_call
             )
+            self._live_title.setText("Working")
+            self._live_detail.setText(self._friendly_tool(event.tool_call.name))
 
             return
 
@@ -1236,7 +1367,10 @@ class AIPanel(QWidget):
         if kind is AgentEventKind.VALIDATION_RESULT:
             self._flush_stream()
 
-            self.activity.add_status(str(event.payload))
+            payload = event.payload.to_dict() if hasattr(event.payload, "to_dict") else event.payload or {}
+            self.activity.add_status("✓ Graph valid" if payload.get("ok") else "⚠ Repairing graph")
+            self._live_title.setText("Validating")
+            self._live_detail.setText("Graph valid" if payload.get("ok") else "Repairing validation issues")
 
             return
 
@@ -1260,6 +1394,8 @@ class AIPanel(QWidget):
             self._flush_stream()
 
             self.activity.add_status("Visual QA: inspecting representative frames…")
+            self._live_title.setText("Visual QA")
+            self._live_detail.setText("Checking representative frames")
 
             return
 
@@ -1275,7 +1411,7 @@ class AIPanel(QWidget):
         if kind is AgentEventKind.ERROR:
             self._flush_stream()
 
-            self._append_system_note(str(event.payload))
+            self._append_error_card(str(event.payload))
 
             return
 
@@ -1283,6 +1419,43 @@ class AIPanel(QWidget):
             self._flush_stream()
 
             return
+
+    @staticmethod
+    def _friendly_status(status: str) -> str:
+        lowered = status.lower()
+        if "inspect" in lowered or "look" in lowered:
+            return "Inspecting graph"
+        if "edit" in lowered or "creat" in lowered or "apply" in lowered:
+            return "Editing"
+        if "valid" in lowered or "repair" in lowered:
+            return "Checking result"
+        if "organ" in lowered or "arrang" in lowered:
+            return "Organizing graph"
+        if "finish" in lowered or "complete" in lowered:
+            return "Finishing"
+        return "Working"
+
+    @staticmethod
+    def _friendly_tool(name: str) -> str:
+        labels = {
+            "node.list_types": "Looking up available nodes",
+            "node.describe_type": "Reading node capabilities",
+            "graph.inspect": "Inspecting active graph",
+            "graph.validate": "Validating graph",
+            "graph.organize": "Organizing graph",
+            "vision.preview_frame": "Inspecting footage",
+            "playback.sample_frames": "Checking representative frames",
+        }
+        return labels.get(name, name.replace(".", " ").replace("_", " ").title())
+
+    def _append_error_card(self, text: str) -> None:
+        self._append_html(
+            '<div style="margin:14px 0;padding:14px 16px;background:#2a2023;border:1px solid #5a363d;border-radius:14px;">'
+            '<div style="font-weight:600;color:#ffd4d8;">Something went wrong</div>'
+            f'<div style="margin-top:6px;color:#e4b9bf;">{html.escape(text)}</div>'
+            '<div style="margin-top:10px;color:#9faab8;font-size:10pt;">Your project was not changed.</div></div>'
+        )
+        self._scroll_to_end()
 
     def _show_thinking_event(self, event: AgentEvent) -> None:
 
@@ -1420,10 +1593,13 @@ class AIPanel(QWidget):
 
         mark = "✓" if result.ok else "✕"
 
-        color = "#7ed994" if result.ok else "#f08c8c"
+        color = "#9be5b0" if result.ok else "#f3a5ad"
+        surface = "#1c2a23" if result.ok else "#2b2024"
 
         self._append_html(
-            f'<div style="margin:2px 0 2px 14px;color:{color};">{mark} {html.escape(result.summary)}</div>'
+            f'<div style="margin:8px 0 8px 8px;padding:10px 12px;background:{surface};border-radius:12px;">'
+            f'<span style="color:{color};font-weight:600;">{mark} </span>'
+            f'<span style="color:#e8edf4;">{html.escape(result.summary)}</span></div>'
         )
 
         self._scroll_to_end()
@@ -1621,7 +1797,8 @@ class AIPanel(QWidget):
             parts.append("Rolled back — the project is unchanged")
 
         if summary.committed:
-            parts.append("Undo with Ctrl+Z or ⋯ → Undo AI changes")
+            parts.append('<a href="ai-action://undo" style="color:#9fd0ff;text-decoration:none;">Undo</a>')
+            parts.append('<a href="ai-action://changes" style="color:#9fd0ff;text-decoration:none;">View changes</a>')
 
         return " · ".join(parts)
 
@@ -1787,11 +1964,24 @@ class AIPanel(QWidget):
                 self._answer_question(int(url.host() or url.path().lstrip("/")))
             except ValueError:
                 return
+        elif url.scheme() == "ai-action":
+            if url.host() == "undo":
+                self.undo_ai_changes()
+            elif url.host() == "changes":
+                self._status.setText("Showing the assistant's changes")
+                self._refresh_undo_action()
 
     def _answer_question(self, index: int) -> None:
         """Resume through the normal composer after a native question choice."""
         payload = self._question
         if payload is None or index < 0 or index >= len(payload.options):
+            return
+
+        if kind is AgentEventKind.SUMMARY:
+            self._flush_stream()
+            self._append_summary_card(dict(event.payload or {}))
+            self._live_title.setText("Complete")
+            self._live_detail.setText("Task finished")
             return
         option = payload.options[index]
         answer = str(option.get("label", option.get("value", option)))
