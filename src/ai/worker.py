@@ -22,6 +22,7 @@ from ai.platform.event_bus import (
 from ai.settings import AISettings
 from ai.context import ProjectContextProvider, ContextRequest
 from ai.session import AssistantSession, SessionState
+from ai.history import StoredMessage
 from ai.task import AgentTask, TaskStatus
 from ai.tasks import AgentEffort
 from ai.types import ChatMessage, AgentMode, EditPolicy, SourceAccess
@@ -106,7 +107,6 @@ class AgentWorker(QThread):
             task=task,
             event_bus=None,
         )
-        self.engine.workflow_plan = session.workflow_plan
         self.engine.task = task
 
         self._result: RunResult | None = None
@@ -134,8 +134,8 @@ class AgentWorker(QThread):
             request_timeout=settings.request_timeout_seconds,
             verbose_logging=settings.verbose_logging,
             system_prompt=settings.system_prompt or SYSTEM_PROMPT,
-            effort=AgentEffort.AUTO,
-            enable_visual_qa=settings.source_access != SourceAccess.OFF,
+            effort=getattr(settings, "agent_effort", AgentEffort.AUTO),
+            enable_visual_qa=getattr(settings, "agent_effort", AgentEffort.AUTO) is not AgentEffort.FAST,
             enable_workspace_research=settings.source_access == SourceAccess.FULL,
             emit_progress=True,
             emit_summary=True,
@@ -161,8 +161,6 @@ class AgentWorker(QThread):
             # Queued connection: events are delivered on the GUI thread,
             # where the panel's slots update widgets.
             bus.event_received.connect(self.event_received.emit)
-            bus.run_finished.connect(self.finished.emit)
-            bus.confirm_requested.connect(self.confirm_requested.emit)
 
             messages = self._build_messages()
             self._result = self.engine.run(
@@ -176,6 +174,20 @@ class AgentWorker(QThread):
             self._error = exc
             self._result = RunResult(error=str(exc))
         finally:
+            if self._result is None:
+                self._result = RunResult(error="The assistant worker stopped without a result.")
+            self.session.last_result = self._result
+            self.session.messages = list(self._result.messages or self.session.messages)
+            self.session.state.busy = False
+            if not self.retry and self.initial_text:
+                self.session.turns.append(StoredMessage(role="user", content=self.initial_text))
+            if self._result.text:
+                self.session.turns.append(StoredMessage(
+                    role="assistant", content=self._result.text,
+                    actions=list(self._result.actions),
+                ))
+            self.session.persist()
+            self.finished.emit(self._result)
             self._finished = True
 
     def _build_messages(self) -> list[ChatMessage]:
@@ -208,7 +220,8 @@ class AgentWorker(QThread):
         return self._error
 
     @property
-    def finished(self) -> bool:
+    def is_finished(self) -> bool:
+        """Whether this worker has produced its terminal result."""
         return self._finished
 
     @property

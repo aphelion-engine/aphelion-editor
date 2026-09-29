@@ -24,7 +24,7 @@ tools, and an extensible plugin system in one application.
   depth workflows, and VFX utilities.
 - MP4 and PNG-sequence export from the active Viewer.
 - `.aph` project files with recent-project launch and autosave support.
-- Plugin support through the sibling [`aphelion-sdk`](../aphelion-sdk/README.md)
+- Plugin support through the sibling [`aphelion-sdk`](https://github.com/aphelion-engine/aphelion-sdk)
   package.
 
 ## Requirements
@@ -40,9 +40,14 @@ the sibling `aphelion-sdk` and `aphelion-styling` packages.
 
 ## Installation
 
-From the repository root:
+Source builds require the editor, [SDK](https://github.com/aphelion-engine/aphelion-sdk),
+and [styling](https://github.com/aphelion-engine/aphelion-styling) repositories as
+siblings. From your workspace directory:
 
 ```bash
+git clone https://github.com/aphelion-engine/aphelion-sdk.git
+git clone https://github.com/aphelion-engine/aphelion-styling.git
+git clone https://github.com/aphelion-engine/aphelion-editor.git
 cd aphelion-editor
 python -m venv .venv
 ```
@@ -63,13 +68,13 @@ Install the editor with development and packaging tools:
 
 ```bash
 python -m pip install --upgrade pip
-python -m pip install -e ".[dev,freeze]"
+python -m pip install -e ../aphelion-sdk -e ../aphelion-styling -e ".[dev,freeze]"
 ```
 
-For a runtime-only environment, use:
+For a source environment without development or packaging tools, use:
 
 ```bash
-python -m pip install -r requirements.txt
+python -m pip install -e ../aphelion-sdk -e ../aphelion-styling -e .
 ```
 
 The editable install is recommended because it also installs the sibling SDK
@@ -187,7 +192,15 @@ native correctness contract.
 | [Architecture](docs/architecture.md) | Packages, boot process, and frame pipeline |
 | [Development](docs/development.md) | Tests, typing, and logging |
 | [Packaging](docs/packaging.md) | Standalone builds and Windows MSI packaging |
-| [Plugin SDK](../aphelion-sdk/README.md) | Public plugin development |
+| [Plugin SDK](https://github.com/aphelion-engine/aphelion-sdk) | Public plugin development |
+
+## Contributing and Community
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for source setup, SDK and styling
+dependencies, validation, and the pull request process. Participants follow the
+[Code of Conduct](CODE_OF_CONDUCT.md). Use the
+[issue forms](https://github.com/aphelion-engine/aphelion-editor/issues/new/choose)
+to report bugs or propose features; pull requests include a review template.
 
 ## Repository Layout
 
@@ -203,5 +216,6 @@ aphelion-editor/
 
 ## License
 
-Aphelion Editor is proprietary software. See the repository distribution
-terms before redistributing the application or its bundled components.
+Aphelion Editor is licensed under the [MIT License](LICENSE). Dependencies,
+including the separately maintained SDK and styling packages, retain their own
+licenses; this license applies to the editor repository.

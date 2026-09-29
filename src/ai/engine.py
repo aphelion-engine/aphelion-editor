@@ -646,6 +646,13 @@ class AgentEngine:
             "Continue using tools until the objective is finished."
         )
         parts.append("Current objective: " + self.task.objective)
+        if self.task.discovered_nodes:
+            parts.append(
+                "Conversation memory (authoritative tool results): "
+                + json.dumps(self.task.discovered_nodes, default=str)[:16000]
+            )
+        if self.task.last_proposed_action:
+            parts.append("Previous assistant summary: " + self.task.last_proposed_action[:2000])
         if self.workflow_plan is not None:
             parts.append(self.workflow_plan.describe())
         if self.context_block:
@@ -1375,7 +1382,7 @@ class AgentEngine:
         )
         self._publish(AgentEvent(
             AgentEventKind.PLAN_READY,
-            payload,
+            payload.to_dict(),
         ))
 
     # -- internal steps ----------------------------------------------------

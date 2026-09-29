@@ -61,7 +61,7 @@ import threading
 import time
 from typing import Any
 
-from PyQt6.QtCore import QStringListModel, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QUrl, QStringListModel, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont, QTextCharFormat, QTextCursor
 from PyQt6.QtWidgets import (
     QApplication,
@@ -337,6 +337,7 @@ class AIPanel(QWidget):
         self._transcript.setObjectName("AITranscript")
 
         self._transcript.setOpenExternalLinks(False)
+        self._transcript.anchorClicked.connect(self._on_transcript_link)
 
         self._transcript.setMinimumHeight(140)
 
@@ -953,13 +954,17 @@ class AIPanel(QWidget):
 
         self._set_busy(True)
 
-        self._start_worker(
-            AgentWorker(
+        try:
+            worker = AgentWorker(
                 self.session,
                 text,
                 mode=self._mode_combo.currentData(),
             )
-        )
+        except Exception as exc:
+            self._append_system_note(f"Error starting assistant: {type(exc).__name__}: {exc}")
+            self._set_busy(False)
+            return
+        self._start_worker(worker)
 
     def retry(self) -> None:
 
@@ -968,14 +973,18 @@ class AIPanel(QWidget):
 
         self._set_busy(True)
 
-        self._start_worker(
-            AgentWorker(
+        try:
+            worker = AgentWorker(
                 self.session,
                 "",
                 mode=self._mode_combo.currentData(),
                 retry=True,
             )
-        )
+        except Exception as exc:
+            self._append_system_note(f"Error starting assistant: {type(exc).__name__}: {exc}")
+            self._set_busy(False)
+            return
+        self._start_worker(worker)
 
     def stop(self) -> None:
 
@@ -1315,7 +1324,7 @@ class AIPanel(QWidget):
                 f'<button id="ai-question-option-{index}" data-value="{html.escape(value)}" '
                 f'style="background:#343a45;color:#dce2eb;border:none;padding:8px 12px;'
                 f"border-radius:6px;margin-right:6px;text-align:left;width:100%;"
-                f'cursor:pointer;" onclick="app.answer_question({index}, this)" {selected}>'
+                f'cursor:pointer;" href="ai-question://{index}" {selected}>'
                 f"{label}</button>"
             )
 
@@ -1772,20 +1781,20 @@ class AIPanel(QWidget):
 
         return list(SLASH_COMMANDS)
 
-    # --utative---
+    def _on_transcript_link(self, url: QUrl) -> None:
+        if url.scheme() == "ai-question":
+            try:
+                self._answer_question(int(url.host() or url.path().lstrip("/")))
+            except ValueError:
+                return
 
-    @staticmethod
-    def _answer_question(index: int, button: Any) -> None:
-        """Hook called when the user clicks a question option (see the JS below)."""
-
-        # The panel needs a public callback.  The UI is rendered by the engine,
-
-        # so this is a placeholder the engine wires to.
-
-        pass
-
-    @staticmethod
-    def _toggle_thinking() -> None:
-        """Hook for the UI to expand/collapse the thinking card."""
-
-        pass
+    def _answer_question(self, index: int) -> None:
+        """Resume through the normal composer after a native question choice."""
+        payload = self._question
+        if payload is None or index < 0 or index >= len(payload.options):
+            return
+        option = payload.options[index]
+        answer = str(option.get("label", option.get("value", option)))
+        self._question = None
+        self._input.setPlainText(answer)
+        self.send_message()

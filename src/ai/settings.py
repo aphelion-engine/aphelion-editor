@@ -21,6 +21,7 @@ from typing import Any
 from ai import AI_SETTINGS_VERSION
 from ai.permissions import PermissionPolicy
 from ai.source.limits import SourceLimits
+from ai.tasks import AgentEffort
 from ai.types import (AgentMode, CloudSourceSharing, EditPolicy, ModelInfo,
                       ProviderCapabilities, SourceAccess)
 from utils.logging_setup import get_logger
@@ -302,6 +303,8 @@ class AISettings:
     highlight_changes: bool = True
     #: System prompt injected into the agent's context.
     system_prompt: str = ""
+    #: Default run depth selected in the AI composer.
+    agent_effort: AgentEffort = AgentEffort.AUTO
 
     # -- read-only source intelligence (opt-in, off by default) ---------
 
@@ -388,6 +391,7 @@ class AISettings:
             "source_root": self.source_root,
             "source_limits": self.source_limits.to_dict(),
             "system_prompt": self.system_prompt,
+            "agent_effort": self.agent_effort.value,
         }
 
     @classmethod
@@ -438,6 +442,7 @@ class AISettings:
             verbose_logging=bool(data.get("verbose_logging", False)),
             highlight_changes=bool(data.get("highlight_changes", True)),
             system_prompt=str(data.get("system_prompt", "") or ""),
+            agent_effort=_enum(AgentEffort, data.get("agent_effort"), AgentEffort.AUTO),
             source_access=_enum(SourceAccess, data.get("source_access"), SourceAccess.OFF),
             cloud_source_sharing=_enum(
                 CloudSourceSharing,
